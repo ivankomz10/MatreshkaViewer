@@ -36,7 +36,7 @@ jobs:
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: pick
         shell: bash
@@ -60,9 +60,9 @@ jobs:
     name: Build Windows (.exe)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -83,7 +83,7 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path MatreshkaViewer.exe -DestinationPath MatreshkaViewer-windows.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: MatreshkaViewer-windows
           path: MatreshkaViewer-windows.zip
@@ -93,9 +93,9 @@ jobs:
     name: Build macOS (.app)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -110,7 +110,7 @@ jobs:
       - name: Package
         run: ditto -c -k --keepParent MatreshkaViewer.app MatreshkaViewer-macos.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: MatreshkaViewer-macos
           path: MatreshkaViewer-macos.zip
@@ -121,7 +121,7 @@ jobs:
     needs: [version, windows, macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -130,7 +130,7 @@ jobs:
       # (tag pushes), and attaches both zips. Re-running the same version
       # refreshes that release rather than making a second one.
       - name: Publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           files: dist/*.zip
