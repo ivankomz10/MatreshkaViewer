@@ -275,6 +275,79 @@ fn fs_main(in: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f3
 """
 
 
+def mend_seam(points, normals, uv, triangles):
+    """Keep a face that straddles the u=0/1 seam from racing round the picture.
+
+    On the cylindrical screens the back of the ring closes with faces whose
+    corners carry u near 1 on one side and u near 0 on the other. Nothing
+    wraps the texture here -- the sampler is clamp-to-edge -- so between those
+    corners u is walked the long way, 0.99 down to 0.0, and the whole width of
+    the video is crushed into that sliver. That is the band of noise seen at
+    the seam of the top and bottom screens; the lamellas, which do not close,
+    never show it.
+
+    The cure is to send the low corner to the far end instead: u just past 1,
+    a short step from the 0.99 beside it, so the face shows the edge of the
+    picture rather than all of it.
+
+    The honeycomb -- still (`Screen_Top`) or moving (`screen`) -- is kept as
+    separate six-vertex cells, and a seam cell's vertices are shared with
+    nothing outside it, so it is mended in place, a whole cell at a time: a
+    cell that straddles the seam has corners at both ends of u, and lifting
+    only some of them would leave the crush between those and the rest. That
+    also leaves the vertex count and order untouched, which the moving screen
+    needs: it finds a cell from `vertex_index / 6`. The bottom screen is a
+    welded strip whose seam vertices are shared with their neighbours, so there
+    the corner is split off into a copy that carries the raised u and only the
+    seam faces point at it.
+    """
+    u = uv[:, 0]
+    span = u[triangles].max(axis=1) - u[triangles].min(axis=1)
+    seam = np.where(span > 0.5)[0]
+    if len(seam) == 0:
+        return points, normals, uv, triangles
+
+    uv = uv.copy()
+    grouped = all(len({int(v) // CELL_VERTICES for v in tri}) == 1
+                  for tri in triangles)
+    if grouped:
+        # A cell is six consecutive vertices. Only the handful sitting on the
+        # seam span more than half of u; in each of those, the corners near 0
+        # belong just past 1, beside the ones near 1 already there.
+        cells = len(uv) // CELL_VERTICES
+        blocks = uv[:cells * CELL_VERTICES].reshape(cells, CELL_VERTICES, 2)
+        us = blocks[..., 0]
+        straddles = (us.max(axis=1) - us.min(axis=1)) > 0.5
+        us[straddles[:, None] & (us < 0.5)] += 1.0
+        return points, normals, uv, triangles
+
+    points, normals = points.copy(), normals.copy()
+    triangles = triangles.copy()
+    extra_points, extra_normals, extra_uv = [], [], []
+    raised: dict[int, int] = {}
+
+    def past_the_end(vertex: int) -> int:
+        if vertex not in raised:
+            raised[vertex] = len(points) + len(extra_points)
+            extra_points.append(points[vertex])
+            extra_normals.append(normals[vertex])
+            extra_uv.append([uv[vertex, 0] + 1.0, uv[vertex, 1]])
+        return raised[vertex]
+
+    for i in seam:
+        high = uv[triangles[i], 0].max()
+        for corner in range(3):
+            vertex = int(triangles[i, corner])
+            if uv[vertex, 0] < high - 0.5:
+                triangles[i, corner] = past_the_end(vertex)
+
+    if extra_points:
+        points = np.vstack([points, np.array(extra_points, points.dtype)])
+        normals = np.vstack([normals, np.array(extra_normals, normals.dtype)])
+        uv = np.vstack([uv, np.array(extra_uv, uv.dtype)])
+    return points, normals, uv, triangles
+
+
 def look_through(matrix: np.ndarray) -> np.ndarray:
     """The view matrix of a Blender camera: its own transform, undone.
 
@@ -534,13 +607,20 @@ class Scene:
             feed = self.feeds[index]
             screen = self.screens.index(feed) if feed else -1
             points = data[f"{name}__points"]
+            normals = data[f"{name}__normals"]
+            triangles = data[f"{name}__triangles"]
+            uv = data.get(f"{name}__uv") if screen >= 0 else None
+            if uv is not None:
+                # Straighten the seam faces before the geometry goes to the
+                # card, so the back of the ring does not crush the whole video
+                # into a strip. Copies out of the read-only archive first.
+                points, normals, uv, triangles = mend_seam(
+                    np.asarray(points), np.asarray(normals),
+                    np.asarray(uv), np.asarray(triangles))
             low = np.minimum(low, points.min(axis=0))
             high = np.maximum(high, points.max(axis=0))
             self.pieces.append(Piece(
-                device, name,
-                points, data[f"{name}__normals"],
-                data[f"{name}__triangles"],
-                data.get(f"{name}__uv") if screen >= 0 else None,
+                device, name, points, normals, triangles, uv,
                 colours[index], screen, name == KINETIC_SCREEN,
                 feed == DEFAULT_TOP))
 
