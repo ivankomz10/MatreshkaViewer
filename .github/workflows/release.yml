@@ -1,17 +1,25 @@
 name: Release
 
-# Build the viewer on real Windows and macOS machines and attach the results
-# to a GitHub Release. PyInstaller does not cross-compile, so each binary has
+# Build the viewer on real Windows and macOS machines and publish the results
+# as a GitHub Release. PyInstaller does not cross-compile, so each binary has
 # to be built on its own kind of machine; GitHub's hosted runners are those
-# machines. Push a tag like `v0.2` to cut a release, or run it by hand from the
-# Actions tab (a manual run only uploads the build artifacts, it does not make
-# a release, because there is no tag to hang one on).
+# machines.
+#
+# Two ways to fire it, both fully automatic -- no manual asset upload:
+#   * push a tag like `v0.2`  -> release is cut for that tag;
+#   * Actions tab -> Release -> "Run workflow" -> a release is cut too, tagged
+#     from the `version` input, or, left blank, from APP_VERSION in main.py.
 
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag, e.g. v0.2 (blank = APP_VERSION from tool/main.py)'
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -21,6 +29,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Work out the tag once, so a tag push and a manual run land on the same name.
+  version:
+    name: Resolve tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: pick
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            tag="${{ github.event.inputs.version }}"
+          else
+            ver="$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' tool/main.py)"
+            if [ -z "$ver" ]; then
+              echo "Could not read APP_VERSION from tool/main.py" >&2
+              exit 1
+            fi
+            tag="v${ver}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag"
+
   windows:
     name: Build Windows (.exe)
     runs-on: windows-latest
@@ -83,8 +118,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: [windows, macos]
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [version, windows, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -92,9 +126,15 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # Creates the tag if it does not exist yet (manual runs), or reuses it
+      # (tag pushes), and attaches both zips. Re-running the same version
+      # refreshes that release rather than making a second one.
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.version.outputs.tag }}
           files: dist/*.zip
-          draft: true
+          draft: false
+          make_latest: true
           generate_release_notes: true
+          fail_on_unmatched_files: true
