@@ -216,3 +216,32 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# -- Matreshka Viewer -------------------------------------------------------
+# Everything built, everything rendered, and everything that is somebody's
+# own work rather than part of the tool.
+
+# The built application and the packages made from it
+*.exe
+*.zip
+
+# The Blender scene the geometry is baked from: a third of a gigabyte a file
+*.blend
+*.blend1
+
+# Renders, logs, and the settings file, which is a session in progress
+OUT/
+Logs/
+settings.json
+
+# Clips and reference pictures used while working on content
+test/
+Frame/
+assets/
+
+# What the tests make for themselves: a copy of the .exe, the sandboxes it
+# runs in, the clips media.py writes, screenshots kept from a failure
+qa/sandbox/
+qa/headless/sandbox/
+qa/artifacts/
+qa/media/

@@ -1,0 +1,25 @@
+The button icons are Houdini's own, drawn from the SVGs in
+  C:\Program Files\Side Effects Software\Houdini 20.5.584\houdini\config\Icons\icons.zip
+at 64 pixels square. They are SideFX's artwork, kept here so the tool
+does not need Houdini installed to draw its own buttons.
+
+  back       PLAYBAR/frame_prev.svg
+  clear      BUTTONS/clear.svg
+  directory  BUTTONS/chooser_folder.svg
+  down       BUTTONS/down.svg
+  download   BUTTONS/download.svg
+  file       BUTTONS/chooser_file.svg
+  first      PLAYBAR/frame_first.svg
+  home       IMAGE/home.svg
+  last       PLAYBAR/last_frame.svg
+  link       BUTTONS/link.svg
+  log        BUTTONS/log.svg
+  on         PLAYBAR/frame_next.svg
+  pause      PLAYBAR/pause.svg
+  play       PLAYBAR/play_forward.svg
+  probe      BUTTONS/image_color_picker.svg
+  rebake     COMMON/bake.svg
+  render     BUTTONS/render.svg
+  snapshot   BUTTONS/shutter.svg
+  stop       PLAYBAR/stop.svg
+  version    BUTTONS/plus.svg
