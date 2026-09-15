@@ -1,0 +1,4 @@
+{
+  "name": "Matreshka Viewer",
+  "install": "bash .cursor/install.sh"
+}
