@@ -9,6 +9,12 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+# The built viewer lands next to the tool folder (build.sh/build.bat use
+# --distpath ".."); keep those bundles out of the repo.
+/MatreshkaViewer
+/MatreshkaViewer.exe
+/MatreshkaViewer.app/
+/MatreshkaViewer-*.zip
 develop-eggs/
 dist/
 downloads/

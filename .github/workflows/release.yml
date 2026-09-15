@@ -1,0 +1,100 @@
+name: Release
+
+# Build the viewer on real Windows and macOS machines and attach the results
+# to a GitHub Release. PyInstaller does not cross-compile, so each binary has
+# to be built on its own kind of machine; GitHub's hosted runners are those
+# machines. Push a tag like `v0.2` to cut a release, or run it by hand from the
+# Actions tab (a manual run only uploads the build artifacts, it does not make
+# a release, because there is no tag to hang one on).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Build Windows (.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The same steps build.bat runs, minus its `pause` (which would hang a
+      # non-interactive runner). The spec writes MatreshkaViewer.exe one level
+      # up from the tool folder, i.e. the repository root.
+      - name: Build
+        working-directory: tool
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python -m pip install --upgrade pip
+          .venv\Scripts\pip install -r requirements.txt
+          .venv\Scripts\pip install pyinstaller
+          .venv\Scripts\pyinstaller --noconfirm --distpath .. --workpath build build.spec
+
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path MatreshkaViewer.exe -DestinationPath MatreshkaViewer-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MatreshkaViewer-windows
+          path: MatreshkaViewer-windows.zip
+          if-no-files-found: error
+
+  macos:
+    name: Build macOS (.app)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # build.sh makes its own venv, installs the requirements, and runs the
+      # spec, which on macOS produces MatreshkaViewer.app (a folder) at the
+      # repository root. ditto zips it while keeping the bundle's symlinks and
+      # metadata, which a plain zip would flatten.
+      - name: Build
+        working-directory: tool
+        run: bash build.sh
+
+      - name: Package
+        run: ditto -c -k --keepParent MatreshkaViewer.app MatreshkaViewer-macos.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MatreshkaViewer-macos
+          path: MatreshkaViewer-macos.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [windows, macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          draft: true
+          generate_release_notes: true
