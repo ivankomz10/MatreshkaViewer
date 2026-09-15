@@ -245,3 +245,10 @@ qa/sandbox/
 qa/headless/sandbox/
 qa/artifacts/
 qa/media/
+
+# The spec is not generated here -- it is written by hand and it is the build:
+# which Qt libraries to leave out, where the baked scene travels, the loading
+# picture, one file on Windows against a folder on macOS. The template above
+# ignores *.spec because for most projects a script writes it; here it is
+# source.
+!*.spec
