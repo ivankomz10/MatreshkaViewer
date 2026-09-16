@@ -1733,8 +1733,12 @@ class Viewer(QMainWindow):
                 # out true, and somebody who zoomed in to look at a detail and
                 # pressed Snapshot meant that detail.
                 spilled = self.mesh.spill      # the scene keeps it, not the drawer
-                if not self.inspecting():
-                    self.solid.show_around(1.0, 1.0)
+                # Inspection too: opened out, the free camera fills the window
+                # and a picture taken through it then written into the frame's
+                # shape would be the building made narrow, exactly as on the
+                # file camera. Closing to the frame captures the same
+                # rectangle the render will, from the angle being inspected.
+                self.solid.show_around(1.0, 1.0)
                 try:
                     picture = self.solid.to_array(width, height)
                 finally:
@@ -2317,7 +2321,7 @@ class Viewer(QMainWindow):
         self.frame_button.setToolTip(
             "Линия, показывающая, что попадёт в запись. Картинка занимает всё "
             "окно и продолжается за рамкой; эта линия говорит, где рамка. "
-            f"Только в {PREVIEW}, где есть что кадрировать.")
+            f"В {PREVIEW} и в Inspection, где есть что кадрировать.")
         self.frame_button.toggled.connect(
             lambda _: (self._lay_overlays(), self._remember()))
 
@@ -2478,9 +2482,10 @@ class Viewer(QMainWindow):
             self.full_button.raise_()
             taken = self.full_button.width() + 6
         if hasattr(self, "frame_button"):
-            # Only where there is a frame to keep. The other modes either have
-            # no crop at all or are not about the building.
-            framed = self.mode.currentText() == PREVIEW
+            # Where there is a render rectangle to mark: Preview and
+            # Inspection both write the file camera's frame, so both show the
+            # line. Flat is not one picture and ReBake is about a source file.
+            framed = self.mode.currentText() in (PREVIEW, "Inspection")
             self.frame_button.setVisible(framed)
             if framed:
                 self.frame_button.move(
@@ -2548,10 +2553,14 @@ class Viewer(QMainWindow):
         # frame, and a rectangle that says "this is what gets written" over
         # something else is worse than no rectangle. It comes back on the way
         # out -- at the far end of the wheel, or on a reset.
-        showing = (self.mode.currentText() == PREVIEW
-                   and self.frame_button.isChecked()
+        # In Inspection there is no wheel crop to fall inside, so the line
+        # always marks the render rectangle; in Preview it hides while cropped
+        # in, where the picture is a piece of the frame rather than the frame.
+        mode = self.mode.currentText()
+        showing = (self.frame_button.isChecked()
                    and self.mesh is not None
-                   and self.mesh.zoom >= 1.0)
+                   and ((mode == PREVIEW and self.mesh.zoom >= 1.0)
+                        or mode == "Inspection"))
         self.frame_edge.setVisible(showing)
         if not showing:
             return
@@ -3137,7 +3146,13 @@ class Viewer(QMainWindow):
         # file is the frame itself, so what is about to be written and what
         # is about to be shown are made the same thing rather than left to
         # differ by however far somebody had zoomed.
-        self.reset_view()
+        #
+        # In Inspection the reset is held back: the whole point of the mode is
+        # the angle somebody chose, and resetting the orbit would write the
+        # file camera's view instead. Only the opening out is undone, so the
+        # frame area is written at the output shape from that same angle.
+        if not self.inspecting():
+            self.reset_view()
         self.solid.show_around(1.0, 1.0)
 
         width, height = self.size_choice.currentData()
@@ -3539,8 +3554,14 @@ class Viewer(QMainWindow):
         if chosen == "ReBake":
             self._place_rebake(encoder, view, width, height)
         elif chosen == "Inspection" and self.solid is not None:
-            # The whole canvas, letterboxed by nothing: there is no frame to
-            # keep here, which is the point of the mode.
+            # The whole canvas, and the free camera opened out to fill it the
+            # same way Preview opens the file camera: what will be written is
+            # the rectangle in the middle, marked by the frame line, and the
+            # scene carries on past it instead of sitting in black bars.
+            shape = self.mesh.cropped or self.mesh.frame
+            box = self._fitted(*shape, into=(width, height))
+            self.solid.show_around(width / max(box[2], 1.0),
+                                   height / max(box[3], 1.0))
             self.solid.draw(encoder, view, width, height)
         elif chosen == PREVIEW and self.solid is not None:
             # The whole canvas, and the camera opened out to match it: black
