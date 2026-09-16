@@ -18,6 +18,11 @@ if not exist "baked\scene_mesh.npz" (
     exit /b 1
 )
 
+rem Not assumed to be in step: a package added to the list after this .venv
+rem was made would otherwise be missing from the build, and the one that went
+rem missing was the bundle of trusted roots the ffmpeg download verifies
+rem against. Satisfied already, this says nothing.
+.venv\Scripts\python.exe -m pip install --quiet -r requirements.txt || goto :error
 .venv\Scripts\python.exe -m pip install --quiet --upgrade pyinstaller || goto :error
 
 .venv\Scripts\pyinstaller.exe ^

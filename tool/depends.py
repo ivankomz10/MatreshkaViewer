@@ -248,6 +248,110 @@ def check() -> list[Requirement]:
     return found
 
 
+AGENT = "MatreshkaRemapRenderer"
+
+
+def certificates() -> str | None:
+    """The file of trusted roots to check the download's certificate against.
+
+    A frozen build carries its own Python, and that Python's OpenSSL looks for
+    a CA file where the machine that built it kept one. On a mac built with
+    Homebrew that is a path inside Homebrew, and a mac without Homebrew has
+    nothing there: the download then fails with CERTIFICATE_VERIFY_FAILED
+    having never had anything to verify against. certifi's bundle travels
+    inside the build, so there is always something.
+
+    None means "use whatever this machine has", which is right when running
+    from source and on Windows, where the store is the system's own.
+    """
+    try:
+        import certifi
+    except Exception:                   # noqa: BLE001 -- not in this build
+        return None
+    where = certifi.where()
+    return where if os.path.exists(where) else None
+
+
+def _fetch_with_python(url: str, target: Path, on_progress, should_stop) -> None:
+    """The download as Python does it, checked against the roots above."""
+    import ssl
+    import urllib.request
+
+    context = ssl.create_default_context(cafile=certificates())
+    request = urllib.request.Request(url, headers={"User-Agent": AGENT})
+    with urllib.request.urlopen(request, timeout=60, context=context) as answer:
+        total = int(answer.headers.get("Content-Length") or 0)
+        done = 0
+        with open(target, "wb") as writing:
+            while True:
+                if should_stop is not None and should_stop():
+                    raise RuntimeError("cancelled")
+                block = answer.read(1 << 20)
+                if not block:
+                    break
+                writing.write(block)
+                done += len(block)
+                if on_progress is not None:
+                    on_progress(done, total)
+
+
+def _is_certificate_trouble(error: Exception) -> bool:
+    """Whether what went wrong was the certificate rather than the network."""
+    import ssl
+    if isinstance(error, ssl.SSLError):
+        return True
+    reason = getattr(error, "reason", None)
+    return isinstance(reason, ssl.SSLError)
+
+
+def _fetch_with_curl(url: str, target: Path, on_progress, should_stop) -> None:
+    """The same download through curl, which has the machine's own roots.
+
+    For the case above where the build's own store is no use: macOS has always
+    had curl, it trusts what the machine trusts, and this asks nothing of
+    whoever is using the application.
+    """
+    curl = shutil.which("curl")
+    if curl is None:
+        raise RuntimeError("no certificates this build can verify against, "
+                           "and no curl to fall back on -- install ffmpeg "
+                           "yourself and put it on PATH")
+    running = subprocess.Popen(
+        [curl, "-fL", "--silent", "--show-error", "-A", AGENT,
+         "-o", str(target), url],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        creationflags=NO_WINDOW)
+    import time
+    while running.poll() is None:
+        if should_stop is not None and should_stop():
+            running.kill()
+            raise RuntimeError("cancelled")
+        if on_progress is not None:
+            # No length to count against -- curl knows it and is not saying,
+            # so the bar is told how much has landed and nothing about the end.
+            on_progress(target.stat().st_size if target.exists() else 0, 0)
+        time.sleep(0.2)
+    if running.returncode:
+        said = (running.stderr.read() or b"").decode("utf-8", "replace").strip()
+        raise RuntimeError(f"curl could not fetch it: {said[:120]}")
+
+
+def fetch_archive(url: str, target: Path, on_progress=None,
+                  should_stop=None) -> None:
+    """The archive on disk, by whichever way this machine can reach it."""
+    try:
+        _fetch_with_python(url, target, on_progress, should_stop)
+    except Exception as trouble:        # noqa: BLE001 -- sorted out here
+        if not _is_certificate_trouble(trouble):
+            target.unlink(missing_ok=True)
+            raise
+        # Nothing to verify against, or nothing that knows this certificate.
+        # curl trusts what the machine trusts; on the mac where this turned up
+        # that is the difference between a download and a dead button.
+        logfile.write(f"ffmpeg download: {trouble}; trying curl instead")
+        _fetch_with_curl(url, target, on_progress, should_stop)
+
+
 def install_ffmpeg(on_progress=None, should_stop=None) -> Path:
     """Fetch the archive for this platform and keep only the binary.
 
@@ -271,24 +375,10 @@ def install_ffmpeg(on_progress=None, should_stop=None) -> Path:
     folder = tools_dir()
     folder.mkdir(parents=True, exist_ok=True)
 
-    request = urllib.request.Request(
-        url, headers={"User-Agent": "MatreshkaRemapRenderer"})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        total = int(response.headers.get("Content-Length") or 0)
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False,
-                                         dir=str(folder)) as archive:
-            temporary = Path(archive.name)
-            done = 0
-            while True:
-                if should_stop is not None and should_stop():
-                    raise RuntimeError("cancelled")
-                block = response.read(1 << 20)
-                if not block:
-                    break
-                archive.write(block)
-                done += len(block)
-                if on_progress is not None:
-                    on_progress(done, total)
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False,
+                                     dir=str(folder)) as archive:
+        temporary = Path(archive.name)
+    fetch_archive(url, temporary, on_progress, should_stop)
 
     try:
         with zipfile.ZipFile(temporary) as bundle:

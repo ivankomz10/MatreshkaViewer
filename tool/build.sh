@@ -40,6 +40,12 @@ if [ ! -x ".venv/bin/python" ]; then
     .venv/bin/python -m pip install --quiet --upgrade pip
     .venv/bin/pip install -r requirements.txt
     echo
+else
+    # An existing .venv is not assumed to hold everything the list asks for.
+    # It cost a mac its Download button once: the build carried no bundle of
+    # trusted roots because certifi had been added to the list after that
+    # .venv was made. Satisfied already, this is a second and says nothing.
+    .venv/bin/pip install --quiet -r requirements.txt
 fi
 
 if [ ! -f "baked/scene_mesh.npz" ]; then
