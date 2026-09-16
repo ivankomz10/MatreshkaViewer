@@ -73,14 +73,18 @@ struct VOut {
 };
 
 @vertex
-fn vs_main(@builtin(vertex_index) index: u32,
-           @location(0) point: vec3<f32>,
+fn vs_main(@location(0) point: vec3<f32>,
            @location(1) normal: vec3<f32>,
-           @location(2) uv: vec2<f32>) -> VOut {
+           @location(2) uv: vec2<f32>,
+           @location(3) cell: f32) -> VOut {
     var here = point;
     var facing = normal;
     if (piece.which.y > 0.5) {
-        let moved = cells[index / 6u];
+        // Which cell of the honeycomb this vertex belongs to, carried with
+        // the vertex. It used to be `vertex_index / 6`, which held only while
+        // a cell was six vertices in a row -- and it stopped holding the
+        // moment the bake began splitting a corner off at the UV seam.
+        let moved = cells[u32(cell)];
         here = (moved * vec4<f32>(point, 1.0)).xyz;
         facing = (moved * vec4<f32>(normal, 0.0)).xyz;
     }
@@ -275,79 +279,6 @@ fn fs_main(in: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f3
 """
 
 
-def mend_seam(points, normals, uv, triangles):
-    """Keep a face that straddles the u=0/1 seam from racing round the picture.
-
-    On the cylindrical screens the back of the ring closes with faces whose
-    corners carry u near 1 on one side and u near 0 on the other. Nothing
-    wraps the texture here -- the sampler is clamp-to-edge -- so between those
-    corners u is walked the long way, 0.99 down to 0.0, and the whole width of
-    the video is crushed into that sliver. That is the band of noise seen at
-    the seam of the top and bottom screens; the lamellas, which do not close,
-    never show it.
-
-    The cure is to send the low corner to the far end instead: u just past 1,
-    a short step from the 0.99 beside it, so the face shows the edge of the
-    picture rather than all of it.
-
-    The honeycomb -- still (`Screen_Top`) or moving (`screen`) -- is kept as
-    separate six-vertex cells, and a seam cell's vertices are shared with
-    nothing outside it, so it is mended in place, a whole cell at a time: a
-    cell that straddles the seam has corners at both ends of u, and lifting
-    only some of them would leave the crush between those and the rest. That
-    also leaves the vertex count and order untouched, which the moving screen
-    needs: it finds a cell from `vertex_index / 6`. The bottom screen is a
-    welded strip whose seam vertices are shared with their neighbours, so there
-    the corner is split off into a copy that carries the raised u and only the
-    seam faces point at it.
-    """
-    u = uv[:, 0]
-    span = u[triangles].max(axis=1) - u[triangles].min(axis=1)
-    seam = np.where(span > 0.5)[0]
-    if len(seam) == 0:
-        return points, normals, uv, triangles
-
-    uv = uv.copy()
-    grouped = all(len({int(v) // CELL_VERTICES for v in tri}) == 1
-                  for tri in triangles)
-    if grouped:
-        # A cell is six consecutive vertices. Only the handful sitting on the
-        # seam span more than half of u; in each of those, the corners near 0
-        # belong just past 1, beside the ones near 1 already there.
-        cells = len(uv) // CELL_VERTICES
-        blocks = uv[:cells * CELL_VERTICES].reshape(cells, CELL_VERTICES, 2)
-        us = blocks[..., 0]
-        straddles = (us.max(axis=1) - us.min(axis=1)) > 0.5
-        us[straddles[:, None] & (us < 0.5)] += 1.0
-        return points, normals, uv, triangles
-
-    points, normals = points.copy(), normals.copy()
-    triangles = triangles.copy()
-    extra_points, extra_normals, extra_uv = [], [], []
-    raised: dict[int, int] = {}
-
-    def past_the_end(vertex: int) -> int:
-        if vertex not in raised:
-            raised[vertex] = len(points) + len(extra_points)
-            extra_points.append(points[vertex])
-            extra_normals.append(normals[vertex])
-            extra_uv.append([uv[vertex, 0] + 1.0, uv[vertex, 1]])
-        return raised[vertex]
-
-    for i in seam:
-        high = uv[triangles[i], 0].max()
-        for corner in range(3):
-            vertex = int(triangles[i, corner])
-            if uv[vertex, 0] < high - 0.5:
-                triangles[i, corner] = past_the_end(vertex)
-
-    if extra_points:
-        points = np.vstack([points, np.array(extra_points, points.dtype)])
-        normals = np.vstack([normals, np.array(extra_normals, normals.dtype)])
-        uv = np.vstack([uv, np.array(extra_uv, uv.dtype)])
-    return points, normals, uv, triangles
-
-
 def look_through(matrix: np.ndarray) -> np.ndarray:
     """The view matrix of a Blender camera: its own transform, undone.
 
@@ -517,7 +448,7 @@ class Piece:
     """One object: its geometry on the card and what it is made of."""
 
     def __init__(self, device, name: str, points, normals, triangles,
-                 uv, colour, screen_index: int, kinetic: bool = False,
+                 uv, cell, colour, screen_index: int, kinetic: bool = False,
                  hollow: bool = False) -> None:
         self.name = name
         self.kinetic = kinetic
@@ -526,13 +457,19 @@ class Piece:
         # geometries: it is a ring of separated cells whether it is moving or
         # standing at rest, and the switch has to reach both.
         self.hollow = hollow
+        self.cell = np.asarray(cell, dtype=np.uint32).reshape(-1)
         self.count = len(triangles) * 3
         self.screen_index = screen_index
         self.is_screen = screen_index >= 0
 
         if uv is None:
             uv = np.zeros((len(points), 2), dtype=np.float32)
-        vertices = np.hstack([points, normals, uv]).astype(np.float32)
+        # The cell index rides along as a float. It is a whole number under
+        # two thousand, which a float32 holds exactly, and one attribute of
+        # one kind keeps the vertex layout to a single stride.
+        vertices = np.hstack([points, normals, uv,
+                              np.asarray(cell, dtype=np.float32).reshape(-1, 1)]
+                             ).astype(np.float32)
 
         self.vertices = device.create_buffer_with_data(
             data=np.ascontiguousarray(vertices),
@@ -610,17 +547,17 @@ class Scene:
             normals = data[f"{name}__normals"]
             triangles = data[f"{name}__triangles"]
             uv = data.get(f"{name}__uv") if screen >= 0 else None
-            if uv is not None:
-                # Straighten the seam faces before the geometry goes to the
-                # card, so the back of the ring does not crush the whole video
-                # into a strip. Copies out of the read-only archive first.
-                points, normals, uv, triangles = mend_seam(
-                    np.asarray(points), np.asarray(normals),
-                    np.asarray(uv), np.asarray(triangles))
+            # Which cell of the honeycomb each vertex belongs to, from the
+            # bake. Older files have no such list; there a cell was six
+            # vertices in a row, which is what the shader used to work out
+            # for itself.
+            cell = data.get(f"{name}__cell")
+            if cell is None:
+                cell = np.arange(len(points), dtype=np.uint32) // CELL_VERTICES
             low = np.minimum(low, points.min(axis=0))
             high = np.maximum(high, points.max(axis=0))
             self.pieces.append(Piece(
-                device, name, points, normals, triangles, uv,
+                device, name, points, normals, triangles, uv, cell,
                 colours[index], screen, name == KINETIC_SCREEN,
                 feed == DEFAULT_TOP))
 
@@ -713,6 +650,28 @@ class Scene:
         if self.free is not None:
             return (self.free.projection() @ self.free.view()).astype(np.float32)
         return (self.projection @ self.view).astype(np.float32)
+
+    def cell_middles(self, name: str) -> np.ndarray:
+        """Where each cell of the honeycomb sits: the middle of its corners.
+
+        Read off the geometry rather than stored beside it, because the
+        geometry is the thing certain to be in step with itself -- but by the
+        cell each vertex says it belongs to, not by sixes down the array. A
+        corner split off at the UV seam is the same point twice and is counted
+        once, or it would drag its cell's middle towards itself.
+        """
+        points = self.points_of(name)
+        cell = next(p.cell for p in self.pieces if p.name == name)
+        together = np.concatenate(
+            [cell.reshape(-1, 1).astype(np.float64), points.astype(np.float64)],
+            axis=1)
+        once = np.unique(together, axis=0)
+        which = once[:, 0].astype(np.int64)
+        count = int(which.max()) + 1 if len(which) else 0
+        summed = np.zeros((count, 3), dtype=np.float64)
+        np.add.at(summed, which, once[:, 1:])
+        how_many = np.bincount(which, minlength=count).reshape(-1, 1)
+        return (summed / np.maximum(how_many, 1)).astype(np.float32)
 
     def points_of(self, name: str) -> np.ndarray:
         """One object's vertices as they were baked, in world metres."""

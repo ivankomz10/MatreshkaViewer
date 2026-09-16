@@ -26,12 +26,14 @@ class Renderer3D:
             vertex={
                 "module": shader, "entry_point": "vs_main",
                 "buffers": [{
-                    "array_stride": 8 * 4,
+                    "array_stride": 9 * 4,
                     "step_mode": "vertex",
                     "attributes": [
                         {"format": "float32x3", "offset": 0, "shader_location": 0},
                         {"format": "float32x3", "offset": 12, "shader_location": 1},
                         {"format": "float32x2", "offset": 24, "shader_location": 2},
+                        # Which cell of the honeycomb, for the moving screen.
+                        {"format": "float32", "offset": 32, "shader_location": 3},
                     ],
                 }],
             },

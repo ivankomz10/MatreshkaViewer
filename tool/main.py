@@ -3848,9 +3848,7 @@ class Viewer(QMainWindow):
         try:
             self.motors = kinetic.Motors(text)
             if self.cell_at is None:
-                points = self.mesh.points_of(scene3d.KINETIC_SCREEN)
-                self.cell_at = points.reshape(
-                    -1, scene3d.CELL_VERTICES, 3).mean(axis=1)
+                self.cell_at = self.mesh.cell_middles(scene3d.KINETIC_SCREEN)
                 self.cell_is = kinetic.cell_addresses(self.cell_at)
         except Exception as error:  # noqa: BLE001 -- shown beside the field
             self.motors = None

@@ -46,6 +46,11 @@ FEEDS = {
     "Lamel_screen": "Lamel_screen",
 }
 
+# Six vertices to a cell of the honeycomb, the same number the viewer's
+# shader used to divide by. Written into the file now rather than assumed on
+# both sides; see the cell index below.
+CELL_VERTICES = 6
+
 # Everything else: there to show where the screens are and what hides what.
 # A missing one is skipped rather than fatal -- the file is edited between
 # bakes, and a prop that has gone away should not stop the whole export.
@@ -136,10 +141,7 @@ def main():
         loop_verts = np.empty(len(mesh.loops), dtype=np.int32)
         mesh.loops.foreach_get("vertex_index", loop_verts)
         faces = loop_verts[loop_tris.reshape(-1, 3)].astype(np.uint32)
-
-        saved[f"{name}__points"] = world.astype(np.float32)
-        saved[f"{name}__normals"] = facing.astype(np.float32)
-        saved[f"{name}__triangles"] = faces
+        # Kept as it came for the screens below, which index by corner.
 
         if is_screen:
             layer = mesh.uv_layers.get(SCREENS[name]) or mesh.uv_layers.active
@@ -147,15 +149,52 @@ def main():
                 fail(f"{name} has no UV layer {SCREENS[name]!r}")
             loop_uv = np.empty(len(mesh.loops) * 2, dtype=np.float32)
             layer.data.foreach_get("uv", loop_uv)
-            per_vertex = np.zeros((count, 2), dtype=np.float32)
-            per_vertex[loop_verts] = loop_uv.reshape(-1, 2)
-            saved[f"{name}__uv"] = per_vertex
+            loop_uv = loop_uv.reshape(-1, 2)
+
+            # A UV seam is a vertex whose face corners disagree about where
+            # they are in the picture: on the closed ring one corner sits at
+            # u=1 and its neighbour at u=0. Blender keeps a UV per corner and
+            # can hold both. One per vertex cannot, and keeping the last one
+            # written threw the seam away -- which turned the face that closes
+            # the ring into a face spanning the whole width of the video, and
+            # that is the band of noise at the back of the top and bottom
+            # screens. The lamellas never showed it because they do not close.
+            #
+            # So a vertex here is a corner's worth of vertex: position and
+            # normal from the point it sits on, UV its own. Corners that agree
+            # collapse back into one, which is all of them but the seam.
+            grid = np.rint(loop_uv.astype(np.float64) * 65536.0).astype(np.int64)
+            keys = np.stack([loop_verts.astype(np.int64), grid[:, 0],
+                             grid[:, 1]], axis=1)
+            _, first, corner_of = np.unique(keys, axis=0, return_index=True,
+                                            return_inverse=True)
+            origin = loop_verts[first]
+            saved[f"{name}__points"] = world[origin].astype(np.float32)
+            saved[f"{name}__normals"] = facing[origin].astype(np.float32)
+            saved[f"{name}__uv"] = loop_uv[first].astype(np.float32)
+            saved[f"{name}__triangles"] = corner_of.reshape(-1)[
+                loop_tris.reshape(-1, 3)].astype(np.uint32)
+            # Which cell of the honeycomb each of them belongs to. It used to
+            # be worked out on the card as `vertex_index / 6`, which only held
+            # while a cell was exactly six vertices in a row; splitting a
+            # corner off breaks that, so the answer is written down here
+            # instead, from the point the corner sits on.
+            saved[f"{name}__cell"] = (origin // CELL_VERTICES).astype(np.uint32)
+            split = len(origin) - count
+            if split:
+                say("INFO", f"{name:18s} {split} corner(s) split off at the "
+                            f"UV seam, {len(origin):,} vertices in all")
+            count = len(origin)
             colours.append((0.0, 0.0, 0.0))
         else:
+            saved[f"{name}__points"] = world.astype(np.float32)
+            saved[f"{name}__normals"] = facing.astype(np.float32)
+            saved[f"{name}__triangles"] = faces
             colours.append(base_colour(obj))
 
         say("INFO", f"{name:18s} {'screen' if is_screen else 'element':7s} "
-                    f"{count:8,} verts  {len(faces):8,} tris")
+                    f"{count:8,} verts  "
+                    f"{len(saved[f'{name}__triangles']):8,} tris")
         total_v += count
         total_t += len(faces)
         evaluated.to_mesh_clear()
@@ -182,15 +221,20 @@ def main():
         layer.data.foreach_get("uv", loop_uv)
         loop_verts = np.empty(len(mesh.loops), dtype=np.int32)
         mesh.loops.foreach_get("vertex_index", loop_verts)
-        uv = np.zeros((count, 2), dtype=np.float32)
-        uv[loop_verts] = loop_uv.reshape(-1, 2)
+        # Over the corners, not the points: the same seam that used to be
+        # flattened away here would put one vertex a whole width out and drag
+        # the fit with it.
+        loop_uv = loop_uv.reshape(-1, 2)
+        corner_world = world[loop_verts]
+        corner_u = loop_uv[:, 0]
 
-        angle = np.arctan2(world[:, 1], world[:, 0])
+        angle = np.arctan2(corner_world[:, 1], corner_world[:, 0])
         # Unwrapped along u, not around the circle: sorted the other way the
         # jump at the seam turns the fit into nonsense.
-        along_u = np.argsort(uv[:, 0])
+        along_u = np.argsort(corner_u)
         straight = np.unwrap(angle[along_u])
-        columns = np.vstack([uv[along_u, 0], np.ones(count)]).T
+        columns = np.vstack([corner_u[along_u],
+                             np.ones(len(corner_u))]).T
         slope, offset = np.linalg.lstsq(columns, straight, rcond=None)[0]
         radius = float(np.linalg.norm(world[:, :2], axis=1).mean())
         unrolled[name] = (radius * abs(float(slope)),          # arc, metres
