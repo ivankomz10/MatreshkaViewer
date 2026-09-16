@@ -1017,6 +1017,8 @@ class Viewer(QMainWindow):
                 self.rebake_threshold.setValue(int(saved["rebake_below"]))
             if "frame_edge" in saved:
                 self.frame_button.setChecked(bool(saved["frame_edge"]))
+            if "tile_flat" in saved:
+                self.tile_button.setChecked(bool(saved["tile_flat"]))
             if saved.get("rebake_format"):
                 self.rebake_format.setCurrentText(str(saved["rebake_format"]))
             if saved.get("rebake_colour"):
@@ -1082,6 +1084,7 @@ class Viewer(QMainWindow):
             "rebake_colour": self.rebake_colour.currentText(),
             "rebake_format": self.rebake_format.currentText(),
             "frame_edge": self.frame_button.isChecked(),
+            "tile_flat": self.tile_button.isChecked(),
             "rebake_left": self.rebake_left_alpha.currentText(),
             "rebake_right": self.rebake_right_alpha.currentText(),
             "out_dir": str(self.out_dir),
@@ -2289,6 +2292,23 @@ class Viewer(QMainWindow):
         brush.end()
         return QIcon(picture)
 
+    def _tile_icon(self) -> QIcon:
+        """One panel full, its neighbours running off both edges: the strip
+        repeating without end, which is what the button turns on."""
+        side = 64
+        picture = QPixmap(side, side)
+        picture.fill(Qt.GlobalColor.transparent)
+        brush = QPainter(picture)
+        brush.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        brush.setPen(QPen(QColor("#dcdcdc"), 5))
+        top, bottom, unit = 16, side - 16, side // 3
+        # The middle panel whole, the two beside it cut off at the frame,
+        # so the eye reads them as going on past it in both directions.
+        for centre in (-unit, unit * 0.5, unit * 2):
+            brush.drawRect(round(centre), top, unit, bottom - top)
+        brush.end()
+        return QIcon(picture)
+
     def _frame_line(self) -> None:
         """The rectangle that will be written, drawn on the picture.
 
@@ -2320,6 +2340,25 @@ class Viewer(QMainWindow):
             f"Только в {PREVIEW}, где есть что кадрировать.")
         self.frame_button.toggled.connect(
             lambda _: (self._lay_overlays(), self._remember()))
+
+        # Horizontal tiling, offered only in Flat: each strip is drawn again
+        # to its left and right until the window is full, so a screen reads as
+        # the endless band it really is on the wall rather than one turn of it
+        # standing alone.
+        self.tile_button = QPushButton(self.canvas)
+        self.tile_button.setObjectName("qa_tile_button")
+        self.tile_button.setIcon(self._tile_icon())
+        self.tile_button.setIconSize(QSize(18, 18))
+        self.tile_button.setFixedSize(28, 28)
+        self.tile_button.setCheckable(True)
+        self.tile_button.setChecked(False)
+        self.tile_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tile_button.setStyleSheet(self.OVERLAY_BUTTON)
+        self.tile_button.setToolTip(
+            "Горизонтальный тайл: каждый экран повторяется лентой без конца, "
+            "влево и вправо, как он и идёт по кругу здания. Только во Flat.")
+        self.tile_button.toggled.connect(
+            lambda _: (self._lay_overlays(), self.touch(), self._remember()))
 
     def _beside_canvas(self):
         """Every widget the window lays out, except the picture itself.
@@ -2489,6 +2528,17 @@ class Viewer(QMainWindow):
                 self.frame_button.raise_()
                 taken += self.frame_button.width() + 6
             self._lay_frame_edge()
+        if hasattr(self, "tile_button"):
+            # Only in Flat: the other modes draw one picture, not strips to be
+            # laid end to end.
+            tileable = self.mode.currentText() == "Flat"
+            self.tile_button.setVisible(tileable)
+            if tileable:
+                self.tile_button.move(
+                    max(edge, wide - taken - self.tile_button.width() - edge),
+                    edge)
+                self.tile_button.raise_()
+                taken += self.tile_button.width() + 6
         self.rebake_left_alpha.adjustSize()
         self.rebake_right_alpha.adjustSize()
         left = self.rebake_left_alpha
@@ -3647,10 +3697,41 @@ class Viewer(QMainWindow):
         if not showing:
             return
 
-        for name, box in self._strips(showing, width, height):
-            self._draw_strip(encoder, view, name, box)
+        tiling = self._tiling()
+        for name, box in self._strips(showing, width, height, tile=tiling):
+            if tiling:
+                self._draw_tiled(encoder, view, name, box, width)
+            else:
+                self._draw_strip(encoder, view, name, box)
 
-    def _strips(self, showing, width: int, height: int):
+    def _tiling(self) -> bool:
+        """Whether Flat is drawing each strip as an endless repeating band."""
+        return (self.flat_mode() and hasattr(self, "tile_button")
+                and self.tile_button.isChecked())
+
+    def _draw_tiled(self, encoder, view, name: str, box, width: int) -> None:
+        """One strip repeated left and right until the window is covered.
+
+        A viewport is a mapping, not a boundary, so each copy is just the strip
+        drawn again shifted by its own width; the hardware keeps the part that
+        lands. The copies do not overlap on screen, so nothing is drawn over
+        anything and the backing, video and frame all repeat together.
+        """
+        x, y, wide, high = box
+        if wide <= 0:
+            self._draw_strip(encoder, view, name, box)
+            return
+        start = x - math.ceil(x / wide) * wide      # first copy at or left of 0
+        at = start
+        # Bounded by construction -- start is within one width of zero and the
+        # step is a whole width -- but guarded so a degenerate size cannot spin.
+        guard = int(width / wide) + 3
+        while at < width and guard > 0:
+            self._draw_strip(encoder, view, name, (at, y, wide, high))
+            at += wide
+            guard -= 1
+
+    def _strips(self, showing, width: int, height: int, tile: bool = False):
         """Where each strip lands, in the order they are stacked.
 
         Shared by Flat and ReBake rather than written twice: the anchoring is
@@ -3691,7 +3772,8 @@ class Viewer(QMainWindow):
             _, _, start_angle, sweep, _ = unrolled[name]
             share = ((middle - start_angle) / sweep) % 1.0
             box = self._flat_box(
-                (width / 2 - share * wide, top, wide, high), width, height)
+                (width / 2 - share * wide, top, wide, high), width, height,
+                tile=tile)
             if box is not None:
                 placed.append((name, box))
             top += high + gap
@@ -3752,7 +3834,7 @@ class Viewer(QMainWindow):
                 self.painter.draw(encoder, drawing, view, viewport=box,
                                   alpha=reading, clip=clip, rebaked=rebaked)
 
-    def _flat_box(self, box, width: int, height: int):
+    def _flat_box(self, box, width: int, height: int, tile: bool = False):
         """Where a strip lands once the layout has been zoomed into.
 
         The rectangle comes back hanging off the edges of the canvas, which
@@ -3760,6 +3842,9 @@ class Viewer(QMainWindow):
         a strip four times the size of the window is simply drawn as one and
         the hardware keeps the part that lands. None when none of it lands,
         which happens the moment anybody looks closely at one strip of three.
+
+        When the strip is being tiled it never runs off the sides -- it repeats
+        to fill them -- so only its height is allowed to take it out of view.
         """
         magnify = self.flat_zoom
         x, y, wide, high = box
@@ -3771,7 +3856,9 @@ class Viewer(QMainWindow):
         # Outwards to whole pixels, never inwards: the scissor is here to stop
         # a strip spilling past its own rectangle, and a clip rounded the
         # other way would shave a line off the edge of every strip instead.
-        if x + wide <= 0 or y + high <= 0 or x >= width or y >= height:
+        if y + high <= 0 or y >= height:
+            return None
+        if not tile and (x + wide <= 0 or x >= width):
             return None
         return (x, y, wide, high)
 
