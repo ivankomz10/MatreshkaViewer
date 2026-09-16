@@ -378,6 +378,15 @@ class Orbit:
         self.fov_y = float(fov_y)
         self.aspect = 1.0
 
+        # The frame's own shape and how far past it the picture reaches, kept
+        # in step with the file camera's crop and spill. The frame decides the
+        # horizontal angle so the rectangle written out matches Preview's; the
+        # spill opens the frustum to fill the window and puts the frame back
+        # where it was, exactly as `Scene._rebuild` does for the file camera.
+        # None until framed, where the whole draw target sets the angle.
+        self.frame_aspect = None
+        self.spill = (1.0, 1.0)
+
         # Room to go right round it and well away from it. Taken from the size
         # of the thing rather than fixed, because a near plane that suits a
         # twenty metre building would slice a model of a room.
@@ -435,8 +444,16 @@ class Orbit:
         return np.linalg.inv(world)
 
     def projection(self) -> np.ndarray:
-        fov_x = 2.0 * math.atan(math.tan(self.fov_y / 2.0) * self.aspect)
-        return frustum(fov_x, self.fov_y, self.near, self.far)
+        # Framed, the horizontal angle follows the frame's shape rather than
+        # the window's, so what is written out is the same rectangle Preview
+        # marks; unframed it fills whatever it is drawn into. Then both angles
+        # are opened out by the spill, the same widening the file camera gets.
+        base = self.frame_aspect or self.aspect
+        across, down = self.spill
+        fov_x = 2.0 * math.atan(math.tan(self.fov_y / 2.0) * base)
+        fov_x = 2.0 * math.atan(math.tan(fov_x / 2.0) * across)
+        fov_y = 2.0 * math.atan(math.tan(self.fov_y / 2.0) * down)
+        return frustum(fov_x, fov_y, self.near, self.far)
 
     def describe(self) -> str:
         return (f"{self.distance:.1f} m out, "
@@ -585,6 +602,11 @@ class Scene:
         # Where the file's own camera stands: its view matrix, undone.
         eye = np.linalg.inv(self.view)[:3, 3]
         self.free = Orbit((low + high) / 2.0, eye, fov_y, span)
+        # Born already framed and opened out the way the file camera is, so the
+        # first inspection frame keeps the shape rather than snapping to it.
+        if self.cropped is not None:
+            self.free.frame_aspect = self.cropped[0] / max(self.cropped[1], 1)
+        self.free.spill = self.spill
 
     def look_at_window(self, centre=None, zoom: float = None) -> None:
         """Move or resize the window cut out of the camera's frame."""
@@ -625,6 +647,10 @@ class Scene:
         away most of the resolution exactly where the screens need it.
         """
         self.cropped = (width, height)
+        # The free camera frames the same shape, so it can write the same
+        # rectangle when inspecting rather than only when on the file camera.
+        if self.free is not None:
+            self.free.frame_aspect = width / max(height, 1)
         self._rebuild()
 
     def show_around(self, across: float, down: float) -> bool:
@@ -635,9 +661,16 @@ class Scene:
         is all of them but a resize.
         """
         wanted = (max(1.0, float(across)), max(1.0, float(down)))
-        if wanted == self.spill:
+        # The free camera carries its own copy of the spill, so a change to it
+        # counts too -- the two can fall out of step when the mode is switched
+        # under a held spill, and the free one must be brought back in line
+        # even on a frame where the file camera's value did not move.
+        free_stale = self.free is not None and self.free.spill != wanted
+        if wanted == self.spill and not free_stale:
             return False
         self.spill = wanted
+        if self.free is not None:
+            self.free.spill = wanted
         self._rebuild()
         return True
 
