@@ -77,15 +77,52 @@ def tools_dir() -> Path:
     return logfile.app_dir() / TOOLS_DIR
 
 
+def bundled_ffmpeg() -> str | None:
+    """An ffmpeg carried inside the frozen build, if this build has one.
+
+    The module note above explains why shipping ffmpeg is normally avoided:
+    it is large, and bundling a GPL build inside a redistributed binary is a
+    licensing question with real answers. The mac build carries one anyway,
+    on purpose -- the evermeet build has the snappy that hap needs, so a
+    re-bake to Hap Q Alpha works out of the box instead of waiting on the
+    first-run Download button. Anyone redistributing that build takes on the
+    GPL obligations that come with it.
+
+    It lands at `_MEIPASS/ffmpeg/<binary>` (see build.spec). PyInstaller's
+    data mechanism drops the executable bit, so it is put back here -- but
+    only best-effort: inside a signed, notarised bundle the tree is read-only,
+    and a chmod that fails there is not a problem, the bit is already set.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    root = getattr(sys, "_MEIPASS", None)
+    if not root:
+        return None
+    candidate = Path(root) / TOOLS_DIR / BINARY
+    if not candidate.is_file():
+        return None
+    if sys.platform != "win32" and not os.access(candidate, os.X_OK):
+        try:
+            candidate.chmod(candidate.stat().st_mode | 0o755)
+        except OSError:  # a read-only bundle already carries the bit
+            pass
+    return str(candidate)
+
+
 def ffmpeg_candidates() -> list[str]:
     """Every ffmpeg this machine offers, in the order they are preferred.
 
-    The downloaded one beside the application first, then whatever PATH says,
-    then the handful of places a package manager would have put it. The last
-    of those is for the Mac, where PATH inside the application is not the PATH
-    in the terminal that installed it.
+    The one bundled inside the build first, when there is one -- it is chosen
+    to have hap, so preferring it means no download is needed. Then the
+    downloaded one beside the application, then whatever PATH says, then the
+    handful of places a package manager would have put it. The last of those
+    is for the Mac, where PATH inside the application is not the PATH in the
+    terminal that installed it.
     """
     found = []
+    inside = bundled_ffmpeg()
+    if inside:
+        found.append(inside)
     local = tools_dir() / BINARY
     if local.is_file():
         found.append(str(local))
@@ -222,8 +259,12 @@ def check() -> list[Requirement]:
     command = ffmpeg_command()
     version = ffmpeg_version(command)
     if version:
-        where = "beside the application" if command != "ffmpeg" \
-            and str(tools_dir()) in command else command
+        if command == bundled_ffmpeg():
+            where = "bundled"
+        elif command != "ffmpeg" and str(tools_dir()) in command:
+            where = "beside the application"
+        else:
+            where = command
         found.append(Requirement("ffmpeg", True, f"{version[:70]}   [{where}]",
                                  when_absent="nothing can be written out"))
         # Whether it can write Hap is a second question, and the answer is no
