@@ -62,6 +62,40 @@ datas += [(os.path.join(icons, name), "icons")
           for name in sorted(os.listdir(icons))
           if name.endswith(".png")]
 
+# An ffmpeg carried inside the build, when one is provided. depends.py normally
+# finds ffmpeg on the machine or offers to download it; the note at the top of
+# that module explains why shipping one is usually left alone -- it is large and
+# a GPL build inside a redistributed binary carries the GPL's obligations with
+# it. The mac build carries one on purpose (see build.sh): the evermeet build
+# has the snappy that hap needs, so a re-bake to Hap Q Alpha works out of the
+# box rather than waiting on the first-run Download button.
+#
+# It is optional and additive: with no source, the build is exactly as before
+# and the application falls back to finding or downloading ffmpeg. The source is
+# an ffmpeg binary named by MATRESHKA_FFMPEG, or a vendored tool/vendor/ffmpeg.
+# It travels as data, landing at _MEIPASS/ffmpeg/<binary> to match
+# depends.bundled_ffmpeg(); data drops the exec bit, so depends.py chmods it at
+# run time for unsigned builds.
+FFMPEG_BINARY = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+ffmpeg_source = os.environ.get("MATRESHKA_FFMPEG") \
+    or os.path.join(TOOL, "vendor", FFMPEG_BINARY)
+if os.path.isfile(ffmpeg_source):
+    # depends.bundled_ffmpeg() looks for exactly _MEIPASS/ffmpeg/<binary>, so
+    # the name has to be that whatever the source was called. A datas entry
+    # keeps the source's own name, so a differently named source is copied to
+    # the wanted name beside the workpath first.
+    if os.path.basename(ffmpeg_source) != FFMPEG_BINARY:
+        import shutil as _shutil
+        staged_dir = os.path.join(TOOL, "build", "ffmpeg")
+        os.makedirs(staged_dir, exist_ok=True)
+        staged = os.path.join(staged_dir, FFMPEG_BINARY)
+        _shutil.copy2(ffmpeg_source, staged)
+        ffmpeg_source = staged
+    datas += [(ffmpeg_source, "ffmpeg")]
+    print(f"build.spec: bundling ffmpeg from {ffmpeg_source}")
+else:
+    print("build.spec: no ffmpeg to bundle; the app will find or download one")
+
 a = Analysis(
     [os.path.join(TOOL, "main.py")],
     pathex=[TOOL],

@@ -231,6 +231,10 @@ __marimo__/
 *.exe
 *.zip
 
+# A hap-capable ffmpeg fetched at build time to bundle into the mac .app
+# (build.sh). It is large and GPL, so it is fetched rather than committed.
+tool/vendor/
+
 # The Blender scene the geometry is baked from: a third of a gigabyte a file
 *.blend
 *.blend1

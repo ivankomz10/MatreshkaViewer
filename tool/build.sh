@@ -72,6 +72,48 @@ if [ ! -x ".venv/bin/pyinstaller" ]; then
     exit 1
 fi
 
+# On macOS, carry a hap-capable ffmpeg inside the .app so a re-bake to Hap Q
+# Alpha works out of the box instead of waiting on the first-run Download
+# button. The evermeet build is the one depends.py would have downloaded and it
+# has the snappy that hap needs. This is deliberately mac-only: the Windows
+# BtbN build already has hap and Linux installs it from the package manager, so
+# the spec bundles nothing there.
+#
+# Note the tradeoff the rest of the code was written to avoid: ffmpeg is GPL,
+# and shipping it inside a redistributed binary carries the GPL's obligations.
+# Done here because the user asked for a self-contained mac build.
+#
+# Best-effort and idempotent: an already-vendored copy is reused, an explicit
+# MATRESHKA_FFMPEG is honoured, and a failed fetch only warns -- the build then
+# carries no ffmpeg and the app falls back to finding or downloading one.
+if [ "$(uname)" = "Darwin" ] && [ -z "${MATRESHKA_FFMPEG:-}" ]; then
+    vendored="vendor/ffmpeg"
+    if [ ! -x "$vendored" ]; then
+        echo "Fetching a hap-capable ffmpeg to bundle (evermeet)..."
+        ffmpeg_url="https://evermeet.cx/ffmpeg/getrelease/zip"
+        work="$(mktemp -d)"
+        if curl -fL --silent --show-error -A MatreshkaViewer \
+                -o "$work/ffmpeg.zip" "$ffmpeg_url" \
+           && unzip -o -q "$work/ffmpeg.zip" -d "$work"; then
+            found="$(find "$work" -maxdepth 2 -name ffmpeg -type f | head -n 1)"
+            if [ -n "$found" ]; then
+                mkdir -p vendor
+                mv "$found" "$vendored"
+                chmod +x "$vendored"
+                echo "Vendored ffmpeg at tool/$vendored"
+            else
+                echo "warning: no ffmpeg in the archive; building without a bundle"
+            fi
+        else
+            echo "warning: could not fetch ffmpeg; building without a bundle"
+        fi
+        rm -rf "$work"
+    fi
+    if [ -x "$vendored" ]; then
+        export MATRESHKA_FFMPEG="$(cd "$(dirname "$vendored")" && pwd)/ffmpeg"
+    fi
+fi
+
 # CODESIGN_IDENTITY is read by the spec. Without it the build is unsigned,
 # which is fine for carrying between machines by hand -- the first run needs
 # right-click > Open, or:  xattr -dr com.apple.quarantine MatreshkaViewer.app
