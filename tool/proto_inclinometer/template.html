@@ -54,9 +54,10 @@
 <p class="lead">Массу несут только экраны — 1500 одинаковых модулей. Тогда масса
 из ответа <b>сокращается</b>: среднее по одинаковым массам это просто среднее,
 и смещение центра масс равно среднему смещению соты. Ни жёсткости, ни
-демпфирования, ни раскладки масс — <b>ни одного подбираемого числа</b>, только
-геометрия и партитура. Масса модуля нужна лишь чтобы перевести миллиметры в
-момент, и стоит отдельно.</p>
+демпфирования, ни раскладки масс — <b>ни одного подбираемого числа</b>.<br>
+Показание — <b>боковое</b> смещение: оно и есть опрокидывающий момент. Подъём
+домкратами крена не создаёт, он поднимает центр масс, то есть удлиняет плечо, и
+входит <b>поправкой к чувствительности</b>, а не вторым показанием.</p>
 
 <div class="tabs" id="tabs"></div>
 <div class="verdict" id="verdict"></div>
@@ -72,6 +73,12 @@
   <fieldset>
     <legend>Что вышло</legend>
     <div id="out" class="num"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Необязательно</legend>
+    <label><span>f₀, Гц <small>только для поправки; 0 — не считать</small></span>
+      <input type="number" id="f0" step="0.05" min="0"></label>
   </fieldset>
 
   <fieldset>
@@ -99,8 +106,9 @@
     <div class="plot"><h3>Он же сверху <i>— след</i></h3>
       <canvas id="cTrack" width="240" height="200"></canvas></div>
   </div>
-  <div class="plot"><h3>Вверх, <b>мм</b> <i>— это домкраты; на крен не влияет</i></h3>
-    <canvas id="cRise" width="1000" height="140"></canvas></div>
+  <div class="plot"><h3 class="quiet">Подъём домкратами, <b>мм</b>
+    <i>— не показание, а поправка к плечу</i></h3>
+    <canvas id="cRise" width="1000" height="90"></canvas></div>
   <div class="plot"><h3>С какой частотой обходит азимут, <b>Гц</b>
     <i>— вот это и сравнивают с собственной частотой конструкции</i></h3>
     <canvas id="cRate" width="1000" height="160"></canvas></div>
@@ -113,7 +121,7 @@ const SCORES = /*SCORES*/;
 const G = 9.81;
 const CELLS = 1500;
 const el = id => document.getElementById(id);
-const state = { score: 0, kg: 1.37, jack: true, push: true, tilt: true };
+const state = { score: 0, kg: 1.37, f0: 0, jack: true, push: true, tilt: true };
 
 /** The average cell's displacement, in millimetres, frame by frame.
  *  With equal modules this *is* the centre of mass of the screens. */
@@ -252,6 +260,7 @@ function fill() {
   el("score").innerHTML = SCORES.map((s, i) =>
     `<option value="${i}"${i === state.score ? " selected" : ""}>${s.name}</option>`).join("");
   el("kg").value = state.kg; el("rKg").value = state.kg;
+  el("f0").value = state.f0;
   el("useJack").checked = state.jack;
   el("usePush").checked = state.push;
   el("useTilt").checked = state.tilt;
@@ -262,14 +271,35 @@ function draw() {
   el("scoreNote").textContent = score.note;
   const r = read(score);
 
+  // The lever arm the jacks lengthen, and what it is worth. The shift in the
+  // natural frequency needs nothing guessed: the second moment goes as the
+  // height squared, so the frequency moves by about the fraction the height
+  // does. The change in sensitivity needs the stiffness, so it appears only
+  // when somebody has typed a frequency in.
+  const H0 = 15.44, MASS = 40000, I0 = 9.78e6;
+  const lift = r.rise / 1000, taller = lift / H0;
+  let correction =
+    `плечо длиннее на <b>${(taller * 100).toFixed(2)}%</b> ` +
+    `<span class="quiet">(${r.rise.toFixed(0)} мм на ${H0.toFixed(1)} м)</span><br>` +
+    `f₀ ниже примерно на <b>${(taller * 100).toFixed(1)}%</b>`;
+  if (state.f0 > 0) {
+    const kEff = Math.pow(2 * Math.PI * state.f0, 2) * I0;
+    correction += `<br>чувствительность <b>+${(MASS * G * lift / kEff * 100).toFixed(2)}%</b>` +
+      ` <span class="quiet">при f₀ = ${state.f0} Гц</span>`;
+  } else {
+    correction += `<br><span class="quiet">чувствительность — меньше процента ` +
+      `при любой разумной жёсткости</span>`;
+  }
+
   el("out").innerHTML =
     `<div class="big">${r.peak.toFixed(1)} мм</div>` +
-    `боком, дальше всего на ${r.at.toFixed(1)} с<br>` +
-    `<div class="big">${r.rise.toFixed(1)} мм</div>вверх<br><br>` +
+    `боком — это и есть показание, дальше всего на ${r.at.toFixed(1)} с<br>` +
     (r.spinning
       ? `азимут обходит круг <b>${r.laps.toFixed(1)}</b> раз за ${r.seconds.toFixed(0)} с,<br>` +
         `то есть <b class="${r.typical > 0.15 ? "warn" : ""}">${r.typical.toFixed(2)} Гц</b>`
-      : `азимут стоит на месте`);
+      : `азимут стоит на месте`) +
+    `<hr style="border:0;border-top:1px solid #23272b;margin:8px 0">` +
+    `<span class="quiet">домкраты — поправка, не показание:</span><br>${correction}`;
 
   const led = CELLS * +state.kg;
   el("moment").innerHTML =
@@ -288,8 +318,8 @@ function draw() {
        { positive: true });
 
   el("tbl").innerHTML =
-    "<tr><th>партитура</th><th>длина</th><th>боком</th><th>вверх</th>" +
-    "<th>оборотов</th><th>Гц</th></tr>" +
+    "<tr><th>партитура</th><th>длина</th><th>боком</th>" +
+    "<th class='quiet'>подъём</th><th>оборотов</th><th>Гц</th></tr>" +
     SCORES.map((one, i) => {
       const s = read(one);
       const made = one.name.startsWith("made up");
@@ -297,13 +327,14 @@ function draw() {
         `<td>${one.name.replace("made up: ", "")}</td>` +
         `<td class="num">${s.seconds.toFixed(1)} с</td>` +
         `<td class="num${s.peak > 50 ? " warn" : ""}">${s.peak.toFixed(1)}</td>` +
-        `<td class="num">${s.rise.toFixed(1)}</td>` +
+        `<td class="num quiet">${s.rise.toFixed(1)}</td>` +
         `<td class="num">${s.spinning ? s.laps.toFixed(1) : "—"}</td>` +
         `<td class="num">${s.spinning ? s.typical.toFixed(2) : "—"}</td></tr>`;
     }).join("");
 }
 
 el("score").onchange = () => { state.score = +el("score").value; draw(); };
+el("f0").oninput = () => { state.f0 = +el("f0").value; draw(); };
 el("kg").oninput = () => { state.kg = +el("kg").value; el("rKg").value = state.kg; draw(); };
 el("rKg").oninput = () => { state.kg = +el("rKg").value; el("kg").value = state.kg; draw(); };
 for (const [box, key] of [["useJack", "jack"], ["usePush", "push"], ["useTilt", "tilt"]])
