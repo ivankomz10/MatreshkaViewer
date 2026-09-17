@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<title>ПРОТОТИП — инклинометр кинетической части</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 0; padding: 16px 20px;
+         background: #101214; color: #e7e7e7; }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  h1 span { color: #e0a33c; }
+  .lead { color: #9aa0a6; margin: 0 0 14px; max-width: 78ch; }
+  .wrap { display: grid; grid-template-columns: 330px 1fr; gap: 18px;
+          align-items: start; }
+  fieldset { border: 1px solid #2c3034; border-radius: 6px; margin: 0 0 12px;
+             padding: 8px 12px 12px; }
+  legend { color: #9aa0a6; padding: 0 4px; font-size: 12px;
+           text-transform: uppercase; letter-spacing: .06em; }
+  label { display: grid; grid-template-columns: 1fr 74px; gap: 8px;
+          align-items: center; margin: 6px 0; }
+  label span { color: #c8ccd0; }
+  label small { color: #7d8288; display: block; font-size: 11px; }
+  input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; }
+  input[type=number], select { background: #191c1f; color: #e7e7e7;
+    border: 1px solid #343a40; border-radius: 4px; padding: 3px 6px;
+    width: 100%; font: inherit; }
+  button { background: #22262a; color: #e7e7e7; border: 1px solid #3a4046;
+           border-radius: 5px; padding: 5px 10px; font: inherit;
+           cursor: pointer; }
+  button:hover { border-color: #5a6068; background: #2a2f34; }
+  button.on { background: #e0a33c; color: #17191b; border-color: #e0a33c; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
+  canvas { width: 100%; height: auto; background: #17191b;
+           border: 1px solid #2c3034; border-radius: 6px; display: block; }
+  .plot { margin-bottom: 12px; }
+  .plot h3 { font-size: 13px; margin: 0 0 4px; color: #c8ccd0; font-weight: 600; }
+  .plot h3 b { color: #e0a33c; font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid #23272b; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: #9aa0a6; font-weight: 600; }
+  tr.here td { background: #1f2327; }
+  .verdict { background: #17191b; border: 1px solid #2c3034; border-left: 3px solid #e0a33c;
+             border-radius: 4px; padding: 8px 12px; margin: 0 0 12px;
+             color: #c8ccd0; }
+  .num { font-variant-numeric: tabular-nums; }
+  .warn { color: #e07c5c; }
+  .ok { color: #7fbf7f; }
+</style>
+
+<h1><span>ПРОТОТИП, выбросить.</span> Инклинометр кинетической части</h1>
+<p class="lead">Геометрия и партитуры посчитаны заранее: для каждого кадра — на
+сколько сдвигает среднюю соту каждый мотор по отдельности. Всё, что крутится
+здесь, считается на месте. Масса задаётся на глаз — в этом и смысл.</p>
+
+<div class="tabs" id="tabs"></div>
+<div class="verdict" id="verdict"></div>
+
+<div class="wrap">
+<div>
+  <fieldset>
+    <legend>Партитура</legend>
+    <select id="score"></select>
+    <div style="color:#7d8288;font-size:12px;margin-top:6px" id="scoreNote"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Массы, на глаз</legend>
+    <label><span>кольца <small>circle, поднимаются домкратом</small></span>
+      <input type="number" id="mCircle" step="100"></label>
+    <input type="range" id="rCircle" min="0" max="25000" step="100">
+    <label><span>сегменты <small>segment, едут с пушером</small></span>
+      <input type="number" id="mSegment" step="100"></label>
+    <input type="range" id="rSegment" min="0" max="25000" step="100">
+    <label><span>балки <small>balka, едут с пушером</small></span>
+      <input type="number" id="mBalka" step="100"></label>
+    <input type="range" id="rBalka" min="0" max="25000" step="100">
+    <label><span>модуль <small>Leyard CLO, кг за штуку × 1500</small></span>
+      <input type="number" id="mModule" step="0.1"></label>
+    <input type="range" id="rModule" min="0" max="12" step="0.05">
+    <label><span>неподвижное <small>мачта и прочее на оси</small></span>
+      <input type="number" id="mFixed" step="100"></label>
+    <input type="range" id="rFixed" min="0" max="40000" step="100">
+    <div class="row">
+      <button id="to40">свести к 40 т</button>
+      <button id="reset">как посчитано</button>
+    </div>
+    <div style="margin-top:8px;color:#9aa0a6" id="massSum"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Механика</legend>
+    <label><span>ход сегмента <small>целиком или качанием</small></span>
+      <select id="kin"><option value="slide">целиком</option>
+        <option value="swing">качание</option></select></label>
+    <label><span>f₀, Гц <small>собственная частота — померить!</small></span>
+      <input type="number" id="f0" step="0.05"></label>
+    <input type="range" id="rF0" min="0.15" max="3" step="0.01">
+    <label><span>ζ, % <small>демпфирование</small></span>
+      <input type="number" id="zeta" step="0.1"></label>
+    <input type="range" id="rZeta" min="0.2" max="10" step="0.1">
+    <label><span>низ секции, м</span><input type="number" id="base" step="0.1"></label>
+    <label><span>высота секции, м</span><input type="number" id="tall" step="0.1"></label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Что вышло</legend>
+    <div id="out" class="num"></div>
+  </fieldset>
+</div>
+
+<div>
+  <div class="plot"><h3>Смещение центра масс от оси, <b>мм</b></h3>
+    <canvas id="cOffset" width="1200" height="200"></canvas></div>
+  <div class="plot"><h3>Крен, <b>градусы</b> — сплошной статический, жёлтый с раскачкой</h3>
+    <canvas id="cLean" width="1200" height="240"></canvas></div>
+  <div class="plot"><h3>Спектр возбуждения и где стоит f₀</h3>
+    <canvas id="cSpec" width="1200" height="170"></canvas></div>
+  <div class="plot"><h3>Все партитуры при этих параметрах</h3>
+    <table id="tbl"></table></div>
+</div>
+</div>
+
+<script>
+const SCORES = /*SCORES*/;
+const G = 9.81;
+
+// Where each part's own mass sits along the radius, and how far along it
+// travels if the segment swings on a hinge at the hub instead of sliding.
+const TRAVEL = { segment: (1.62 - 0.49) / (2.38 - 0.49),
+                 balka: (1.58 - 0.63) / (2.43 - 0.63) };
+// Second moments per kilogram of each family, from the mechanical model:
+// its own mass's height and radius. Enough for I of the whole.
+const PART = {
+  circle:  { z: 3.853, r: 1.54 },
+  segment: { z: 3.680, r: 1.62 },
+  balka:   { z: 3.819, r: 1.58 },
+  module:  { z: 3.824, r: 2.47 },
+};
+const COMPUTED = { circle: 13400, segment: 14770, balka: 9780, module: 1.37,
+                   fixed: 0, f0: 0.5, zeta: 1.0, base: 11.66, tall: 7.53 };
+
+const el = id => document.getElementById(id);
+const state = { ...COMPUTED, score: 0, kin: "slide" };
+
+// -- the model ---------------------------------------------------------------
+
+function masses() {
+  const m = { circle: +state.circle, segment: +state.segment,
+              balka: +state.balka, module: +state.module * 1500,
+              fixed: +state.fixed };
+  m.total = m.circle + m.segment + m.balka + m.module + m.fixed;
+  m.moving = m.segment * (state.kin === "slide" ? 1 : TRAVEL.segment)
+           + m.balka * (state.kin === "slide" ? 1 : TRAVEL.balka)
+           + m.module;
+  return m;
+}
+
+function inertia(m) {
+  // About a horizontal axis at the ground, and about the vertical.
+  let ix = 0, iz = 0, mz = 0;
+  for (const name of ["circle", "segment", "balka", "module"]) {
+    const p = PART[name], z = +state.base + p.z;
+    ix += m[name] * (z * z + p.r * p.r / 2);   // half r^2: a ring's own spread
+    iz += m[name] * p.r * p.r;
+    mz += m[name] * z;
+  }
+  // Anything fixed sits on the axis, spread up the same height.
+  const z = +state.base + +state.tall / 2;
+  ix += m.fixed * z * z; mz += m.fixed * z;
+  return { ix, iz, h: m.total ? mz / m.total : 0 };
+}
+
+/** The mass-weighted offset of the centre of mass, frame by frame, in metres. */
+function offsets(score, m) {
+  const share = {
+    circle:  { jack: 1, push: 0, tilt: 0 },
+    segment: { jack: 1, push: state.kin === "slide" ? 1 : TRAVEL.segment, tilt: 0 },
+    balka:   { jack: 1, push: state.kin === "slide" ? 1 : TRAVEL.balka, tilt: 0 },
+    module:  { jack: 1, push: 1, tilt: 1 },
+  };
+  const out = [];
+  for (let i = 0; i < score.frames; i++) {
+    let x = 0, y = 0, z = 0;
+    for (const name of ["circle", "segment", "balka", "module"]) {
+      const w = m[name], s = share[name];
+      for (const only of ["jack", "push", "tilt"]) {
+        if (!s[only]) continue;
+        const d = score[only][i];
+        x += w * s[only] * d[0]; y += w * s[only] * d[1]; z += w * s[only] * d[2];
+      }
+    }
+    // Millimetres in, metres out, and per kilogram of the whole.
+    const k = m.total ? 1 / (m.total * 1000) : 0;
+    out.push([x * k, y * k, z * k]);
+  }
+  return out;
+}
+
+/** Two independent leans, driven by gravity on the offset and by its own
+ *  acceleration pushing back. I th'' + c th' + (k - mgh) th = m g d - m h d''. */
+function lean(score, m, off) {
+  const { ix, h } = inertia(m);
+  const w0 = 2 * Math.PI * +state.f0;
+  const kEff = w0 * w0 * ix;
+  const c = 2 * (+state.zeta / 100) * Math.sqrt(kEff * ix);
+  const dt = 1 / score.fps;
+  const th = [[0, 0]], vel = [0, 0];
+  let prev = [0, 0];
+  for (let i = 0; i < off.length; i++) {
+    const d = off[i];
+    // The offset's own acceleration, central where there is room for it.
+    const a = [0, 1].map(k => {
+      const back = off[Math.max(0, i - 1)][k], on = off[Math.min(off.length - 1, i + 1)][k];
+      return (on - 2 * d[k] + back) / (dt * dt);
+    });
+    const now = [0, 0];
+    for (const k of [0, 1]) {
+      const drive = m.total * G * d[k] - m.moving * h * a[k];
+      const acc = (drive - c * vel[k] - kEff * prev[k]) / ix;
+      vel[k] += acc * dt;
+      now[k] = prev[k] + vel[k] * dt;
+    }
+    th.push(now.slice());
+    prev = now;
+  }
+  th.shift();
+  // And the static answer, for comparison: no inertia, no swing.
+  const stat = off.map(d => [0, 1].map(k => m.total * G * d[k] / kEff));
+  return { th, stat, kEff, c, ix, h };
+}
+
+function summary(score) {
+  const m = masses();
+  const off = offsets(score, m);
+  const { th, stat, kEff, ix, h } = lean(score, m, off);
+  const peak = a => Math.max(...a.map(v => Math.hypot(v[0], v[1])));
+  const tip = +state.base + +state.tall;
+  return { m, off, th, stat, kEff, ix, h, tip,
+           offPeak: peak(off) * 1000, leanPeak: peak(th) * 180 / Math.PI,
+           statPeak: peak(stat) * 180 / Math.PI,
+           tipPeak: peak(th) * tip * 1000,
+           rise: Math.max(...off.map(d => Math.abs(d[2]))) * 1000 };
+}
+
+// -- drawing -----------------------------------------------------------------
+
+function plot(canvas, lines, options = {}) {
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height, pad = 30;
+  ctx.clearRect(0, 0, W, H);
+  let top = options.top;
+  if (top === undefined) {
+    top = 0;
+    for (const line of lines) for (const v of line.data) top = Math.max(top, Math.abs(v));
+    top = top || 1;
+  }
+  ctx.strokeStyle = "#23272b"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+  ctx.fillStyle = "#7d8288"; ctx.font = "11px system-ui";
+  ctx.fillText(top.toPrecision(3), 2, 12);
+  ctx.fillText((-top).toPrecision(3), 2, H - 4);
+  for (const line of lines) {
+    ctx.strokeStyle = line.colour; ctx.lineWidth = line.width || 1.4;
+    ctx.beginPath();
+    line.data.forEach((v, i) => {
+      const x = pad + i / (line.data.length - 1 || 1) * (W - pad - 4);
+      const y = H / 2 - v / top * (H / 2 - 10);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.stroke();
+  }
+  if (options.mark !== undefined) {
+    ctx.strokeStyle = "#e0a33c"; ctx.setLineDash([4, 3]);
+    const x = pad + options.mark * (W - pad - 4);
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#e0a33c"; ctx.fillText(options.markLabel || "", x + 4, 12);
+  }
+}
+
+/** How much of the drive sits at each frequency -- where resonance lives. */
+function spectrum(off, fps) {
+  const n = off.length, bins = 220, top = 3.0;
+  const out = [];
+  for (let b = 1; b <= bins; b++) {
+    const f = top * b / bins;
+    let re = 0, im = 0;
+    for (let i = 0; i < n; i++) {
+      const phase = -2 * Math.PI * f * i / fps;
+      const v = Math.hypot(off[i][0], off[i][1]);
+      re += v * Math.cos(phase); im += v * Math.sin(phase);
+    }
+    out.push(Math.hypot(re, im) / n);
+  }
+  return { out, top };
+}
+
+// -- the page ----------------------------------------------------------------
+
+const WALKS = [
+  { name: "Все партитуры", score: null, says:
+    "Таблица внизу считает каждую партитуру при текущих массах. Крути массы и " +
+    "смотри, что меняется: светодиоды — пять процентов, сталь — всё." },
+  { name: "Симметрия = ноль", score: "made up: all out together", f0: 0.5, says:
+    "Все пушеры выходят и возвращаются одновременно. Центр масс обязан остаться " +
+    "на оси: если здесь не ноль, модель врёт." },
+  { name: "Односторонний крен", score: "made up: half the ring", f0: 0.5, says:
+    "Половина кольца выдвигается и держится. Крен должен быть устойчивый, в " +
+    "известную сторону, и вернуться к нулю на обратном ходу." },
+  { name: "Резонанс", score: "made up: wave, 4 s a lap", f0: 0.25, says:
+    "Волна обходит кольцо за 4 с, то есть 0.25 Гц, и f₀ поставлена туда же. " +
+    "Сравни с f₀ = 1 Гц: та же партитура, крен меньше в разы." },
+  { name: "Мимо резонанса", score: "made up: wave, 4 s a lap", f0: 1.0, says:
+    "Та же волна, но конструкция жёстче. Раскачки нет — и это единственное, " +
+    "что отличает безопасную партитуру от опасной." },
+  { name: "Худшая настоящая", score: "Matreshka_Graf_OUT_PIPE_v01", f0: 0.5, says:
+    "Единственная из настоящих, где работают и пушеры до 990 мм, и домкраты на " +
+    "весь ход. Остальные три двигают почти только тилты." },
+];
+
+function fill() {
+  el("score").innerHTML = SCORES.map((s, i) =>
+    `<option value="${i}">${s.name}</option>`).join("");
+  el("tabs").innerHTML = WALKS.map((w, i) =>
+    `<button data-walk="${i}">${w.name}</button>`).join("");
+  for (const key of ["circle", "segment", "balka", "module", "fixed", "f0",
+                     "zeta", "base", "tall"]) {
+    const box = el("m" + key[0].toUpperCase() + key.slice(1)) || el(key);
+    if (box) box.value = state[key];
+    const slider = el("r" + key[0].toUpperCase() + key.slice(1));
+    if (slider) slider.value = state[key];
+  }
+}
+
+function draw() {
+  const score = SCORES[state.score];
+  el("scoreNote").textContent = score.note;
+  const s = summary(score);
+  const seconds = score.frames / score.fps;
+
+  el("massSum").innerHTML =
+    `всего <b>${(s.m.total / 1000).toFixed(2)} т</b>, из них едет с пушером ` +
+    `<b>${(s.m.moving / 1000).toFixed(1)} т</b> ` +
+    `(${(s.m.moving / s.m.total * 100).toFixed(0)}%)`;
+
+  const topple = s.m.total * G * s.h;
+  const k = s.kEff + topple;
+  el("out").innerHTML = `
+    центр масс ${s.h.toFixed(2)} м над землёй<br>
+    I = ${(s.ix / 1e6).toFixed(2)}e6 кг·м²<br>
+    k = ${(k / 1e6).toFixed(0)} МН·м/рад, из них ${(topple / 1e6).toFixed(2)} съедает сила тяжести<br>
+    <br>
+    смещение ЦМ до <b>${s.offPeak.toFixed(1)} мм</b> (вверх ${s.rise.toFixed(1)} мм)<br>
+    крен статически <b>${s.statPeak.toFixed(3)}°</b><br>
+    крен с раскачкой <b class="${s.leanPeak > 0.5 ? "warn" : "ok"}">${s.leanPeak.toFixed(3)}°</b><br>
+    верх уходит на <b class="${s.tipPeak > 100 ? "warn" : "ok"}">${s.tipPeak.toFixed(0)} мм</b><br>
+    раскачка против статики ×${(s.leanPeak / (s.statPeak || 1e-9)).toFixed(1)}`;
+
+  plot(el("cOffset"), [
+    { data: s.off.map(d => d[0] * 1000), colour: "#5b9bd5" },
+    { data: s.off.map(d => d[1] * 1000), colour: "#7fbf7f" },
+  ]);
+  plot(el("cLean"), [
+    { data: s.stat.map(v => Math.hypot(v[0], v[1]) * 180 / Math.PI), colour: "#5b9bd5" },
+    { data: s.th.map(v => Math.hypot(v[0], v[1]) * 180 / Math.PI), colour: "#e0a33c", width: 1.8 },
+  ]);
+  const spec = spectrum(s.off, score.fps);
+  plot(el("cSpec"), [{ data: spec.out, colour: "#a98bd6" }],
+       { mark: +state.f0 / spec.top, markLabel: `f₀ = ${(+state.f0).toFixed(2)} Гц` });
+
+  el("tbl").innerHTML =
+    "<tr><th>партитура</th><th>длина</th><th>ЦМ, мм</th><th>крен стат.</th>" +
+    "<th>крен с раскачкой</th><th>верх, мм</th></tr>" +
+    SCORES.map((one, i) => {
+      const r = summary(one);
+      return `<tr class="${i === +state.score ? "here" : ""}">` +
+        `<td>${one.name}</td><td class="num">${(one.frames / one.fps).toFixed(1)} с</td>` +
+        `<td class="num">${r.offPeak.toFixed(1)}</td>` +
+        `<td class="num">${r.statPeak.toFixed(3)}°</td>` +
+        `<td class="num ${r.leanPeak > 0.5 ? "warn" : ""}">${r.leanPeak.toFixed(3)}°</td>` +
+        `<td class="num ${r.tipPeak > 100 ? "warn" : ""}">${r.tipPeak.toFixed(0)}</td></tr>`;
+    }).join("");
+}
+
+function bind() {
+  const pairs = [["mCircle", "rCircle", "circle"], ["mSegment", "rSegment", "segment"],
+                 ["mBalka", "rBalka", "balka"], ["mModule", "rModule", "module"],
+                 ["mFixed", "rFixed", "fixed"], ["f0", "rF0", "f0"],
+                 ["zeta", "rZeta", "zeta"]];
+  for (const [box, slider, key] of pairs) {
+    el(box).oninput = () => { state[key] = +el(box).value; el(slider).value = state[key]; draw(); };
+    el(slider).oninput = () => { state[key] = +el(slider).value; el(box).value = state[key]; draw(); };
+  }
+  for (const key of ["base", "tall"])
+    el(key).oninput = () => { state[key] = +el(key).value; draw(); };
+  el("score").onchange = () => { state.score = +el("score").value; draw(); };
+  el("kin").onchange = () => { state.kin = el("kin").value; draw(); };
+  el("reset").onclick = () => { Object.assign(state, COMPUTED); fill(); draw(); };
+  el("to40").onclick = () => {
+    const m = masses(), want = 40000;
+    const scale = (want - m.module) / (m.circle + m.segment + m.balka + m.fixed || 1);
+    for (const key of ["circle", "segment", "balka", "fixed"])
+      state[key] = Math.round(state[key] * scale);
+    fill(); draw();
+  };
+  el("tabs").onclick = event => {
+    const which = event.target.dataset.walk;
+    if (which === undefined) return;
+    const walk = WALKS[+which];
+    document.querySelectorAll("#tabs button").forEach(b => b.classList.remove("on"));
+    event.target.classList.add("on");
+    if (walk.score) {
+      const found = SCORES.findIndex(s => s.name === walk.score);
+      if (found >= 0) state.score = found;
+    }
+    if (walk.f0) state.f0 = walk.f0;
+    el("verdict").textContent = walk.says;
+    fill(); draw();
+  };
+}
+
+fill(); bind();
+el("verdict").textContent = WALKS[0].says;
+document.querySelector("#tabs button").classList.add("on");
+draw();
+</script>
+</html>
