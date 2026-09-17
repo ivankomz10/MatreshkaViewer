@@ -55,7 +55,7 @@ WAS_CALLED = {"Geometry": PREVIEW}
 SUFFIXES = {".mp4", ".mov", ".png", ".mkv", ".avi", ".mxf"}
 
 APP_NAME = "Matreshka Viewer"
-APP_VERSION = "0.2"
+APP_VERSION = "0.3"
 MONO = "Consolas, DejaVu Sans Mono, Menlo, monospace"
 
 # Where the window opens on a machine that has never run it. After that the
