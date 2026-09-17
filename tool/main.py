@@ -704,7 +704,10 @@ class Viewer(QMainWindow):
             "QPushButton { text-align:left; padding:2px 6px; border:none; "
             "color:#9a9a9a; } QPushButton:hover { color:#dcdcdc; }")
         self.sources_head.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.sources_head.clicked.connect(self._fold_sources)
+        # Through a lambda, not straight at the method: `clicked` hands its
+        # handler a bool -- False for a button that is not checkable -- and
+        # that landed in `open_it`, so every click folded and none unfolded.
+        self.sources_head.clicked.connect(lambda: self._fold_sources())
         HINTS[self.sources_head] = (
             "Источники",
             "Строки с файлами: что на каком экране, звук, моторы. Свернуть "

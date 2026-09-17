@@ -336,6 +336,33 @@ def test_a_lone_part_brings_its_siblings(window, tick):
     assert names == ["BrendMT_1_of_2.json", "BrendMT_2_of_2.json"], names
 
 
+def test_clicking_the_header_folds_and_unfolds(window, tick):
+    """Through the signal, not the method.
+
+    `clicked` hands its handler a bool, and connecting it straight at a
+    method whose first argument decides the fold meant every click folded:
+    the second one had nothing left to do. A test that called the method
+    itself never saw it.
+    """
+    window._fold_sources(True)
+    tick(0.2)
+    assert window.sources_open
+
+    window.sources_head.click()
+    tick(0.2)
+    assert not window.sources_open, "one click did not fold it"
+
+    window.sources_head.click()
+    tick(0.2)
+    assert window.sources_open, "the second click did not unfold it"
+    assert window.linked.isVisible(), "the link did not come back with the rows"
+
+    window.sources_head.click()
+    window.sources_head.click()
+    tick(0.2)
+    assert window.sources_open, "two more clicks left it somewhere else"
+
+
 def test_the_rows_fold_away(window, tick):
     """The panel is why a chain of seven does not cost the picture its height."""
     window._fold_sources(True)
@@ -346,8 +373,15 @@ def test_the_rows_fold_away(window, tick):
     tick(0.2)
     assert not window.sources_open
     assert not window.linked.isVisible(), "the link stayed over a folded panel"
-    assert "Kinetic" in window.sources_head.text() or \
-           "ничего" in window.sources_head.text()
+    # The folded line has to say what is loaded -- that is the whole reason
+    # it is allowed to hide the rows. Asked of whatever the rows hold at this
+    # point rather than of one name, so the test does not depend on which
+    # test ran before it.
+    line = window.sources_head.text()
+    for row in window.rows:
+        if row.field.text().strip() and not row.motors:
+            assert row.title in line, (
+                f"the folded line does not name {row.title}: {line!r}")
     assert tall > 100, f"the rows are only {tall} px; folding buys nothing"
     window._fold_sources(True)
     tick(0.2)
