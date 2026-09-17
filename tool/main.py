@@ -2731,11 +2731,15 @@ class Viewer(QMainWindow):
         top, bottom = rows.get("Top"), rows.get("Bottom")
         if top is None or bottom is None or top.gain is None:
             return
-        central = self.centralWidget()
+        # In the coordinates of whatever the button is a child of, which is
+        # the panel of rows and not the window: `move` is relative to the
+        # parent, and measuring against the window put the button a header's
+        # height too low and the layout's own margin too far left.
+        holder = self.linked.parentWidget() or self.centralWidget()
         column = top.link_gap.geometry()
-        middle = top.mapTo(central, column.center()).x()
-        between = (top.mapTo(central, QPoint(0, top.height())).y()
-                   + bottom.mapTo(central, QPoint(0, 0)).y()) // 2
+        middle = top.mapTo(holder, column.center()).x()
+        between = (top.mapTo(holder, QPoint(0, top.height())).y()
+                   + bottom.mapTo(holder, QPoint(0, 0)).y()) // 2
         self.linked.move(middle - self.linked.width() // 2,
                          between - self.linked.height() // 2)
         self.linked.raise_()

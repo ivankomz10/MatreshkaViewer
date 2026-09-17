@@ -385,3 +385,37 @@ def test_the_rows_fold_away(window, tick):
     assert tall > 100, f"the rows are only {tall} px; folding buys nothing"
     window._fold_sources(True)
     tick(0.2)
+
+
+def test_the_link_sits_between_the_two_rows_it_ties(window, tick):
+    """It is placed by hand, so where it lands is worth measuring.
+
+    Measured in the coordinates of its own parent, which is the panel of
+    rows: `move` is relative to the parent, and computing the place against
+    the window instead put the button a header's height too low and the
+    layout's margin too far left.
+    """
+    window._fold_sources(True)
+    tick(0.3)
+    window._lay_link()
+    tick(0.2)
+
+    rows = {row.title: row for row in window.rows}
+    top, bottom = rows["Top"], rows["Bottom"]
+    holder = window.linked.parentWidget()
+    from PySide6.QtCore import QPoint
+    link = window.linked.geometry()
+    middle = link.center()
+
+    ends = top.mapTo(holder, QPoint(0, top.height())).y()
+    starts = bottom.mapTo(holder, QPoint(0, 0)).y()
+    assert ends - 4 <= middle.y() <= starts + 4, (
+        f"the link's middle is at y={middle.y()}, and the gap between the "
+        f"rows is {ends}..{starts}")
+
+    column = top.link_gap.geometry()
+    left = top.mapTo(holder, column.topLeft()).x()
+    assert left - 2 <= link.left() and \
+        link.left() + link.width() <= left + column.width() + 2, (
+        f"the link at x={link.left()}..{link.left() + link.width()} is "
+        f"outside its column at {left}..{left + column.width()}")
