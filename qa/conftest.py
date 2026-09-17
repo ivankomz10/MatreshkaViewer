@@ -54,7 +54,7 @@ def settings(clips: dict, **changed) -> dict:
         "Lamels": {"file": str(clips["lamels"]), "gain": 100},
         "Frame": {"file": "", "gain": 100, "how": "Fit"},
         "Sound": {"file": "", "gain": 10},
-        "Kinetic": {"file": ""},
+        "Kinetic": {"file": "", "files": []},
     }
     settled = {
         "checked_machine": True,        # no dependency window in the way
@@ -76,6 +76,9 @@ def settings(clips: dict, **changed) -> dict:
         "rebake_right": "Premultiplied",
         "rebake_format": "Hap Q Alpha",
         "frame_edge": True,
+        # The rows fold away now; the driven tests reach into them, so they
+        # ask for them up rather than relying on the default.
+        "sources_open": True,
     }
     settled.update(changed)
     return settled

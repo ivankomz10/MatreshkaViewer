@@ -37,6 +37,7 @@ jacks, accumulating up the stack, and it is not worth chasing.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -180,58 +181,172 @@ def _sample(segments, length: int) -> np.ndarray:
     return out
 
 
-class Motors:
-    """One kinetic JSON, sampled and ready to be asked for a moment in time."""
+class Part:
+    """One file of a chain: what it is called, where it sits, how long it is."""
 
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except Exception as error:  # noqa: BLE001 -- shown beside the field
-            raise KineticError(f"{self.path.name}: {error}") from error
-
-        data = payload.get("data")
+    def __init__(self, path: Path, payload: dict) -> None:
+        self.path = path
+        self.data = payload.get("data")
         info = payload.get("info", {})
-        if not isinstance(data, dict) or not data:
-            raise KineticError(f"{self.path.name} has no motor data in it")
-
+        if not isinstance(self.data, dict) or not self.data:
+            raise KineticError(f"{path.name} has no motor data in it")
         self.fps = float(info.get("fps") or 60.0)
         start = int(info.get("export_range", {}).get("start", 0))
         end = info.get("export_range", {}).get("end")
         total = int(info.get("total_frames") or 0)
-        self.frames = int(end) - start if end is not None else total
-        if self.frames <= 0:
-            self.frames = total or 1
-        self.frames += 1
+        self.length = int(end) - start if end is not None else total
+        if self.length <= 0:
+            self.length = total or 1
+        # Where the exporter thinks this part sits, and which of how many it
+        # is. Both are what it says about itself, not what the chain decides.
+        self.declared_at = start
+        self.number = int(info.get("part") or 1)
+        self.of = int(info.get("total_parts") or 1)
+        self.first = 0                  # filled in by the chain below
+
+    @property
+    def name(self) -> str:
+        return self.path.name
+
+    def __repr__(self) -> str:
+        return (f"<{self.name} {self.number}/{self.of} "
+                f"{self.length} frames at {self.first}>")
+
+
+def parts_beside(path: str | Path) -> list[Path]:
+    """The other parts of the same show, in order, if this is one of several.
+
+    A file says `part` and `total_parts` in its own header, and its name ends
+    in `_1_of_2`. Either is enough to know that the rest exist; the name is
+    what finds them, because opening every json in a folder to read a header
+    is a folder full of reading.
+    """
+    path = Path(path)
+    match = re.search(r"^(?P<stem>.*?)(?P<one>\d+)_of_(?P<many>\d+)$", path.stem)
+    if not match:
+        return [path]
+    many = int(match.group("many"))
+    if many <= 1:
+        return [path]
+    found = []
+    for which in range(1, many + 1):
+        beside = path.with_name(
+            f"{match.group('stem')}{which}_of_{many}{path.suffix}")
+        if beside.exists():
+            found.append(beside)
+    return found or [path]
+
+
+class Motors:
+    """A kinetic show: one json, or several played one after another.
+
+    Several, because a long show comes out of the exporter in parts and a
+    programme comes out as a block a scene. They are not independent: a part
+    begins in the state the one before it left -- its first segment carries
+    that value as its `start`, and a motor it does not mention at all is one
+    that simply holds. So the chain is laid end to end and every motor the
+    next part says nothing about keeps the value it had.
+    """
+
+    def __init__(self, paths: str | Path | list) -> None:
+        if isinstance(paths, (str, Path)):
+            paths = [paths]
+        self.paths = [Path(one) for one in paths]
+        if not self.paths:
+            raise KineticError("no kinetic file given")
+
+        self.parts: list[Part] = []
+        for path in self.paths:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as error:  # noqa: BLE001 -- shown beside the field
+                raise KineticError(f"{path.name}: {error}") from error
+            self.parts.append(Part(path, payload))
+
+        self.fps = self.parts[0].fps
+        odd = [one for one in self.parts if one.fps != self.fps]
+        if odd:
+            raise KineticError(
+                f"{odd[0].name} is {odd[0].fps:g} fps and "
+                f"{self.parts[0].name} is {self.fps:g}; a chain has to be one rate")
+
+        at = 0
+        for part in self.parts:
+            part.first = at
+            at += part.length
+        # The last frame counts as a whole frame, the same as for one file.
+        self.frames = at + 1
+        self.path = self.parts[0].path
 
         # Row and id are numbers, not names: everything downstream indexes.
         self.tilt = np.zeros((ROWS, PER_ROW, self.frames), np.float32)
         self.pusher = np.zeros((ROWS, PER_ROW // PER_PUSHER, self.frames), np.float32)
         self.jack = np.full((ROWS, self.frames), float(JACK_REST_STATE), np.float32)
 
-        seen = 0
-        for row_key, groups in data.items():
-            row = _number(row_key) - 1
-            if not 0 <= row < ROWS or not isinstance(groups, dict):
-                continue
-            for group, ids in groups.items():
-                if not isinstance(ids, dict):
+        # Every motor's segments from every part, in order, with each part's
+        # frames shifted to where that part sits. Sampled once over the whole
+        # chain afterwards: that is what lets a movement the exporter cut in
+        # half finish, and what makes a part that says nothing about a motor
+        # simply a gap, which already means "hold".
+        gathered: dict = {}
+        for part in self.parts:
+            for row_key, groups in part.data.items():
+                row = _number(row_key) - 1
+                if not 0 <= row < ROWS or not isinstance(groups, dict):
                     continue
-                for id_key, segments in ids.items():
-                    which = _number(id_key) - 1
-                    curve = _sample(segments, self.frames)
-                    if group == "tilt" and 0 <= which < PER_ROW:
-                        self.tilt[row, which] = curve
-                    elif group == "pusher" and 0 <= which < self.pusher.shape[1]:
-                        self.pusher[row, which] = curve
-                    elif group == "jack":
-                        self.jack[row] = curve
-                    else:
+                for group, ids in groups.items():
+                    if group not in ("tilt", "pusher", "jack") \
+                            or not isinstance(ids, dict):
                         continue
-                    seen += 1
-        if not seen:
+                    for id_key, segments in ids.items():
+                        which = _number(id_key) - 1
+                        if group == "tilt" and not 0 <= which < PER_ROW:
+                            continue
+                        if group == "pusher" \
+                                and not 0 <= which < self.pusher.shape[1]:
+                            continue
+                        moved = [dict(one, frame=int(one.get("frame", 0)) + part.first)
+                                 for one in segments if isinstance(one, dict)]
+                        gathered.setdefault((group, row, which), []).extend(moved)
+
+        for (group, row, which), segments in gathered.items():
+            curve = _sample(segments, self.frames)
+            if group == "tilt":
+                self.tilt[row, which] = curve
+            elif group == "pusher":
+                self.pusher[row, which] = curve
+            else:
+                self.jack[row] = curve
+        if not gathered:
             raise KineticError(f"{self.path.name} has no motors this understands")
-        self.motors = seen
+        self.motors = len(gathered)
+
+    # -- what the window says about the chain --------------------------------
+
+    @property
+    def boundaries(self) -> list:
+        """Where each part starts, for the timeline to mark: (frame, name)."""
+        return [(part.first, part.name) for part in self.parts[1:]]
+
+    def complaints(self) -> list[str]:
+        """Anything about this chain worth saying out loud in the row.
+
+        The order is the one the rows are in -- that is what somebody can see
+        and change -- so a chain that disagrees with what the files say about
+        themselves is played as it stands and mentioned.
+        """
+        said = []
+        numbered = [one for one in self.parts if one.of > 1]
+        if numbered:
+            want = [one.number for one in numbered]
+            if want != sorted(want):
+                said.append("parts are out of order: "
+                            + ", ".join(f"{one.number}/{one.of}" for one in numbered))
+            missing = [n for n in range(1, numbered[0].of + 1) if n not in want]
+            if missing and len(numbered) < numbered[0].of:
+                said.append(f"part {numbered[0].number} of {numbered[0].of}; "
+                            f"missing {', '.join(str(n) for n in missing)}")
+        return said
 
     @property
     def duration(self) -> float:
@@ -241,7 +356,8 @@ class Motors:
         return int(np.clip(round(seconds * self.fps), 0, self.frames - 1))
 
     def describe(self) -> str:
-        return (f"{self.motors} motors  {self.frames - 1} frames  "
+        many = (f"{len(self.parts)} files  " if len(self.parts) > 1 else "")
+        return (f"{many}{self.motors} motors  {self.frames - 1} frames  "
                 f"{self.fps:g} fps  {self.duration:.2f} s")
 
     # -- what the drawing side asks for --------------------------------------

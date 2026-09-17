@@ -264,3 +264,90 @@ def logfile_text() -> str:
     import logfile
     where = logfile.path()
     return where.read_text(encoding="utf-8", errors="replace") if where else ""
+
+
+# -- the chain of motor files ------------------------------------------------
+
+BLOCKS = r"D:\Content\Dostizhenia\JSON"
+PARTS = r"D:\Content\2026-dates\BrendMT\BrendMT_1_of_2.json"
+
+
+def test_a_chain_of_blocks_plays_end_to_end(window, tick):
+    """Seven blocks of a programme are one timeline, marked at every join."""
+    from pathlib import Path
+    import pytest
+    blocks = sorted(Path(BLOCKS).glob("*.json"))
+    if len(blocks) < 3:
+        pytest.skip("the programme's blocks are not on this machine")
+
+    window.mode.setCurrentText(PREVIEW)
+    window._fill_chain([str(one) for one in blocks])
+    window._load()
+    wait_for(tick, lambda: window.motors is not None,
+             "the chain never loaded", within=60)
+
+    assert len(window.kinetic_rows()) == len(blocks), (
+        f"{len(window.kinetic_rows())} rows for {len(blocks)} files")
+    assert len(window.motors.parts) == len(blocks)
+    # Every join lands where the part before it ends, and the clock is the sum.
+    at = 0
+    for part in window.motors.parts:
+        assert part.first == at, f"{part.name} starts at {part.first}, not {at}"
+        at += part.length
+    assert window.motors.frames == at + 1
+    assert abs(window.clock.duration - at / window.motors.fps) < 0.05
+    assert len(window.slider._marks) == len(blocks) - 1, "marks missing"
+
+
+def test_nothing_jumps_where_two_files_meet(window, tick):
+    """The exporter cuts a movement in half; the chain has to finish it."""
+    import numpy as np
+    from pathlib import Path
+    import pytest
+    if not Path(PARTS).exists():
+        pytest.skip("the two-part show is not on this machine")
+    window._fill_chain([PARTS])
+    window._load()
+    wait_for(tick, lambda: window.motors is not None and
+             len(window.motors.parts) == 2,
+             "the second part did not come with the first", within=60)
+    motors = window.motors
+    join = motors.parts[1].first
+    for name, array in (("tilt", motors.tilt), ("pusher", motors.pusher),
+                        ("jack", motors.jack)):
+        step = float(np.abs(array[..., join] - array[..., join - 1]).max())
+        # A frame of ordinary movement, not a jump: the fastest thing in
+        # these files crosses its whole range in about a second.
+        assert step < 0.02, (
+            f"{name} jumps {step:.4f} at the join -- the movement the "
+            "exporter cut in half was not carried across")
+
+
+def test_a_lone_part_brings_its_siblings(window, tick):
+    from pathlib import Path
+    import pytest
+    if not Path(PARTS).exists():
+        pytest.skip("the two-part show is not on this machine")
+    window._fill_chain([PARTS])
+    window._load()
+    wait_for(tick, lambda: window.motors is not None, "nothing loaded", within=60)
+    names = [Path(r.field.text()).name for r in window.kinetic_rows()
+             if r.field.text().strip()]
+    assert names == ["BrendMT_1_of_2.json", "BrendMT_2_of_2.json"], names
+
+
+def test_the_rows_fold_away(window, tick):
+    """The panel is why a chain of seven does not cost the picture its height."""
+    window._fold_sources(True)
+    tick(0.2)
+    assert window.sources_open and window.linked.isVisible()
+    tall = window.sources_body.sizeHint().height()
+    window._fold_sources(False)
+    tick(0.2)
+    assert not window.sources_open
+    assert not window.linked.isVisible(), "the link stayed over a folded panel"
+    assert "Kinetic" in window.sources_head.text() or \
+           "ничего" in window.sources_head.text()
+    assert tall > 100, f"the rows are only {tall} px; folding buys nothing"
+    window._fold_sources(True)
+    tick(0.2)
