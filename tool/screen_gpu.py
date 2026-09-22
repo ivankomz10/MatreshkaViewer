@@ -225,7 +225,49 @@ class Screen:
 
     def __init__(self, device, movie) -> None:
         self.device = device
+        self.gain = (1.0, 1.0, 1.0)
+        # 0 off, 1 dither, 2 clean; the threshold as a fraction; whether to
+        # clamp the colour to its alpha; whether to ignore the gain.
+        self.rebake = (0.0, 0.0, 0.0, 0.0)
+        self._take_shape(movie)
+
+        self.sampler = device.create_sampler(
+            mag_filter="linear", min_filter="linear",
+            address_mode_u="clamp-to-edge", address_mode_v="clamp-to-edge")
+        # Two of them, holding the same screen with and without its re-bake.
+        # Not one buffer written twice: both halves of the split preview are
+        # recorded into one submission, and a uniform written between two
+        # recorded draws is read by neither -- they would both see whatever
+        # was written last.
+        self.settings = device.create_buffer(
+            size=48, usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST)
+        self.rebake_settings = device.create_buffer(
+            size=48, usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST)
+        # Something has to sit at the noise binding whether or not anybody is
+        # dithering: the layout is fixed and a hole in it is a refusal.
+        self.noise = device.create_texture(
+            size=(1, 1, 1), format="r8unorm",
+            usage=wgpu.TextureUsage.TEXTURE_BINDING | wgpu.TextureUsage.COPY_DST)
+        device.queue.write_texture({"texture": self.noise}, bytes(1),
+                                   {"bytes_per_row": 1, "rows_per_image": 1},
+                                   (1, 1, 1))
+        self._write_settings()
+
+    # -- what shape of movie this surface is currently wearing ---------------
+
+    def _take_shape(self, movie) -> None:
+        """Build the planes one movie's frames land in, and the flags with them."""
+        device = self.device
         self.width, self.height = movie.width, movie.height
+        # What was asked for, kept as it was asked. The textures below are
+        # built to the block grid and a softened one is not a texture at all,
+        # so neither can be read back to find out what shape they were made
+        # for -- and that is the only question `fits` has.
+        self.shape = (movie.width, movie.height,
+                      bool(movie.planes[0].is_ycocg),
+                      bool(getattr(movie, "alpha_in_colour", False)),
+                      tuple((one.width, one.height, one.gpu_format)
+                            for one in movie.planes))
         self.planes = [plane_for(device, plane.width, plane.height,
                                  plane.gpu_format)
                        for plane in movie.planes]
@@ -246,30 +288,25 @@ class Screen:
             self.planes.append(plane_for(device, 4, 4, "bc4-r-unorm"))
             self.planes[-1].upload(bytes(8))
 
-        self.sampler = device.create_sampler(
-            mag_filter="linear", min_filter="linear",
-            address_mode_u="clamp-to-edge", address_mode_v="clamp-to-edge")
-        self.gain = (1.0, 1.0, 1.0)
-        # 0 off, 1 dither, 2 clean; the threshold as a fraction; whether to
-        # clamp the colour to its alpha; whether to ignore the gain.
-        self.rebake = (0.0, 0.0, 0.0, 0.0)
-        # Two of them, holding the same screen with and without its re-bake.
-        # Not one buffer written twice: both halves of the split preview are
-        # recorded into one submission, and a uniform written between two
-        # recorded draws is read by neither -- they would both see whatever
-        # was written last.
-        self.settings = device.create_buffer(
-            size=48, usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST)
-        self.rebake_settings = device.create_buffer(
-            size=48, usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST)
-        # Something has to sit at the noise binding whether or not anybody is
-        # dithering: the layout is fixed and a hole in it is a refusal.
-        self.noise = device.create_texture(
-            size=(1, 1, 1), format="r8unorm",
-            usage=wgpu.TextureUsage.TEXTURE_BINDING | wgpu.TextureUsage.COPY_DST)
-        device.queue.write_texture({"texture": self.noise}, bytes(1),
-                                   {"bytes_per_row": 1, "rows_per_image": 1},
-                                   (1, 1, 1))
+    def fits(self, movie) -> bool:
+        """Whether that movie's frames go into these planes as they stand."""
+        return self.shape == (movie.width, movie.height,
+                              bool(movie.planes[0].is_ycocg),
+                              bool(getattr(movie, "alpha_in_colour", False)),
+                              tuple((one.width, one.height, one.gpu_format)
+                                    for one in movie.planes))
+
+    def adopt(self, movie) -> None:
+        """Wear a different movie's shape, without becoming a different screen.
+
+        A chain of clips is one screen for as long as it plays, and the card is
+        bound to this object -- so when a block of the show comes in at another
+        size or another codec, the planes underneath are replaced and everything
+        holding the screen goes on holding the same screen. What that does not
+        survive is a bind group cached against the planes, which is why
+        `Painter.group_for` keys on them and the renderer is told again.
+        """
+        self._take_shape(movie)
         self._write_settings()
 
     def _write_settings(self) -> None:
@@ -500,8 +537,11 @@ class Painter:
     def group_for(self, screen: Screen, rebaked: bool = False):
         # Keyed on the noise as well as the screen: loading a threshold map
         # makes a new texture, and a group cached against the old one would go
-        # on dithering by a map nobody can see any more.
-        key = (id(screen), id(screen.noise), rebaked)
+        # on dithering by a map nobody can see any more. On the planes for the
+        # same reason -- a chain reaching a block of another size replaces them
+        # under a screen that is otherwise the same object.
+        key = (id(screen), id(screen.planes[0]), id(screen.planes[1]),
+               id(screen.noise), rebaked)
         group = self._groups.get(key)
         if group is None:
             settings = screen.rebake_settings if rebaked else screen.settings

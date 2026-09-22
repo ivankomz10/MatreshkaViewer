@@ -129,6 +129,347 @@ def open_source(path: str | Path, screen=None):
     return Still(path, screen) if videofile.is_still(path) else Stream(path)
 
 
+def open_chain(entries, screen=None):
+    """What a row of files comes to: one source if that is all it is.
+
+    `entries` is a list of `(path, repeats)`. A single file played once is
+    opened exactly as it always was -- no chain, no relabelling, no second
+    code path to be wrong in. Anything else is a `Chain`, which wears the
+    same surface as the one below it.
+    """
+    entries = [(str(path), max(1, int(times))) for path, times in entries
+               if str(path).strip()]
+    if not entries:
+        raise ValueError("no files in this row")
+    if len(entries) == 1 and entries[0][1] == 1:
+        return open_source(entries[0][0], screen)
+    return Chain(entries, screen)
+
+
+class Link:
+    """One clip of a chain: what it is, how long, and how many times over."""
+
+    def __init__(self, path: str, repeats: int, screen=None) -> None:
+        self.path = Path(path)
+        self.repeats = max(1, int(repeats))
+        self.still = videofile.is_still(path)
+        self.source: Still | None = None
+        if self.still:
+            # A picture is decoded once and then simply held out, so the probe
+            # and the thing that plays are the same object.
+            self.source = Still(path, screen)
+            self.movie = self.source.movie
+            self.rate, self.frames, self.length = 0.0, 1, 0.0
+        else:
+            try:
+                movie, container = hapfile.open_movie(path)
+            except Exception:  # noqa: BLE001 -- not HAP is not an error
+                movie, container = videofile.open_movie(path)
+            container.close()
+            self.movie = movie
+            self.rate = movie.rate or 60.0
+            self.frames = max(1, int(movie.frames))
+            self.length = float(movie.duration)
+        self.screen = screen
+        self.first = 0             # the chain frame this clip's first pass opens on
+        self.span = 0              # chain frames one pass of it takes
+        self.passes = 1
+
+    def open(self):
+        return self.source if self.still else Stream(str(self.path))
+
+    def __repr__(self) -> str:
+        return (f"<{self.path.name} x{self.repeats} "
+                f"{self.span} frames at {self.first}>")
+
+
+class Chain:
+    """Several clips on one screen, one after another, each played N times.
+
+    A show comes out of the exporter in blocks, and a block that is a five
+    second idle is played six times rather than exported six times over. So a
+    row is a list of files with a count beside each, and this lays them end to
+    end on one frame grid and answers for the whole of it.
+
+    Two things make that more than a loop over a list.
+
+    The clips need not share a rate, so the chain has a grid of its own -- the
+    fastest of them -- and every frame handed out is relabelled with its place
+    on that grid. The label is what the window upstream compares against: how
+    late a frame is, whether the card is already holding it, whether a seek
+    would be quicker than reading forward. A clip's own frame numbers start
+    again at zero in every clip and every pass, and reading them as the
+    timeline's would walk the picture backwards at every join.
+
+    And the clips need not share a shape. Only a few are kept open -- fifteen
+    blocks of a HAP Q Alpha would be gigabytes of read-ahead buffers for
+    fourteen clips nobody is watching -- so a clip is opened when the play
+    head nears it and dropped when it is well past. When the one that comes
+    up is another size or another codec, `on_change` is called and the screen
+    above re-shapes itself around it.
+    """
+
+    LIVE = 3          # clips kept open at once: the one playing, the next, one back
+
+    def __init__(self, entries, screen=None) -> None:
+        self.links = [Link(path, times, screen) for path, times in entries]
+        self.screen = screen
+        self.error = ""
+        self.on_change = None          # told when the clip playing changes
+
+        moving = [one.rate for one in self.links if not one.still]
+        self.rate = max(moving) if moving else 60.0
+
+        at = 0
+        for link in self.links:
+            if link.still:
+                # A picture has no length of its own, so its count is read as
+                # seconds instead of as passes -- there is nothing to play
+                # twice, only a while to hold it up for.
+                link.passes = 1
+                link.span = max(1, int(round(link.repeats * self.rate)))
+            else:
+                link.passes = link.repeats
+                link.span = max(1, int(round(link.length * self.rate)))
+            link.first = at
+            at += link.span * link.passes
+        self.frames = max(1, at)
+
+        self._live: dict[int, object] = {}
+        self._used: dict[int, int] = {}
+        self._clock = 0
+        self._reading: tuple | None = None   # (clip, pass) the reader is aimed at
+        self._out = None                     # the frame the caller is holding
+        self._out_at: int | None = None      # and which of its clip's frames it is
+        self._owner: dict[int, object] = {}  # which stream to hand a frame back to
+        self._shape = 0                      # bumped when the clip playing changes
+        # The first clip is opened here rather than lazily: what is above needs
+        # a movie to build a surface out of before anything is ever drawn.
+        self._stream_for(0)
+        self._reading = (0, 0)
+
+    # -- what the clock needs to know ---------------------------------------
+
+    @property
+    def duration(self) -> float:
+        return self.frames / self.rate if self.rate else 0.0
+
+    @property
+    def movie(self):
+        return self.links[self.at].movie
+
+    @property
+    def at(self) -> int:
+        """Which clip is playing."""
+        return self._reading[0] if self._reading else 0
+
+    @property
+    def decodes(self) -> bool:
+        live = self._live.get(self.at)
+        return bool(getattr(live, "decodes", True))
+
+    @property
+    def counts(self) -> Counts:
+        live = self._live.get(self.at)
+        return live.counts if live is not None else Counts()
+
+    @property
+    def at_end(self) -> bool:
+        """Nothing more will ever come: the last pass of the last clip, run out."""
+        if self._reading is None:
+            return False
+        which, pass_no = self._reading
+        if which != len(self.links) - 1 or pass_no != self.links[which].passes - 1:
+            return False
+        live = self._live.get(which)
+        return bool(live is not None and live.at_end)
+
+    def index_at(self, seconds: float) -> int:
+        return max(0, min(self.frames - 1, int(round(seconds * self.rate))))
+
+    @property
+    def joins(self) -> list:
+        """Where each clip, and each repeat of it, begins: (seconds, name)."""
+        marks = []
+        for link in self.links:
+            for pass_no in range(link.passes):
+                if link.first == 0 and pass_no == 0:
+                    continue           # the start of the piece is not a join
+                at = (link.first + pass_no * link.span) / self.rate
+                marks.append((at, link.path.name))
+        return marks
+
+    def describe(self) -> str:
+        passes = sum(one.passes for one in self.links)
+        return (f"{len(self.links)} файлов, {passes} проходов  "
+                f"{self.frames} кадров  {self.rate:g} fps  {self.duration:.2f} s")
+
+    # -- where a chain frame falls ------------------------------------------
+
+    def _at(self, frame: int) -> tuple:
+        """A chain frame as (which clip, which pass, how far into that pass)."""
+        frame = max(0, min(self.frames - 1, int(frame)))
+        for which, link in enumerate(self.links):
+            whole = link.span * link.passes
+            if frame < link.first + whole:
+                into = frame - link.first
+                pass_no = min(link.passes - 1, into // link.span)
+                return which, int(pass_no), int(into - pass_no * link.span)
+        link = self.links[-1]
+        return len(self.links) - 1, link.passes - 1, link.span - 1
+
+    def _local(self, link: Link, into: int) -> int:
+        """How far into a pass, in that clip's own frames."""
+        if link.still or not self.rate:
+            return 0
+        return max(0, min(link.frames - 1,
+                          int(round(into * link.rate / self.rate))))
+
+    def _label(self, link: Link, pass_no: int, local: int) -> int:
+        """A clip's own frame number as a frame of the chain.
+
+        Stable rather than merely increasing: a thirty a second clip on a
+        sixty a second chain answers two chain frames with one of its own, and
+        both have to carry the same label or the card is sent the same picture
+        twice every frame.
+        """
+        if link.still or not link.rate:
+            offset = 0
+        else:
+            offset = int(round(local * self.rate / link.rate))
+        return link.first + pass_no * link.span + min(offset, link.span - 1)
+
+    # -- which clips are open -----------------------------------------------
+
+    def _stream_for(self, which: int):
+        live = self._live.get(which)
+        if live is None:
+            try:
+                live = self.links[which].open()
+            except Exception as error:  # noqa: BLE001 -- shown beside the field
+                self.error = f"{self.links[which].path.name}: {error}"
+                raise
+            live.start()
+            self._live[which] = live
+        self._used[which] = self._clock
+        self._clock += 1
+        while len(self._live) > self.LIVE:
+            oldest = min(self._live, key=lambda key: self._used[key])
+            if oldest == which:
+                break
+            self._used.pop(oldest, None)
+            gone = self._live.pop(oldest)
+            if not self.links[oldest].still:
+                gone.stop()
+        return live
+
+    def _arm(self, which: int, pass_no: int, into: int) -> None:
+        """Open the next clip a second before the join, not at it.
+
+        Opening a file, allocating its buffers and starting its reader is tens
+        of milliseconds, and doing that on the frame the join falls on is a
+        hitch exactly where the picture changes and it shows most.
+        """
+        link = self.links[which]
+        if which + 1 >= len(self.links) or pass_no != link.passes - 1:
+            return
+        if link.span - into > self.rate or which + 1 in self._live:
+            return
+        try:
+            self._stream_for(which + 1)
+        except Exception:  # noqa: BLE001 -- it will be said again at the join
+            return
+        self._used[which] = self._clock     # the one playing stays the newest
+        self._clock += 1
+
+    def _aim(self, which: int, pass_no: int, local: int):
+        """Point the reader at a place, seeking if it is not there already."""
+        stream = self._stream_for(which)
+        if self._reading != (which, pass_no):
+            turned = self._reading is None or self._reading[0] != which
+            stream.seek(local)
+            self._reading = (which, pass_no)
+            self._out_at = None
+            if turned:
+                self._shape += 1
+                if self.on_change is not None:
+                    self.on_change(self)
+        return stream
+
+    # -- what the drawing side asks for -------------------------------------
+
+    def take(self, wanted: int, holding: Frame | None) -> Frame | None:
+        if holding is not self._out:
+            self._out, self._out_at = holding, None
+        which, pass_no, into = self._at(wanted)
+        link = self.links[which]
+        local = self._local(link, into)
+        stream = self._aim(which, pass_no, local)
+        self._arm(which, pass_no, into)
+
+        if self._out_at is not None and self._out_at >= local:
+            return None                    # what is up is new enough
+        # Never the caller's own frame: its index has been relabelled onto the
+        # chain's grid, and the stream below would read that as a frame from
+        # somewhere in the middle of the piece.
+        got = stream.take(local, None)
+        if got is None:
+            return None
+        if self._out_at is not None and got.index <= self._out_at:
+            stream.give_back(got)          # older than what is already up
+            return None
+        self._out, self._out_at = got, got.index
+        self._owner[id(got)] = stream
+        got.index = self._label(link, pass_no, got.index)
+        return got
+
+    def exact(self, wanted: int, holding: Frame | None,
+              should_stop=None, timeout: float = 30.0) -> Frame | None:
+        if holding is not self._out:
+            self._out, self._out_at = holding, None
+        which, pass_no, into = self._at(wanted)
+        link = self.links[which]
+        local = self._local(link, into)
+        stream = self._aim(which, pass_no, local)
+        if self._out_at is not None and self._out_at == local:
+            return self._out               # exactly this one is already up
+        got = stream.exact(local, None, should_stop, timeout)
+        if got is None:
+            return None
+        self._out, self._out_at = got, got.index
+        self._owner[id(got)] = stream
+        got.index = self._label(link, pass_no, got.index)
+        return got
+
+    def give_back(self, frame: Frame | None) -> None:
+        if frame is None:
+            return
+        owner = self._owner.pop(id(frame), None)
+        if owner is not None:
+            owner.give_back(frame)
+        if frame is self._out:
+            self._out, self._out_at = None, None
+
+    def seek(self, index: int) -> None:
+        which, pass_no, into = self._at(index)
+        try:
+            self._aim(which, pass_no, self._local(self.links[which], into))
+        except Exception:  # noqa: BLE001 -- said when a frame is asked for
+            return
+        self._out, self._out_at = None, None
+
+    def start(self) -> None:
+        pass              # every clip's reader is started when it is opened
+
+    def stop(self) -> None:
+        for which, live in list(self._live.items()):
+            if not self.links[which].still:
+                live.stop()
+        self._live.clear()
+        self._used.clear()
+        self._owner.clear()
+
+
 class Stream:
     """One movie, read ahead of where the clock is."""
 

@@ -92,6 +92,10 @@ def settings(clips: dict, **changed) -> dict:
         "rebake_right": "Premultiplied",
         "rebake_format": "Hap Q Alpha",
         "frame_edge": True,
+        # The loops are behind a switch, and each screen folds on its own.
+        "loops": False,
+        "groups_open": {"Top": True, "Bottom": True, "Lamels": True,
+                        "Sound": True, "Kinetic": True},
     }
     settled.update(changed)
     return settled

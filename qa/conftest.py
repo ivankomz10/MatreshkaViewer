@@ -76,6 +76,10 @@ def settings(clips: dict, **changed) -> dict:
         "rebake_right": "Premultiplied",
         "rebake_format": "Hap Q Alpha",
         "frame_edge": True,
+        # The loops are behind a switch, and each screen folds on its own.
+        "loops": False,
+        "groups_open": {"Top": True, "Bottom": True, "Lamels": True,
+                        "Sound": True, "Kinetic": True},
         # The rows fold away now; the driven tests reach into them, so they
         # ask for them up rather than relying on the default.
         "sources_open": True,

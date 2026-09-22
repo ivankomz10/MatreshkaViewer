@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, QTimer
 from PySide6.QtGui import (QColor, QFont, QIcon, QImage, QKeySequence,
                            QPainter, QPen, QPixmap, QShortcut)
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
@@ -91,6 +91,11 @@ SHORT = {
 
 # The width every row leaves for the link button that sits between two of
 # them. Wide enough for the button and a little air either side.
+# The column every row leaves for what makes it one of a run: the repeat
+# counter and the three small buttons beside it. Fixed, and left empty on the
+# rows that cannot be chained, so everything past it lines up down the window.
+CHAIN_COLUMN = 58 + 3 * 24 + 3 * 4 + 6
+
 LINK_SIDE = 24
 LINK_COLUMN = LINK_SIDE + 10
 
@@ -167,6 +172,11 @@ def _small(button: QPushButton, width: int) -> QPushButton:
     button.setFixedWidth(width)
     button.setStyleSheet("padding:5px 2px;")
     return button
+
+
+def _tag(title: str) -> str:
+    """A row's title as the test driver spells it: `Top 2` is `top2`."""
+    return title.lower().replace(" ", "")
 
 
 def _divider() -> QFrame:
@@ -395,31 +405,48 @@ class Row(QWidget):
     def __init__(self, title: str, screen: str, on_pick, on_drop,
                  overlay: bool = False, on_place=None, on_gain=None,
                  sound: bool = False, motors: bool = False,
-                 on_add=None, on_less=None) -> None:
+                 chain: bool = False, head: bool = True, group: str = "",
+                 on_add=None, on_less=None, on_spread=None,
+                 on_repeat=None) -> None:
         super().__init__()
         self.title = title
         self.screen = screen
         self.overlay = overlay
         self.sound = sound
         self.motors = motors
+        # Whether this row can be one of several playing one after another,
+        # and whether it is the first of them. The first carries what belongs
+        # to the screen rather than to the clip -- the brightness slider, the
+        # settings entry, the stream everything else is drawn from.
+        self.chain = chain
+        self.head = head
+        # Whether the repeat counters are being used at all. Off until the
+        # switch in the bar is ticked, and hidden with it: a column of boxes
+        # reading "× 1" on a window that is already full of fields is four
+        # more things to wonder about for everybody who never loops anything.
+        self.loops = False
+        self.group = group or title
         self.on_drop = on_drop
         self.on_gain = on_gain or (lambda _row: None)
         self.setAcceptDrops(True)
-        # What the test driver knows this row and its widgets by. Six rows are
-        # built from this one class, so every name carries the row's own.
-        tag = title.lower()
+        # What the test driver knows this row and its widgets by. Every row is
+        # built from this one class, so every name carries the row's own -- and
+        # a row that is renumbered when the chain above it changes takes its
+        # names with it, so `qa_path_top2` is always the second Top row.
+        tag = _tag(title)
+        self._named: list = []
         self.setObjectName(f"qa_row_{tag}")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        label = QLabel(title)
-        label.setFixedWidth(52)
-        layout.addWidget(label)
+        self.label = QLabel(title)
+        self.label.setFixedWidth(52)
+        layout.addWidget(self.label)
 
         self.field = QLineEdit()
-        self.field.setObjectName(f"qa_path_{tag}")
+        self._name(self.field, "path")
         self.field.setPlaceholderText(
             "drop a WAV here, or browse" if sound
             else "drop a motor JSON here, or browse" if motors
@@ -429,15 +456,76 @@ class Row(QWidget):
 
         browse = iconed(QPushButton(), "file", "Выбрать файл",
                         "Выбрать файл для этой строки. Перетащить его на "
-                        "строку — то же самое.", name=f"qa_browse_{tag}")
+                        "строку — то же самое.")
+        self._name(browse, "browse")
         browse.clicked.connect(lambda: on_pick(self))
         layout.addWidget(browse)
 
         self.clear_button = iconed(QPushButton(), "clear", "Убрать",
-                                   "Очистить строку. Сам файл не трогается.",
-                                   name=f"qa_clear_{tag}")
+                                   "Очистить строку. Сам файл не трогается.")
+        self._name(self.clear_button, "clear")
         self.clear_button.clicked.connect(self.clear)
         layout.addWidget(self.clear_button)
+
+        # A column of its own for what makes a row one of a run: how many
+        # times this file plays before the next one starts, and the two
+        # buttons that make the run longer and shorter. Every row keeps the
+        # column whether or not it can be chained, so the sliders, the
+        # numbers and the notes still line up down the window.
+        self.repeat = None
+        self.add_button = self.less_button = self.spread_button = None
+        chain_box = QWidget()
+        chain_box.setObjectName(f"qa_chain_{tag}")
+        chain_box.setFixedWidth(CHAIN_COLUMN)
+        inline = QHBoxLayout(chain_box)
+        inline.setContentsMargins(0, 0, 0, 0)
+        inline.setSpacing(4)
+        if chain:
+            self.repeat = QSpinBox()
+            self._name(self.repeat, "repeat")
+            self.repeat.setRange(1, 999)
+            self.repeat.setPrefix("× ")
+            self.repeat.setFixedWidth(58)
+            self.repeat.setToolTip(
+                "Сколько раз этот файл проигрывается, прежде чем начнётся "
+                "следующий. Пять секунд, поставленные шесть раз, это "
+                "тридцать секунд таймлайна — и столько же в рендере.\n\n"
+                "У картинки крутить нечего, поэтому там это не повторы, а "
+                "секунды: сколько её держать на экране.")
+            if on_repeat is not None:
+                self.repeat.valueChanged.connect(lambda _: on_repeat(self))
+            inline.addWidget(self.repeat)
+
+            self.spread_button = iconed(
+                QPushButton(), "down", "Столько же по колонке",
+                "Поставить это же число повторов в строки того же номера во "
+                "всех остальных цепочках. Пятисекундная вставка обычно идёт "
+                "разом по всем экранам и по кинетике, и это один клик вместо "
+                "четырёх.", side=24)
+            self._name(self.spread_button, "spread")
+            if on_spread is not None:
+                self.spread_button.clicked.connect(lambda: on_spread(self))
+            inline.addWidget(self.spread_button)
+
+            self.add_button = iconed(
+                QPushButton(), "version", "Ещё файл", side=24,
+                story="Добавить строку в конец цепочки. Файлы играют один за "
+                      "другим, сверху вниз: так собирается шоу, разрезанное "
+                      "экспортёром на части, и программа из блоков.")
+            self._name(self.add_button, "add")
+            if on_add is not None:
+                self.add_button.clicked.connect(lambda: on_add(self))
+            inline.addWidget(self.add_button)
+
+            self.less_button = iconed(
+                QPushButton(), "clear", "Убрать строку",
+                "Убрать эту строку из цепочки.", side=24)
+            self._name(self.less_button, "less")
+            if on_less is not None:
+                self.less_button.clicked.connect(lambda: on_less(self))
+            inline.addWidget(self.less_button)
+        inline.addStretch(1)
+        layout.addWidget(chain_box)
 
         # A column of its own for the link button, which lives between two of
         # these rows rather than in any one of them. Every row leaves the same
@@ -451,7 +539,7 @@ class Row(QWidget):
         self.how = None
         if overlay:
             self.how = QComboBox()
-            self.how.setObjectName(f"qa_how_{tag}")
+            self._name(self.how, "how")
             self.how.addItems(["Fit", "Stretch"])
             self.how.setFixedWidth(78)
             self.how.setToolTip(
@@ -471,41 +559,20 @@ class Row(QWidget):
         # file says how far the screens travel, and anything else is a picture
         # of a building that does not exist. The width is kept as a gap so the
         # rows still line up.
+        # The brightness is the screen's, not the clip's: a chain is one
+        # surface for as long as it plays, so only the row at its head carries
+        # a slider. The motors have none at all -- what they do is not a
+        # matter of taste, the file says how far the screens travel. Both keep
+        # the width as a gap so the rows still line up.
         self.gain = None
-        if motors:
-            # Where a slider would be, since there is nothing to turn up: the
-            # two buttons that make the chain longer and shorter. A show comes
-            # out of the exporter in parts and a programme in blocks, and they
-            # play one after another -- so a row is one file and the chain is
-            # as many rows as it takes. Kept to the slider's own width so that
-            # everything past it still lines up down the window.
+        if motors or not head:
             beside = QWidget()
-            beside.setObjectName(f"qa_chain_{tag}")
+            beside.setObjectName(f"qa_gap_{tag}")
             beside.setFixedWidth(96 + 6 + 36)
-            inline = QHBoxLayout(beside)
-            inline.setContentsMargins(0, 0, 0, 0)
-            inline.setSpacing(6)
-            if on_add is not None:
-                self.add_button = iconed(
-                    QPushButton(), "version", "Ещё файл",
-                    "Добавить строку в конец цепочки. Джейсоны играют один "
-                    "за другим, сверху вниз: так собирается шоу, разрезанное "
-                    "экспортёром на части, и программа из блоков.",
-                    name=f"qa_add_{tag}")
-                self.add_button.clicked.connect(lambda: on_add(self))
-                inline.addWidget(self.add_button)
-            if on_less is not None:
-                self.less_button = iconed(
-                    QPushButton(), "clear", "Убрать строку",
-                    "Убрать эту строку из цепочки.",
-                    name=f"qa_less_{tag}")
-                self.less_button.clicked.connect(lambda: on_less(self))
-                inline.addWidget(self.less_button)
-            inline.addStretch(1)
             layout.addWidget(beside)
         else:
             self.gain = QSlider(Qt.Orientation.Horizontal)
-            self.gain.setObjectName(f"qa_gain_{tag}")
+            self._name(self.gain, "gain")
             self.gain.setRange(0, 200)
             self.gain.setValue(100)
             self.gain.setFixedWidth(96)
@@ -523,19 +590,59 @@ class Row(QWidget):
             layout.addWidget(self.gain)
 
             self.gain_shown = QLabel("1.00")
-            self.gain_shown.setObjectName(f"qa_gainvalue_{tag}")
+            self._name(self.gain_shown, "gainvalue")
             self.gain_shown.setFont(QFont(MONO, 9))
             self.gain_shown.setFixedWidth(36)
             layout.addWidget(self.gain_shown)
 
         self.note = QLabel()
-        self.note.setObjectName(f"qa_note_{tag}")
+        self._name(self.note, "note")
         self.note.setMinimumWidth(160)
         self.note.setStyleSheet("color:#8fbf8f;")
         layout.addWidget(self.note, 2)
 
         self._quiet = self.styleSheet()
         self._shown()
+
+    def _name(self, widget, what: str) -> None:
+        """Name a widget after this row, and remember to rename it later."""
+        self._named.append((widget, what))
+        widget.setObjectName(f"qa_{what}_{_tag(self.title)}")
+
+    def rename(self, title: str) -> None:
+        """Become the Nth row of the chain: on the label, and in the names.
+
+        The names matter as much as the label. A driver that found the second
+        Top row by `qa_path_top2` would otherwise go on pointing at whichever
+        row happened to be built second, however the chain had been shuffled
+        since.
+        """
+        if title == self.title:
+            return
+        self.title = title
+        self.label.setText(title)
+        tag = _tag(title)
+        self.setObjectName(f"qa_row_{tag}")
+        for widget, what in self._named:
+            widget.setObjectName(f"qa_{what}_{tag}")
+
+    @property
+    def times(self) -> int:
+        """How many times over this row's file plays.
+
+        One whenever the loops are switched off, whatever the box happens to
+        remember: what is hidden must not go on changing the timeline.
+        """
+        if self.repeat is None or not self.loops:
+            return 1
+        return int(self.repeat.value())
+
+    def show_loops(self, on: bool) -> None:
+        """Show this row's counter, or put it away and stop it counting."""
+        self.loops = bool(on)
+        for widget in (self.repeat, self.spread_button):
+            if widget is not None:
+                widget.setVisible(bool(on))
 
     @property
     def multiplier(self) -> float:
@@ -597,6 +704,78 @@ class Row(QWidget):
             self.field.setText(path)
             self._shown()
             self.on_drop()
+
+
+FOLD_HEADER = ("QPushButton { text-align:left; padding:2px 6px; border:none; "
+               "color:#9a9a9a; } QPushButton:hover { color:#dcdcdc; }")
+
+
+class Group(QWidget):
+    """One heading and the rows under it, which it can fold away.
+
+    A screen is no longer one row. A show arrives in blocks that play one
+    after another, so a screen is a run of rows, and seven blocks on each of
+    three screens is twenty-one fields on a window that also has to show the
+    picture. So each screen folds on its own: the heading says what is loaded
+    and how long it comes to, which is what somebody is reading the rows for
+    most of the time anyway.
+
+    Whether it is open is kept here as a fact rather than asked of the widget.
+    `isVisible` is false for everything in a window that has not been shown
+    yet, and reading it during the build makes the heading lie about the fold.
+    """
+
+    def __init__(self, title: str, fold) -> None:
+        super().__init__()
+        self.title = title
+        self.open = True
+        tag = _tag(title)
+        self.setObjectName(f"qa_group_{tag}")
+
+        stacked = QVBoxLayout(self)
+        stacked.setContentsMargins(0, 0, 0, 0)
+        stacked.setSpacing(2)
+
+        self.head = QPushButton()
+        self.head.setObjectName(f"qa_grouphead_{tag}")
+        self.head.setFlat(True)
+        self.head.setStyleSheet(FOLD_HEADER)
+        self.head.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Through a lambda rather than straight at the handler: `clicked`
+        # hands its handler a bool, and a bool landing in an argument that
+        # means "open it" is a fold that never unfolds.
+        self.head.clicked.connect(lambda: fold(self))
+        stacked.addWidget(self.head)
+
+        self.body = QWidget()
+        self.body.setObjectName(f"qa_groupbody_{tag}")
+        self.rows = QVBoxLayout(self.body)
+        self.rows.setContentsMargins(0, 0, 0, 0)
+        self.rows.setSpacing(6)
+        stacked.addWidget(self.body)
+
+    def hold(self, row, where: int = -1) -> None:
+        if where < 0:
+            self.rows.addWidget(row)
+        else:
+            self.rows.insertWidget(where, row)
+
+    def drop(self, row) -> None:
+        self.rows.removeWidget(row)
+
+    def fold(self, open_it=None) -> None:
+        self.open = (not self.open) if open_it is None else bool(open_it)
+        self.body.setVisible(self.open)
+
+    def say(self, line: str, story: str) -> None:
+        arrow = "\u25be" if self.open else "\u25b8"
+        # Short enough that the line never reaches the link button's column,
+        # which floats over the seam between two of these headings.
+        short = line if len(line) < 92 else line[:89] + "..."
+        self.head.setText(f"{arrow}  {self.title}   {short}")
+        HINTS[self.head] = (
+            self.title if self.open else f"{self.title} — развернуть",
+            f"{line}\n\n{story}")
 
 
 class Viewer(QMainWindow):
@@ -662,24 +841,34 @@ class Viewer(QMainWindow):
 
         # Named, not ordered: the fields can be rearranged without the videos
         # quietly going to the wrong screens.
-        self.rows = [Row(title, screen, self._pick, self._load,
-                         on_gain=self._gains_changed)
-                     for title, screen in (("Top", "Screen_Top"),
-                                           ("Bottom", "Screen_Bottom"),
-                                           ("Lamels", "Lamel_screen"))]
+        #
+        # A screen is a group rather than a row, because a show arrives in
+        # blocks that play one after another. The group is the screen; the
+        # rows in it are the blocks; the first row is the one the screen
+        # itself hangs off, and it is the one that carries the brightness.
+        self.rows: list[Row] = []
+        self.groups: dict[str, Group] = {}
+        for title, screen in (("Top", "Screen_Top"),
+                              ("Bottom", "Screen_Bottom"),
+                              ("Lamels", "Lamel_screen")):
+            self._new_group(title)
+            self.rows.append(self._new_row(title, screen, chain=True,
+                                           on_gain=self._gains_changed))
         # Not a screen of its own: a picture or a movie laid over the bottom
         # one, on top of whatever is playing there and using its own alpha.
-        self.rows.append(Row("Frame", "Screen_Bottom", self._pick, self._load,
-                             overlay=True, on_place=self._place_frame,
-                             on_gain=self._gains_changed))
+        # It folds with Bottom, which is the screen it is laid on.
+        self.rows.append(self._new_row(
+            "Frame", "Screen_Bottom", group="Bottom", overlay=True,
+            on_place=self._place_frame, on_gain=self._gains_changed))
         # Not a screen either: one WAV under the whole thing, heard while
         # watching and written into the render.
-        self.rows.append(Row("Sound", "", self._pick, self._load,
-                             sound=True, on_gain=self._volume_changed))
+        self._new_group("Sound")
+        self.rows.append(self._new_row("Sound", "", sound=True,
+                                       on_gain=self._volume_changed))
         # The motors of the top screen. Not a picture at all: a JSON of
         # commands that moves the geometry the pictures are shown on.
-        self.rows.append(Row("Kinetic", "", self._pick, self._load,
-                             motors=True, on_add=self._add_kinetic))
+        self._new_group("Kinetic")
+        self.rows.append(self._new_row("Kinetic", "", motors=True, chain=True))
 
         # The rows fold away. Six of them are 204 pixels, and a chain of
         # seven blocks would be 238 more -- on a window a thousand tall that
@@ -700,9 +889,7 @@ class Viewer(QMainWindow):
         self.sources_head = QPushButton()
         self.sources_head.setObjectName("qa_sources_header")
         self.sources_head.setFlat(True)
-        self.sources_head.setStyleSheet(
-            "QPushButton { text-align:left; padding:2px 6px; border:none; "
-            "color:#9a9a9a; } QPushButton:hover { color:#dcdcdc; }")
+        self.sources_head.setStyleSheet(FOLD_HEADER)
         self.sources_head.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         # Through a lambda, not straight at the method: `clicked` hands its
         # handler a bool -- False for a button that is not checkable -- and
@@ -719,9 +906,9 @@ class Viewer(QMainWindow):
         self.sources_body.setObjectName("qa_sources_body")
         self.source_rows = QVBoxLayout(self.sources_body)
         self.source_rows.setContentsMargins(0, 0, 0, 0)
-        self.source_rows.setSpacing(6)
-        for row in self.rows:
-            self.source_rows.addWidget(row)
+        self.source_rows.setSpacing(4)
+        for title in ("Top", "Bottom", "Lamels", "Sound", "Kinetic"):
+            self.source_rows.addWidget(self.groups[title])
         stacked.addWidget(self.sources_body)
         layout.addWidget(self.sources)
 
@@ -1002,6 +1189,20 @@ class Viewer(QMainWindow):
         bar.addWidget(self.solid_top)
         self.scene_only.append(self.solid_top)
 
+        # Not one of the scene-only ones: this is about how long the piece is,
+        # which is as true in Flat and in ReBake as it is here.
+        self.looping = QCheckBox("Лупы")
+        self.looping.setObjectName("qa_loops")
+        self.looping.setToolTip(
+            "Повторы: у каждой строки появляется счётчик, сколько раз её файл "
+            "играет, прежде чем начнётся следующий. Тридцать секунд, потом "
+            "пятисекундная вставка шесть раз — это тридцать секунд таймлайна "
+            "и столько же в рендере, без шести копий одного файла.\n\n"
+            "Выключено — счётчиков нет и каждый файл играет один раз. "
+            "Выставленные числа не теряются, они просто не действуют.")
+        self.looping.toggled.connect(self._loops_changed)
+        bar.addWidget(self.looping)
+
         bar.addWidget(_divider())
 
         alpha_label = QLabel("Alpha")
@@ -1128,14 +1329,18 @@ class Viewer(QMainWindow):
                     row.gain.setValue(int(round(float(value))))
                 if row.how is not None and kept.get("how"):
                     row.how.setCurrentText(str(kept["how"]))
-                if row.motors:
+                if not row.head:
+                    continue
+                if row.chain:
                     # A chain, or the one file older settings kept.
                     chain = [str(one) for one in (kept.get("files") or [])
                              if str(one).strip()]
                     if not chain and kept.get("file"):
                         chain = [str(kept["file"])]
+                    over = [int(one) for one in (kept.get("repeats") or [])]
+                    over += [1] * (len(chain) - len(over))
                     if chain:
-                        self._fill_chain(chain)
+                        self._fill_chain(row.group, list(zip(chain, over)))
                         files += len(chain)
                     continue
                 path = str(kept.get("file") or "")
@@ -1149,9 +1354,16 @@ class Viewer(QMainWindow):
                 self.rebake_what.setCurrentText(str(saved["rebake"]))
             if saved.get("rebake_below") is not None:
                 self.rebake_threshold.setValue(int(saved["rebake_below"]))
+            # After the rows, so a chain restored with counts on it gets
+            # its counters shown rather than hidden behind a stale default.
+            self.looping.setChecked(bool(saved.get("loops", False)))
+            self._loops_changed(self.looping.isChecked())
             if "sources_open" in saved:
                 self.sources_open = bool(saved["sources_open"])
                 self.sources_body.setVisible(self.sources_open)
+            for title, open_it in (saved.get("groups_open") or {}).items():
+                if title in self.groups:
+                    self.groups[title].fold(bool(open_it))
             if "frame_edge" in saved:
                 self.frame_button.setChecked(bool(saved["frame_edge"]))
             if "tile_flat" in saved:
@@ -1212,13 +1424,16 @@ class Viewer(QMainWindow):
         """The whole of what is worth carrying over, as it stands."""
         rows = {}
         for row in self.rows:
-            if row.motors and row is not self.kinetic_rows()[0]:
-                continue                 # the chain is kept under the first
+            if not row.head:
+                continue                 # a chain is kept under its first row
             kept = {"file": row.field.text().strip()}
-            if row.motors:
-                kept["files"] = [one.field.text().strip()
-                                 for one in self.kinetic_rows()
-                                 if one.field.text().strip()]
+            if row.chain:
+                # The whole chain, and what each of its files is played for.
+                # `file` above stays the first of them, so a settings file
+                # written here still opens in a version that knew one row.
+                entries = self._entries(row.group)
+                kept["files"] = [one for one, _ in entries]
+                kept["repeats"] = [times for _, times in entries]
             if row.gain is not None:
                 kept["gain"] = int(row.gain.value())
             if row.how is not None:
@@ -1248,7 +1463,11 @@ class Viewer(QMainWindow):
             "behind": self.backing.currentText(),
             # Whether the rows are on show. Remembered because on a small
             # screen the picture wants that room and the rows are set once.
+            "loops": self.looping.isChecked(),
             "sources_open": self.sources_open,
+            # And which of the headings inside it are, one by one.
+            "groups_open": {title: group.open
+                            for title, group in self.groups.items()},
         }
 
     def _remember(self, now: bool = False) -> None:
@@ -1281,8 +1500,8 @@ class Viewer(QMainWindow):
         if not on:
             self.link_ratio = None
             return
-        top = max(1, self.rows[0].gain.value())
-        bottom = max(1, self.rows[1].gain.value())
+        top = max(1, self.head_row("Top").gain.value())
+        bottom = max(1, self.head_row("Bottom").gain.value())
         self.link_ratio = bottom / top
         logfile.write(f"linked: bottom is {self.link_ratio:.3f} of top")
 
@@ -1295,7 +1514,7 @@ class Viewer(QMainWindow):
         """
         if self.link_ratio is None or self._linking:
             return
-        pair = self.rows[:2]
+        pair = [self.head_row("Top"), self.head_row("Bottom")]
         if moved not in pair:
             return
         driver, other = (pair[0], pair[1]) if moved is pair[0] else (pair[1], pair[0])
@@ -1328,7 +1547,7 @@ class Viewer(QMainWindow):
         matching = self.matching.isChecked() if hasattr(self, "matching") else True
         by_screen = {}
         for row in self.rows:
-            if row.overlay or row.sound or row.motors:
+            if row.overlay or row.sound or row.motors or not row.head:
                 continue
             base = self.gains.get(row.screen, (1.0, 1.0, 1.0)) if matching                 else (1.0, 1.0, 1.0)
             by_screen[row.screen] = tuple(v * row.multiplier for v in base)
@@ -1345,7 +1564,8 @@ class Viewer(QMainWindow):
                 continue
             row = next((r for r in self.rows
                         if (r.overlay and index == self.frame_at)
-                        or (not r.overlay and r.screen == feeds and feeds)), None)
+                        or (not r.overlay and r.head
+                            and r.screen == feeds and feeds)), None)
             if row is not None:
                 self.screens[index].set_gain((row.multiplier,) * 3)
         self.touch()
@@ -2727,10 +2947,15 @@ class Viewer(QMainWindow):
         """
         if not hasattr(self, "linked"):
             return
-        rows = {row.title: row for row in self.rows}
-        top, bottom = rows.get("Top"), rows.get("Bottom")
+        top, bottom = self.head_row("Top"), self.head_row("Bottom")
         if top is None or bottom is None or top.gain is None:
             return
+        # Between the two groups rather than between the two rows. Each
+        # screen is a run of rows now with a heading of its own, so there is
+        # no longer any gap between the Top slider and the Bottom one -- but
+        # there is still the seam where one screen ends and the next begins,
+        # and every row leaves the link's column empty across it.
+        above, below = self.groups["Top"], self.groups["Bottom"]
         # In the coordinates of whatever the button is a child of, which is
         # the panel of rows and not the window: `move` is relative to the
         # parent, and measuring against the window put the button a header's
@@ -2738,8 +2963,8 @@ class Viewer(QMainWindow):
         holder = self.linked.parentWidget() or self.centralWidget()
         column = top.link_gap.geometry()
         middle = top.mapTo(holder, column.center()).x()
-        between = (top.mapTo(holder, QPoint(0, top.height())).y()
-                   + bottom.mapTo(holder, QPoint(0, 0)).y()) // 2
+        between = (above.mapTo(holder, QPoint(0, above.height())).y()
+                   + below.mapTo(holder, QPoint(0, 0)).y()) // 2
         self.linked.move(middle - self.linked.width() // 2,
                          between - self.linked.height() // 2)
         self.linked.raise_()
@@ -3163,7 +3388,7 @@ class Viewer(QMainWindow):
             return
         found = {}
         for row in self.rows:
-            if row.overlay or row.sound or row.motors:
+            if row.overlay or row.sound or row.motors or not row.head:
                 continue
             text = row.field.text().strip()
             if text:
@@ -3236,7 +3461,7 @@ class Viewer(QMainWindow):
         _, suffix = self.format_choice.currentData()
         for name in self._flat_showing():
             row = next((r for r in self.rows
-                        if r.screen == name and not r.overlay
+                        if r.screen == name and not r.overlay and r.head
                         and r.field.text().strip()), None)
             if row is None:
                 continue
@@ -3510,9 +3735,54 @@ class Viewer(QMainWindow):
 
     # -- the panel of sources, and the chain of motor files ------------------
 
+    CHAINS = ("Top", "Bottom", "Lamels", "Kinetic")
+
+    def _new_group(self, title: str) -> "Group":
+        group = Group(title, self._fold_group)
+        self.groups[title] = group
+        return group
+
+    def _new_row(self, title: str, screen: str, group: str = "",
+                 chain: bool = False, head: bool = True, **rest) -> "Row":
+        """One row, wired to the window and put into the group it belongs to.
+
+        A row at the head of a chain gets no button for taking itself away --
+        it has the clear button for that, and a chain with nowhere to start
+        again from could not be filled in at all.
+        """
+        row = Row(title, screen, self._pick, self._load,
+                  chain=chain, head=head, group=group or title,
+                  on_add=self._add_row if chain else None,
+                  on_less=self._less_row if (chain and not head) else None,
+                  on_spread=self._spread if chain else None,
+                  on_repeat=self._repeat_changed if chain else None,
+                  **rest)
+        row.show_loops(self.looping.isChecked()
+                       if hasattr(self, "looping") else False)
+        self.groups[row.group].hold(row)
+        return row
+
+    def chain_rows(self, group: str) -> list:
+        """Every row of one chain, in the order they play."""
+        return [row for row in self.rows
+                if row.group == group and row.chain]
+
     def kinetic_rows(self) -> list:
         """Every row that takes a motor file, in the order they are shown."""
-        return [row for row in self.rows if row.motors]
+        return self.chain_rows("Kinetic")
+
+    def head_row(self, group: str):
+        """The row a group's screen hangs off."""
+        return next((row for row in self.rows
+                     if row.group == group and row.head and not row.overlay),
+                    None)
+
+    def _entries(self, group: str) -> list:
+        """What a chain comes to: the files in it, each with its count."""
+        return [(row.field.text().strip(), row.times)
+                for row in self.chain_rows(group) if row.field.text().strip()]
+
+    # -- folding -------------------------------------------------------------
 
     def _fold_sources(self, open_it=None) -> None:
         """Show the rows or put them away, and say what is loaded either way."""
@@ -3524,78 +3794,183 @@ class Viewer(QMainWindow):
                                and not getattr(self, "_full", False))
         self._say_sources()
         self._remember()
-        if open_it:
+        if open_it and hasattr(self, "_link_later"):
             self._link_later.start(0)
 
-    def _say_sources(self) -> None:
-        """One line for the folded panel: what is loaded, in order."""
-        open_now = self.sources_open
+    def _fold_group(self, group, open_it=None) -> None:
+        """One screen's rows away, the rest left as they were."""
+        group.fold(open_it)
+        self._say_sources()
+        self._remember()
+        if hasattr(self, "_link_later"):
+            self._link_later.start(0)
+
+    def _group_line(self, title: str) -> str:
+        """What one heading says about itself: the files, and how long."""
+        group = self.groups[title]
         said = []
         for row in self.rows:
-            if row.motors:
+            if row.group != title:
                 continue
             text = row.field.text().strip()
-            if text:
-                said.append(f"{row.title}: {Path(text).name}")
-        chain = [r.field.text().strip() for r in self.kinetic_rows()
-                 if r.field.text().strip()]
+            if not text:
+                continue
+            times = f" ×{row.times}" if row.chain and row.times > 1 else ""
+            lead = "" if row.head else f"{row.title.split()[-1]}. "
+            if row.overlay:
+                lead = "Frame: "
+            said.append(f"{lead}{Path(text).name}{times}")
+        if not said:
+            return "пусто"
+        if len(said) > 3:
+            files = len([one for one in self.chain_rows(title)
+                         if one.field.text().strip()])
+            said = said[:2] + [f"…ещё {len(said) - 2} (всего {files})"]
+        line = "   ".join(said)
+        length = self._group_seconds(title)
+        return f"{line}   {length:.1f} с" if length else line
+
+    def _group_seconds(self, title: str) -> float:
+        """How long that group's chain runs, if it has been opened."""
+        row = self.head_row(title)
+        if title == "Kinetic":
+            return self.motors.duration if self.motors is not None else 0.0
+        for index, feeds in enumerate(self.feeding):
+            if row is not None and feeds == row.screen and index < len(self.streams):
+                return float(self.streams[index].duration)
+        return 0.0
+
+    def _say_sources(self) -> None:
+        """The panel's own line, and one for every heading inside it."""
+        for title, story in (
+                ("Top", "Файлы верхнего экрана, по порядку."),
+                ("Bottom", "Файлы нижнего экрана, и накладка Frame поверх него."),
+                ("Lamels", "Файлы ламельного экрана."),
+                ("Sound", "Один WAV под всем сразу."),
+                ("Kinetic", "Джейсоны моторов верхнего экрана, по порядку.")):
+            self.groups[title].say(self._group_line(title), story)
+
+        said = []
+        for title in ("Top", "Bottom", "Lamels", "Sound"):
+            row = self.head_row(title) or next(
+                (r for r in self.rows if r.group == title), None)
+            files = [one for one in self.chain_rows(title) or [row]
+                     if one is not None and one.field.text().strip()]
+            if not files:
+                continue
+            said.append(f"{title}: {Path(files[0].field.text().strip()).name}"
+                        + (f" +{len(files) - 1}" if len(files) > 1 else ""))
+        chain = [one for one in self.kinetic_rows() if one.field.text().strip()]
         if len(chain) == 1:
-            said.append(f"Kinetic: {Path(chain[0]).name}")
+            said.append(f"Kinetic: {Path(chain[0].field.text().strip()).name}")
         elif chain:
             said.append(f"Kinetic: {len(chain)} файлов")
         whole = "   ".join(said) or "ничего не загружено"
-        arrow = "\u25be" if open_now else "\u25b8"
+        arrow = "\u25be" if self.sources_open else "\u25b8"
         short = whole if len(whole) < 150 else whole[:147] + "..."
         self.sources_head.setText(f"{arrow}  {short}")
         HINTS[self.sources_head] = (
-            "Источники" if open_now else "Источники — развернуть",
+            "Источники" if self.sources_open else "Источники — развернуть",
             whole + "\n\nСтроки с файлами: что на каком экране, звук, "
             "моторы. Свёрнутые — картинке достаётся вся высота окна.")
 
-    def _add_kinetic(self, after=None, path: str = "") -> "Row":
-        """Another row for the chain, under the last one that has a file."""
-        rows = self.kinetic_rows()
-        row = Row(f"Kinetic {len(rows) + 1}", "", self._pick, self._load,
-                  motors=True, on_add=self._add_kinetic,
-                  on_less=self._less_kinetic)
+    # -- the chains ----------------------------------------------------------
+
+    def _add_row(self, after=None, path: str = "", times: int = 1) -> "Row":
+        """Another row at the end of a chain, ready to be filled in."""
+        group = after.group if after is not None else "Kinetic"
+        rows = self.chain_rows(group)
+        row = self._new_row(f"{group} {len(rows) + 1}",
+                            rows[0].screen if rows else "", group=group,
+                            chain=True, head=False,
+                            motors=bool(rows and rows[0].motors))
         if path:
             row.field.setText(path)
+        if times > 1:
+            row.repeat.setValue(int(times))
         row._shown()
-        where = self.source_rows.indexOf(rows[-1]) + 1
-        self.source_rows.insertWidget(where, row)
         self.rows.append(row)
         self._say_sources()
         return row
 
-    def _less_kinetic(self, row) -> None:
-        """Take one row out of the chain. The first one stays, empty."""
-        rows = self.kinetic_rows()
+    def _less_row(self, row) -> None:
+        """Take one row out of its chain, and renumber what is left."""
+        rows = self.chain_rows(row.group)
         if row is rows[0]:
             row.field.clear()
             row.note.clear()
             row._shown()
         else:
-            self.source_rows.removeWidget(row)
+            self.groups[row.group].drop(row)
             self.rows.remove(row)
             row.setParent(None)
             row.deleteLater()
-            for number, one in enumerate(self.kinetic_rows()[1:], start=2):
-                one.title = f"Kinetic {number}"
+            self._renumber(row.group)
         self._say_sources()
         self._load()
 
-    def _fill_chain(self, paths: list) -> None:
-        """Lay a list of motor files down the chain's rows, making them as
+    def _renumber(self, group: str) -> None:
+        """`Top`, `Top 2`, `Top 3`: down the chain as it stands, names and all."""
+        for number, row in enumerate(self.chain_rows(group)[1:], start=2):
+            row.rename(f"{group} {number}")
+
+    def _spread(self, row) -> None:
+        """This row's count into the same place in every other chain.
+
+        A five second insert is nearly always the same insert on all three
+        screens and on the motors, and typing the same number four times is
+        four chances to type it three times.
+        """
+        rows = self.chain_rows(row.group)
+        if row not in rows:
+            return
+        where = rows.index(row)
+        times = row.times
+        touched = []
+        for group in self.CHAINS:
+            if group == row.group:
+                continue
+            others = self.chain_rows(group)
+            if where < len(others) and others[where].repeat is not None:
+                others[where].repeat.setValue(times)
+                touched.append(group)
+        if touched:
+            logfile.write(f"×{times} from {row.title} to "
+                          + ", ".join(touched))
+
+    def _loops_changed(self, on: bool) -> None:
+        """Show the counters or put them away, and rebuild the timeline."""
+        for row in self.rows:
+            row.show_loops(on)
+        logfile.write(f"loops {'on' if on else 'off'}")
+        if getattr(self, "_restoring", False):
+            return
+        self._say_sources()
+        self._remember()
+        self._load()
+
+    def _repeat_changed(self, row) -> None:
+        """A count is a length, so the whole timeline is built again."""
+        if getattr(self, "_restoring", False):
+            return
+        self._load()
+
+    def _fill_chain(self, group: str, entries: list) -> None:
+        """Lay a list of (file, count) down a chain's rows, making them as
         needed and emptying whatever is left over."""
-        rows = self.kinetic_rows()
-        while len(rows) < len(paths):
-            rows.append(self._add_kinetic())
-        for row, path in zip(rows, paths):
+        rows = self.chain_rows(group)
+        while len(rows) < len(entries):
+            rows.append(self._add_row(rows[-1]))
+        for row, (path, times) in zip(rows, entries):
             row.field.setText(str(path))
+            if row.repeat is not None:
+                row.repeat.setValue(max(1, int(times)))
             row._shown()
-        for row in rows[len(paths):]:
+        for row in rows[len(entries):]:
             row.field.clear()
             row.note.clear()
+            if row.repeat is not None:
+                row.repeat.setValue(1)
             row._shown()
 
     def _load(self) -> None:
@@ -3620,18 +3995,26 @@ class Viewer(QMainWindow):
         self._load_motors()
         self._moved_to = None
         for row in self.rows:
-            if row.sound or row.motors:
-                continue
-            text = row.field.text().strip()
-            row._shown()
-            if not text:
+            if not row.sound and not row.motors:
+                row._shown()
                 row.note.setText("")
+                row.note.setStyleSheet("color:#8fbf8f;")
+        for row in self.rows:
+            if row.sound or row.motors or not row.head:
+                continue          # a row below a head plays as part of its chain
+            # The overlay is one file over one screen and has no chain of its
+            # own; a screen is whatever its group's rows come to, in order.
+            entries = ([(row.field.text().strip(), 1)] if row.overlay
+                       else self._entries(row.group))
+            entries = [one for one in entries if one[0]]
+            if not entries:
                 continue
+            text = entries[0][0]
             try:
                 # A frame keeps its own size: where it sits on the screen is
                 # decided below, not by resampling it into the screen's shape.
-                stream = player.open_source(
-                    text, None if row.overlay else self._pixels(row.screen))
+                stream = player.open_chain(
+                    entries, None if row.overlay else self._pixels(row.screen))
                 screen = screen_gpu.Screen(self.device, stream.movie)
             except Exception as error:  # noqa: BLE001 -- shown beside the field
                 row.note.setText(str(error)[:60])
@@ -3662,22 +4045,19 @@ class Viewer(QMainWindow):
                         screen.planes[1].texture,
                         screen.ycocg, screen.alpha_from, screen.uv_scale)
                     self.solid.set_video_opacity(1.0)
-            if stream.rate:
-                row.note.setText(f"{stream.movie.width}x{stream.movie.height}  "
-                                 f"{stream.movie.kind}  {stream.rate:g} fps  "
-                                 f"{stream.duration:.2f} s")
-            elif stream.movie.was_fitted:
-                came = stream.movie.came_as
-                row.note.setText(f"{came[0]}x{came[1]} fitted into "
-                                 f"{stream.movie.width}x{stream.movie.height}  "
-                                 f"{stream.movie.kind}")
-            else:
-                row.note.setText(f"{stream.movie.width}x{stream.movie.height}  "
-                                 f"{stream.movie.kind}")
-            row.note.setStyleSheet("color:#8fbf8f;")
+            # A chain reaching a block of another shape re-shapes the
+            # surface under it rather than becoming a different screen, so
+            # everything holding this one goes on holding the same object.
+            at = len(self.streams) - 1
+            if hasattr(stream, "links"):
+                stream.on_change = (
+                    lambda _chain, at=at, row=row: self._reshape(at, row))
+            self._say_stream(row, stream)
             logfile.write(f"{Path(text).name}: {stream.movie.width}x"
                           f"{stream.movie.height} {stream.movie.kind} "
-                          f"{stream.movie.frames} frames {stream.duration:.2f} s")
+                          f"{stream.movie.frames} frames {stream.duration:.2f} s"
+                          + (f"  chained: {stream.describe()}"
+                             if hasattr(stream, "links") else ""))
 
         self._gains_changed()
         # And, if this mode is on, whatever the panel is asking of them. The
@@ -3714,6 +4094,87 @@ class Viewer(QMainWindow):
         # to do again, so it is written down as soon as it is loaded and not
         # left to depend on the window being closed politely.
         self._remember()
+
+    def _say_stream(self, row, stream) -> None:
+        """What each row of a chain is worth, beside that row.
+
+        Beside that row and not all of it beside the first, because somebody
+        looking for the block that is the wrong length looks at the block, and
+        what the whole thing comes to is on the heading above them already.
+        """
+        links = getattr(stream, "links", None)
+        if links is not None:
+            filled = [one for one in self.chain_rows(row.group)
+                      if one.field.text().strip()]
+            for one, link in zip(filled, links):
+                if link.still and one.repeat is not None:
+                    # Nothing to play twice: for a picture the count is a
+                    # while to hold it up for, so the box says so.
+                    one.repeat.setPrefix("")
+                    one.repeat.setSuffix(" с")
+                over = f" ×{link.passes}" if link.passes > 1 else ""
+                one.note.setText(
+                    f"{link.movie.width}x{link.movie.height}  "
+                    f"{link.movie.kind}  {link.span} кадров{over}  "
+                    f"с {link.first / stream.rate:.1f} с")
+            return
+        if row.repeat is not None:
+            row.repeat.setPrefix("× ")
+            row.repeat.setSuffix("")
+        if stream.rate:
+            row.note.setText(f"{stream.movie.width}x{stream.movie.height}  "
+                             f"{stream.movie.kind}  {stream.rate:g} fps  "
+                             f"{stream.duration:.2f} s")
+        elif stream.movie.was_fitted:
+            came = stream.movie.came_as
+            row.note.setText(f"{came[0]}x{came[1]} fitted into "
+                             f"{stream.movie.width}x{stream.movie.height}  "
+                             f"{stream.movie.kind}")
+        else:
+            row.note.setText(f"{stream.movie.width}x{stream.movie.height}  "
+                             f"{stream.movie.kind}")
+
+    def _reshape(self, at: int, row) -> None:
+        """A chain has reached a block of another size or another codec.
+
+        The screen takes the new shape and the card is told again. Called from
+        inside the chain as it turns over, which is while frames are being
+        gathered and before anything has been recorded into an encoder -- and
+        which is a thread of the render's own while a file is being written.
+        So the card is dealt with either way and the window only where there
+        is a window to deal with: a widget read from another thread is the
+        kind of fault that shows up once a fortnight on somebody else's
+        machine. Nothing is lost by skipping it. The brightness and the
+        re-bake are kept on the surface itself and survive the reshaping;
+        what the widgets would have done is set them to what they already are.
+        """
+        if at >= len(self.screens) or at >= len(self.streams):
+            return
+        stream, screen = self.streams[at], self.screens[at]
+        movie = stream.movie
+        if screen.fits(movie):
+            return
+        screen.adopt(movie)
+        self._on_card.pop(at, None)
+        logfile.write(f"{row.title}: the chain reached {movie.width}x"
+                      f"{movie.height} {movie.kind}; the surface was remade")
+        if self.solid is None:
+            return
+        if row.overlay:
+            self.frame_covers = self._covers(row, movie)
+            self.solid.set_frame(row.screen, screen.planes[0].texture,
+                                 screen.planes[1].texture, screen.ycocg,
+                                 screen.alpha_from, screen.uv_scale,
+                                 self.frame_covers)
+        elif row.screen in self.solid.calibration:
+            self.solid.set_video(row.screen, screen.planes[0].texture,
+                                 screen.planes[1].texture, screen.ycocg,
+                                 screen.alpha_from, screen.uv_scale)
+        if QThread.currentThread() is not self.thread():
+            return
+        self._gains_changed()
+        if self.mode.currentText() == "ReBake":
+            self._rebake_changed()
 
     # -- time ----------------------------------------------------------------
 
@@ -4156,9 +4617,23 @@ class Viewer(QMainWindow):
             self.slider.set_marks([])
 
     def _mark_span(self) -> None:
-        """Tell the slider how long the whole thing is, for its marks."""
-        if hasattr(self, "slider"):
-            self.slider.set_span(self.clock.duration)
+        """Tell the slider how long the whole thing is, and where the joins are.
+
+        Every chain at once, deduplicated to the tenth of a second: the
+        screens and the motors are usually cut in the same places, and three
+        lines drawn over each other are one line drawn three times.
+        """
+        if not hasattr(self, "slider"):
+            return
+        self.slider.set_span(self.clock.duration)
+        marks: dict = {}
+        for stream in self.streams:
+            for at, name in getattr(stream, "joins", []):
+                marks.setdefault(round(at, 1), name)
+        if self.motors is not None and self.motors.fps:
+            for frame, name in self.motors.boundaries:
+                marks.setdefault(round(frame / self.motors.fps, 1), name)
+        self.slider.set_marks(sorted(marks.items()))
 
     def _load_sound(self) -> None:
         """Open the WAV, or let go of the one that was open."""
@@ -4208,8 +4683,9 @@ class Viewer(QMainWindow):
         row = rows[0]
         self.motors = None
         self._moved_to = None
-        chain = [one.field.text().strip() for one in rows
-                 if one.field.text().strip()]
+        filled = [one for one in rows if one.field.text().strip()]
+        chain = [one.field.text().strip() for one in filled]
+        times = [one.times for one in filled]
         if not chain:
             self.solid.rest_cells()
             self._pick_top()
@@ -4225,11 +4701,12 @@ class Viewer(QMainWindow):
             beside = kinetic.parts_beside(chain[0])
             if len(beside) > 1:
                 chain = [str(one) for one in beside]
-                self._fill_chain(chain)
+                times = [times[0]] + [1] * (len(chain) - 1)
+                self._fill_chain("Kinetic", list(zip(chain, times)))
                 logfile.write(f"kinetic: {Path(chain[0]).name} is one of "
                               f"{len(chain)} parts; the rest came with it")
         try:
-            self.motors = kinetic.Motors(chain)
+            self.motors = kinetic.Motors(chain, times)
             if self.cell_at is None:
                 self.cell_at = self.mesh.cell_middles(scene3d.KINETIC_SCREEN)
                 self.cell_is = kinetic.cell_addresses(self.cell_at)
@@ -4251,17 +4728,16 @@ class Viewer(QMainWindow):
         filled = [one for one in rows if one.field.text().strip()]
         for one, part in zip(filled, self.motors.parts):
             here = part.first / self.motors.fps
+            over = f" ×{part.repeats}" if part.repeats > 1 else ""
             one.note.setText(
-                f"{part.length} кадров, с {here:.1f} с"
+                f"{part.length} кадров{over}, с {here:.1f} с"
                 + (f"  часть {part.number} из {part.of}" if part.of > 1 else ""))
         row.note.setText(self.motors.describe())
         for bad in self.motors.complaints():
             row.note.setText(bad[:60])
             row.note.setStyleSheet("color:#d9a441;")
             logfile.write(f"kinetic: {bad}")
-        self.slider.set_marks(
-            [(part.first / self.motors.fps, part.name)
-             for part in self.motors.parts[1:]])
+        self._mark_span()
         logfile.write(", ".join(Path(one).name for one in chain)
                       + f": {self.motors.describe()}")
         self._say_sources()

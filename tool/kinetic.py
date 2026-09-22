@@ -203,14 +203,20 @@ class Part:
         self.number = int(info.get("part") or 1)
         self.of = int(info.get("total_parts") or 1)
         self.first = 0                  # filled in by the chain below
+        self.repeats = 1                # and how many times over it is played
 
     @property
     def name(self) -> str:
         return self.path.name
 
+    @property
+    def span(self) -> int:
+        """Every frame this part takes up, its repeats counted in."""
+        return self.length * self.repeats
+
     def __repr__(self) -> str:
         return (f"<{self.name} {self.number}/{self.of} "
-                f"{self.length} frames at {self.first}>")
+                f"{self.length} frames x{self.repeats} at {self.first}>")
 
 
 def parts_beside(path: str | Path) -> list[Path]:
@@ -248,12 +254,17 @@ class Motors:
     next part says nothing about keeps the value it had.
     """
 
-    def __init__(self, paths: str | Path | list) -> None:
+    def __init__(self, paths: str | Path | list, repeats=None) -> None:
         if isinstance(paths, (str, Path)):
             paths = [paths]
         self.paths = [Path(one) for one in paths]
         if not self.paths:
             raise KineticError("no kinetic file given")
+        # How many times each part is played before the next one starts. One
+        # each unless somebody has asked for more, which is what the count
+        # beside a row means.
+        times = list(repeats or [])
+        times += [1] * (len(self.paths) - len(times))
 
         self.parts: list[Part] = []
         for path in self.paths:
@@ -271,9 +282,10 @@ class Motors:
                 f"{self.parts[0].name} is {self.fps:g}; a chain has to be one rate")
 
         at = 0
-        for part in self.parts:
+        for part, over in zip(self.parts, times):
+            part.repeats = max(1, int(over))
             part.first = at
-            at += part.length
+            at += part.length * part.repeats
         # The last frame counts as a whole frame, the same as for one file.
         self.frames = at + 1
         self.path = self.parts[0].path
@@ -305,8 +317,23 @@ class Motors:
                         if group == "pusher" \
                                 and not 0 <= which < self.pusher.shape[1]:
                             continue
-                        moved = [dict(one, frame=int(one.get("frame", 0)) + part.first)
-                                 for one in segments if isinstance(one, dict)]
+                        clean = [one for one in segments if isinstance(one, dict)]
+                        moved = []
+                        for pass_no in range(part.repeats):
+                            opens = part.first + pass_no * part.length
+                            if pass_no and clean:
+                                # A pass has to begin where the part begins,
+                                # not where the pass before it ended. A segment
+                                # of no length reports its own `start`, which is
+                                # the exporter's own way of saying "be here" --
+                                # so the snap lands on the frame the loop turns
+                                # over rather than drifting into it.
+                                back = float(clean[0].get("start", 0.0))
+                                moved.append({"frame": opens, "length": 0,
+                                              "start": back, "dest": back})
+                            moved += [dict(one,
+                                           frame=int(one.get("frame", 0)) + opens)
+                                      for one in clean]
                         gathered.setdefault((group, row, which), []).extend(moved)
 
         for (group, row, which), segments in gathered.items():
@@ -325,8 +352,14 @@ class Motors:
 
     @property
     def boundaries(self) -> list:
-        """Where each part starts, for the timeline to mark: (frame, name)."""
-        return [(part.first, part.name) for part in self.parts[1:]]
+        """Where each part, and each repeat of it, starts: (frame, name)."""
+        marks = []
+        for part in self.parts:
+            for pass_no in range(part.repeats):
+                if part.first == 0 and pass_no == 0:
+                    continue          # the start of the piece is not a join
+                marks.append((part.first + pass_no * part.length, part.name))
+        return marks
 
     def complaints(self) -> list[str]:
         """Anything about this chain worth saying out loud in the row.
@@ -356,7 +389,10 @@ class Motors:
         return int(np.clip(round(seconds * self.fps), 0, self.frames - 1))
 
     def describe(self) -> str:
+        passes = sum(one.repeats for one in self.parts)
         many = (f"{len(self.parts)} files  " if len(self.parts) > 1 else "")
+        if passes > len(self.parts):
+            many += f"{passes} passes  "
         return (f"{many}{self.motors} motors  {self.frames - 1} frames  "
                 f"{self.fps:g} fps  {self.duration:.2f} s")
 
