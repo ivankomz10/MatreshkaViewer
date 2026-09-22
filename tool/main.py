@@ -97,7 +97,6 @@ SHORT = {
 CHAIN_COLUMN = 58 + 3 * 24 + 3 * 4 + 6
 
 LINK_SIDE = 24
-LINK_COLUMN = LINK_SIDE + 10
 
 ICONS = "icons"
 _drawn: dict = {}
@@ -517,24 +516,20 @@ class Row(QWidget):
                 self.add_button.clicked.connect(lambda: on_add(self))
             inline.addWidget(self.add_button)
 
-            self.less_button = iconed(
-                QPushButton(), "clear", "Убрать строку",
-                "Убрать эту строку из цепочки.", side=24)
-            self._name(self.less_button, "less")
+            # Only where there is something to take away. The first row of a
+            # chain is not one of several, it is where the chain starts: it
+            # empties with the clear button like any other row and cannot be
+            # removed, so a button offering to remove it is a button that does
+            # nothing.
             if on_less is not None:
+                self.less_button = iconed(
+                    QPushButton(), "clear", "Убрать строку",
+                    "Убрать эту строку из цепочки.", side=24)
+                self._name(self.less_button, "less")
                 self.less_button.clicked.connect(lambda: on_less(self))
-            inline.addWidget(self.less_button)
+                inline.addWidget(self.less_button)
         inline.addStretch(1)
         layout.addWidget(chain_box)
-
-        # A column of its own for the link button, which lives between two of
-        # these rows rather than in any one of them. Every row leaves the same
-        # gap so that everything past it -- the sliders, the numbers, the
-        # notes -- still lines up down the window.
-        self.link_gap = QWidget()
-        self.link_gap.setObjectName(f"qa_linkgap_{tag}")
-        self.link_gap.setFixedWidth(LINK_COLUMN)
-        layout.addWidget(self.link_gap)
 
         self.how = None
         if overlay:
@@ -736,6 +731,16 @@ class Group(QWidget):
         stacked.setContentsMargins(0, 0, 0, 0)
         stacked.setSpacing(2)
 
+        # A strip rather than a bare button, because something may have to
+        # stand in the heading beside it -- and beside it, not inside it: a
+        # button within the button that folds the group is a click that lands
+        # on the wrong one every so often.
+        strip = QWidget()
+        strip.setObjectName(f"qa_groupstrip_{tag}")
+        self.beside = QHBoxLayout(strip)
+        self.beside.setContentsMargins(0, 0, 0, 0)
+        self.beside.setSpacing(6)
+
         self.head = QPushButton()
         self.head.setObjectName(f"qa_grouphead_{tag}")
         self.head.setFlat(True)
@@ -745,7 +750,8 @@ class Group(QWidget):
         # hands its handler a bool, and a bool landing in an argument that
         # means "open it" is a fold that never unfolds.
         self.head.clicked.connect(lambda: fold(self))
-        stacked.addWidget(self.head)
+        self.beside.addWidget(self.head, 1)
+        stacked.addWidget(strip)
 
         self.body = QWidget()
         self.body.setObjectName(f"qa_groupbody_{tag}")
@@ -753,6 +759,10 @@ class Group(QWidget):
         self.rows.setContentsMargins(0, 0, 0, 0)
         self.rows.setSpacing(6)
         stacked.addWidget(self.body)
+
+    def carry(self, widget) -> None:
+        """Something of its own at the right-hand end of the heading."""
+        self.beside.addWidget(widget)
 
     def hold(self, row, where: int = -1) -> None:
         if where < 0:
@@ -912,12 +922,19 @@ class Viewer(QMainWindow):
         stacked.addWidget(self.sources_body)
         layout.addWidget(self.sources)
 
-        # The link between the two sliders it links, rather than off in the
-        # bar below with the switches that are about the building. Sitting in
-        # the gap between the Top and Bottom rows it needs no label to say
-        # which two it ties, so it has none.
+        # In the Bottom heading, rather than off in the bar below with the
+        # switches that are about the building, and rather than floating over
+        # the panel where it used to be. Floating cost it three bugs: it moved
+        # when the rows changed parent, it had to be put back by hand after
+        # every resize, and it went on hanging over a screen whose rows had
+        # been folded away. In the heading it is an ordinary widget -- it
+        # appears, moves and disappears because the layout says so.
+        #
+        # The heading it is in is the one that says Bottom, and its hover says
+        # what it ties; on show even while those rows are folded, because the
+        # link goes on tying them whether or not the sliders are visible.
         self.linked = iconed(
-            QPushButton(self.sources_body), "link", "Связать Top и Bottom",
+            QPushButton(), "link", "Связать Top и Bottom",
             "Связывает ползунки Top и Bottom в том отношении, в каком они "
             "стоят на момент включения. Выставьте каждый так, чтобы экраны "
             "читались одинаково, нажмите это — и дальше любой из ползунков "
@@ -935,10 +952,10 @@ class Viewer(QMainWindow):
                                            else faded("link")))
         self.linked.toggled.connect(self._link_changed)
         self.linked.setIcon(faded("link"))
-        # Not among the scene-only ones any more. It used to sit in the bar
-        # with the switches about the building and went away with them; here
-        # it belongs to the two sliders beside it, and those are on show in
-        # every mode.
+        self.groups["Bottom"].carry(self.linked)
+        # Not among the scene-only ones. It used to sit in the bar with the
+        # switches about the building and went away with them; the two sliders
+        # it ties are on show in every mode.
 
         # max_fps defaults to 30 in rendercanvas, which is not a thing to
         # discover by wondering why sixty frames a second look like thirty.
@@ -1408,13 +1425,10 @@ class Viewer(QMainWindow):
         if files:
             logfile.write(f"carried over from the last session: {files} files")
             self._load()
-        # The line the folded panel shows, and the link that belongs to the
-        # rows: both have to agree with whether the rows are up.
+        # The line the folded panel shows has to agree with whether the rows
+        # are up. The link needs nothing: it stands in the Bottom heading and
+        # goes away with the panel because the panel is what holds it.
         self._say_sources()
-        self.linked.setVisible(self.sources_open)
-        # Once the rows have been given their sizes, which happens after this
-        # returns rather than during it.
-        QTimer.singleShot(0, self._lay_link)
         # Written once at the start as well, so the file says what the window
         # is actually showing even in a session where nothing was touched --
         # and so a first run leaves the defaults behind in a readable form.
@@ -2529,9 +2543,6 @@ class Viewer(QMainWindow):
                          self.rebake_before, self.rebake_after)
         for widget in self.overlays:
             widget.setVisible(False)
-        self._link_later = QTimer(self)
-        self._link_later.setSingleShot(True)
-        self._link_later.timeout.connect(self._lay_link)
 
         self._hint_at = None
         self._hint_name = QTimer(self)
@@ -2753,11 +2764,6 @@ class Viewer(QMainWindow):
                     walk(item.layout())
 
         walk(self.centralWidget().layout())
-        # The link button is not in the layout -- it is placed by hand between
-        # two rows -- so the walk above cannot find it, and without this it
-        # would be the one thing left floating over a full screen picture.
-        if hasattr(self, "linked"):
-            found.append(self.linked)
         return found
 
     def _toggle_full(self) -> None:
@@ -2795,13 +2801,6 @@ class Viewer(QMainWindow):
     def eventFilter(self, watched, event):  # noqa: N802 -- Qt naming
         if watched is self.canvas and event.type() == QEvent.Type.Resize:
             self._lay_overlays()
-        if (watched is self.centralWidget()
-                and event.type() in (QEvent.Type.Resize, QEvent.Type.Show)):
-            # Not now: a filter runs before the widget's own handler, and the
-            # rows have not been given their new places yet. Reading them here
-            # gives the sizes from before the resize, which is how the button
-            # came to stay where it was while everything under it moved.
-            self._link_later.start(0)
         if watched in HINTS:
             if event.type() == QEvent.Type.Enter:
                 self._hint(watched)
@@ -2936,38 +2935,6 @@ class Viewer(QMainWindow):
             tag.adjustSize()
             tag.move(int(middle - tag.width() / 2),
                      max(edge, tall - tag.height() - edge - foot))
-
-    def _lay_link(self) -> None:
-        """Put the link button in the gap between the two rows it ties.
-
-        Placed against the widgets themselves rather than at a counted
-        distance: where the sliders begin depends on the longest label and on
-        whatever the machine's own style does with padding, and neither is
-        knowable from here.
-        """
-        if not hasattr(self, "linked"):
-            return
-        top, bottom = self.head_row("Top"), self.head_row("Bottom")
-        if top is None or bottom is None or top.gain is None:
-            return
-        # Between the two groups rather than between the two rows. Each
-        # screen is a run of rows now with a heading of its own, so there is
-        # no longer any gap between the Top slider and the Bottom one -- but
-        # there is still the seam where one screen ends and the next begins,
-        # and every row leaves the link's column empty across it.
-        above, below = self.groups["Top"], self.groups["Bottom"]
-        # In the coordinates of whatever the button is a child of, which is
-        # the panel of rows and not the window: `move` is relative to the
-        # parent, and measuring against the window put the button a header's
-        # height too low and the layout's own margin too far left.
-        holder = self.linked.parentWidget() or self.centralWidget()
-        column = top.link_gap.geometry()
-        middle = top.mapTo(holder, column.center()).x()
-        between = (above.mapTo(holder, QPoint(0, above.height())).y()
-                   + below.mapTo(holder, QPoint(0, 0)).y()) // 2
-        self.linked.move(middle - self.linked.width() // 2,
-                         between - self.linked.height() // 2)
-        self.linked.raise_()
 
     def _lay_frame_edge(self) -> None:
         """Where the render's rectangle lands on the canvas, as a line.
@@ -3790,20 +3757,14 @@ class Viewer(QMainWindow):
             open_it = not self.sources_open
         self.sources_open = bool(open_it)
         self.sources_body.setVisible(self.sources_open)
-        self.linked.setVisible(self.sources_open
-                               and not getattr(self, "_full", False))
         self._say_sources()
         self._remember()
-        if open_it and hasattr(self, "_link_later"):
-            self._link_later.start(0)
 
     def _fold_group(self, group, open_it=None) -> None:
         """One screen's rows away, the rest left as they were."""
         group.fold(open_it)
         self._say_sources()
         self._remember()
-        if hasattr(self, "_link_later"):
-            self._link_later.start(0)
 
     def _group_line(self, title: str) -> str:
         """What one heading says about itself: the files, and how long."""

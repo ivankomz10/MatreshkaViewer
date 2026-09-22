@@ -138,34 +138,30 @@ def test_the_link_says_whether_it_is_on(app):
 
 
 def test_the_link_covers_nothing_and_nothing_covers_it(app):
-    """It is placed by hand between two rows, which is how it once overlapped."""
+    """It shares the Bottom heading with the button that folds the group."""
     link = app.at("qa_link")
     landed = app.desk.under(*link.middle)
     assert landed is not None and landed.qa == "qa_link", (
         f"a click on the link would land on {landed}")
     for qa in ("qa_clear_top", "qa_gain_top", "qa_clear_bottom", "qa_gain_bottom",
-               "qa_path_top", "qa_path_bottom"):
+               "qa_path_top", "qa_path_bottom", "qa_grouphead_bottom"):
         assert not link.overlaps(app.at(qa)), f"the link covers {qa}"
-    # It sits in the gap every row leaves for it, not over a row's own widgets.
-    gap = app.at("qa_linkgap_top")
-    assert gap.left - 2 <= link.left and link.left + link.wide <= gap.left + gap.wide + 2, (
-        f"the link at {link.rect} is outside its column at {gap.rect}")
 
 
 def test_the_link_moves_with_the_window(app):
-    """It is not in any layout, so it has to be put in its place by hand."""
-    gap = app.at("qa_linkgap_top")
+    """It is in a layout now, so the layout is what has to carry it."""
+    was = app.at("qa_link")
     app.front()
     left, top, right, _ = winput.rect_of(app.hwnd)
     winput.click(min(left + 200, right - 20), top + 8, count=2)   # maximise
     time.sleep(1.0)
-    moved_gap = app.at("qa_linkgap_top")
-    assert moved_gap.left != gap.left, "the window did not change shape"
     link = app.at("qa_link")
-    assert (moved_gap.left - 2 <= link.left
-            and link.left + link.wide <= moved_gap.left + moved_gap.wide + 2), (
-        f"after the resize the link is at {link.rect}, its column at "
-        f"{moved_gap.rect}")
+    assert link.left != was.left, "the window did not change shape"
+    landed = app.desk.under(*link.middle)
+    assert landed is not None and landed.qa == "qa_link", (
+        f"after the resize a click on the link lands on {landed}")
+    assert not link.overlaps(app.at("qa_grouphead_bottom")), (
+        "after the resize the link sits on the heading that folds the group")
     left, top, right, _ = winput.rect_of(app.hwnd)
     winput.click(min(left + 200, right - 20), top + 8, count=2)   # and back
     time.sleep(1.0)

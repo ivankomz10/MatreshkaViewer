@@ -387,37 +387,65 @@ def test_the_rows_fold_away(window, tick):
     tick(0.2)
 
 
-def test_the_link_sits_between_the_two_rows_it_ties(window, tick):
-    """It is placed by hand, so where it lands is worth measuring.
+def test_the_link_stands_in_the_bottom_heading(window, tick):
+    """It is a widget in a layout now, and that is the whole point.
 
-    Measured in the coordinates of its own parent, which is the panel of
-    rows: `move` is relative to the parent, and computing the place against
-    the window instead put the button a header's height too low and the
-    layout's margin too far left.
+    It used to be placed by hand over the panel, and that cost three bugs in
+    a row: it moved when the rows changed parent, it had to be put back after
+    every resize, and it went on hanging over a screen whose rows had been
+    folded away. Nothing here measures a position -- what is asked is that the
+    layout owns it.
     """
     window._fold_sources(True)
+    window.groups["Bottom"].fold(True)
     tick(0.3)
-    window._lay_link()
-    tick(0.2)
 
+    group = window.groups["Bottom"]
+    assert window.linked.parentWidget() is not None
+    assert group.isAncestorOf(window.linked), (
+        "the link is not inside the Bottom group at all")
+    assert not group.body.isAncestorOf(window.linked), (
+        "the link is among the rows, so folding them would take it away")
+    # Beside the heading, not inside it: a button within the button that folds
+    # the group is a click that lands on the wrong one every so often.
+    assert not window.groups["Bottom"].head.isAncestorOf(window.linked)
+    assert window.linked.isVisible()
+
+    # Folding the rows it ties leaves it: the two sliders go on being tied
+    # whether or not anybody can see them.
+    window.groups["Bottom"].head.click()
+    tick(0.3)
+    assert not group.open and not group.body.isVisible()
+    assert window.linked.isVisible(), "the link went away with the rows"
+    was = window.linked.geometry()
+
+    # And the whole panel takes it with it, because the panel holds it.
+    window._fold_sources(False)
+    tick(0.3)
+    assert not window.linked.isVisible(), "the link hung over a folded panel"
+
+    window._fold_sources(True)
+    window.groups["Bottom"].fold(True)
+    tick(0.3)
+    assert window.linked.isVisible()
+    assert window.linked.geometry() == was or window.linked.geometry().isValid()
+
+
+def test_the_link_still_ties_the_two_sliders(window, tick):
+    """Moving house must not have unwired it."""
     top, bottom = window.head_row("Top"), window.head_row("Bottom")
-    holder = window.linked.parentWidget()
-    from PySide6.QtCore import QPoint
-    link = window.linked.geometry()
-    middle = link.center()
-
-    ends = top.mapTo(holder, QPoint(0, top.height())).y()
-    starts = bottom.mapTo(holder, QPoint(0, 0)).y()
-    assert ends - 4 <= middle.y() <= starts + 4, (
-        f"the link's middle is at y={middle.y()}, and the two rows it ties "
-        f"run from {ends} to {starts}")
-
-    column = top.link_gap.geometry()
-    left = top.mapTo(holder, column.topLeft()).x()
-    assert left - 2 <= link.left() and \
-        link.left() + link.width() <= left + column.width() + 2, (
-        f"the link at x={link.left()}..{link.left() + link.width()} is "
-        f"outside its column at {left}..{left + column.width()}")
+    top.gain.setValue(120)
+    bottom.gain.setValue(100)
+    window.linked.setChecked(True)
+    tick(0.2)
+    top.gain.setValue(60)
+    tick(0.2)
+    assert bottom.gain.value() != 100, (
+        "the other slider stayed put: the link is not tied to anything")
+    window.linked.setChecked(False)
+    top.gain.setValue(129)
+    bottom.gain.setValue(129)
+    tick(0.2)
 
 
 # -- chains on the screens, and loops ----------------------------------------
@@ -706,6 +734,30 @@ def test_the_counters_are_not_there_until_they_are_asked_for(window, clips, tick
 
     window.chain_rows("Top")[1].repeat.setValue(1)
     window.looping.setChecked(False)
+    window._fill_chain("Top", [(str(clips["top"]), 1)])
+    window._load()
+    tick(0.4)
+
+
+def test_the_first_row_of_a_chain_offers_no_way_to_remove_itself(window, clips, tick):
+    """It is where the chain starts, so there is nothing to remove it from."""
+    window._fill_chain("Top", [(str(clips["top"]), 1),
+                               (str(clips["top"]), 1)])
+    tick(0.2)
+    for group in window.CHAINS:
+        rows = window.chain_rows(group)
+        assert rows[0].less_button is None, (
+            f"the first {group} row has a remove button that does nothing")
+        assert rows[0].add_button is not None, (
+            f"the first {group} row cannot start a chain")
+    assert window.chain_rows("Top")[1].less_button is not None, (
+        "a row of the chain cannot be taken out")
+
+    # And the one that does have it takes itself away when it is pressed.
+    window.chain_rows("Top")[1].less_button.click()
+    tick(0.4)
+    assert len(window.chain_rows("Top")) == 1, "the row stayed"
+
     window._fill_chain("Top", [(str(clips["top"]), 1)])
     window._load()
     tick(0.4)
