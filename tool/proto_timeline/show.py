@@ -31,6 +31,17 @@ CANVASES = [("Tiles-pixels", "Top"),
             ("Lamel-pixels", "Lamels")]
 CALLED = dict(CANVASES)
 
+# Every show file carries one opaque black still, looped across the whole 22
+# minutes, on the level behind the content. It is a backdrop, not a clip: the
+# viewer already chooses its own backing -- black or the calibration picture --
+# and reading a second answer out of the show file only gives the two a way to
+# disagree. So it never reaches the timeline.
+BACKDROPS = ("black.png", "black-lameli.png")
+
+
+def is_backdrop(clip: dict) -> bool:
+    return Path(clip.get("path", "")).name.lower() in BACKDROPS
+
 
 @dataclass
 class Clip:
@@ -195,6 +206,8 @@ def read(path: Path) -> Show:
 
     for canvas, row in CANVASES:
         for ident, clip in (raw.get("video", {}).get(canvas) or {}).items():
+            if is_backdrop(clip):
+                continue
             got = frames_of(clip["path"], known)
             show.clips.append(Clip(
                 kind="video", row=row, level=int(clip.get("level", 0)),
