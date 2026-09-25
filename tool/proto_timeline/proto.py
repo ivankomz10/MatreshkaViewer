@@ -70,6 +70,8 @@ KEYS = [
     ("I / O", "на начало / конец клипа"),
     ("[ / ]", "клип слева / справа от плейхеда"),
     ("L", "луп"),
+    ("Shift+L", "луп на весь клип"),
+    ("Shift+тащить", "перенести луп целиком"),
     ("Home / End", "в начало / в конец"),
     ("F", "вся длина"),
     ("Tab", "другой вариант"),
@@ -144,17 +146,6 @@ class Ruler(QWidget):
     def paintEvent(self, event) -> None:      # noqa: N802
         brush = QPainter(self)
         brush.fillRect(self.rect(), QColor("#171717"))
-        loop = self.window_.loop_region()
-        if loop is not None:
-            left = int(self.axis.x_of(loop[0]))
-            right = int(self.axis.x_of(loop[1]))
-            on = self.window_.looping
-            brush.fillRect(QRect(left, 0, max(2, right - left), 6),
-                           QColor("#f0c040" if on else "#463d20"))
-            brush.setPen(QPen(QColor("#f0c040" if on else "#5a5030"),
-                              2 if on else 1))
-            brush.drawLine(left, 0, left, self.height())
-            brush.drawLine(right, 0, right, self.height())
         brush.setFont(QFont(MONO, 8))
         for seconds in _nice_steps(self.axis):
             x = self.axis.x_of(seconds * showfile.FPS)
@@ -186,6 +177,115 @@ class Ruler(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         self.holding = False
+
+
+class LoopBar(QWidget):
+    """The loop as a range of its own, on a strip of its own.
+
+    A row above the ruler, the way the show editor does it: the loop is a
+    place on the timeline, not a property of whatever happens to be selected.
+    Drag the ends to trim it; drag anywhere else to draw a new one; hold
+    Shift to slide the whole loop without changing its length.
+
+    Drawing wins over sliding on purpose. The loop opens on the whole show,
+    so there is no empty strip left over -- when sliding had priority, every
+    attempt to draw a new loop dragged the old one instead, and there was no
+    way to make a short loop at all.
+    """
+
+    changed = Signal(int, int)
+    GRIP = 5
+
+    def __init__(self, window) -> None:
+        super().__init__()
+        self.window_ = window
+        self.axis = window.axis
+        self.setFixedHeight(13)
+        self.holding = None            # low | high | move | new
+        self.grabbed = 0
+        self.setMouseTracking(True)
+
+    # -- drawing -------------------------------------------------------------
+
+    def paintEvent(self, event) -> None:      # noqa: N802
+        brush = QPainter(self)
+        brush.fillRect(self.rect(), QColor("#141414"))
+        low, high = self.window_.loop_in, self.window_.loop_out
+        left, right = int(self.axis.x_of(low)), int(self.axis.x_of(high))
+        on = self.window_.looping
+        body = QColor("#f0c040") if on else QColor("#5f5322")
+        brush.fillRect(QRect(left, 2, max(3, right - left), self.height() - 4),
+                       body)
+        # The grips, so it is obvious the ends can be taken hold of.
+        brush.setPen(QPen(QColor("#1a1a1a")))
+        for x in (left, right):
+            brush.fillRect(QRect(x - 2, 0, 4, self.height()),
+                           QColor("#ffe9a0") if on else QColor("#8a7a3a"))
+        if right - left > 90:
+            brush.setFont(QFont(MONO, 7, QFont.Weight.Bold))
+            brush.setPen(QPen(QColor("#1a1a1a" if on else "#b8a860")))
+            brush.drawText(left + 7, self.height() - 3,
+                           f"LOOP  {(high - low) / showfile.FPS:.1f}с")
+        brush.setPen(QPen(QColor("#3a3a3a")))
+        brush.drawText(4, self.height() - 3, "луп")
+        if right - left > 240 and not on:
+            brush.setFont(QFont(MONO, 7))
+            brush.setPen(QPen(QColor("#6a5f30")))
+            brush.drawText(left + 76, self.height() - 3,
+                           "тащи — новый луп, за край — подрезать, "
+                           "Shift — перенести")
+        brush.end()
+
+    # -- mouse ---------------------------------------------------------------
+
+    def cursorShape(self, x: int):            # noqa: N802
+        low = int(self.axis.x_of(self.window_.loop_in))
+        high = int(self.axis.x_of(self.window_.loop_out))
+        if abs(x - low) <= self.GRIP or abs(x - high) <= self.GRIP:
+            return Qt.CursorShape.SizeHorCursor
+        return Qt.CursorShape.CrossCursor
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        x = event.position().x()
+        at = int(self.axis.frame_of(x))
+        low = int(self.axis.x_of(self.window_.loop_in))
+        high = int(self.axis.x_of(self.window_.loop_out))
+        sliding = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        if abs(x - low) <= self.GRIP:
+            self.holding = "low"
+        elif abs(x - high) <= self.GRIP:
+            self.holding = "high"
+        elif sliding and low < x < high:
+            self.holding = "move"
+            self.grabbed = at - self.window_.loop_in
+        else:
+            self.holding = "high"
+            self.changed.emit(at, at + 1)
+        self.drag(at)
+
+    def mouseMoveEvent(self, event) -> None:   # noqa: N802
+        x = event.position().x()
+        if self.holding is None:
+            self.setCursor(self.cursorShape(int(x)))
+            return
+        self.drag(int(self.axis.frame_of(x)))
+
+    def drag(self, at: int) -> None:
+        low, high = self.window_.loop_in, self.window_.loop_out
+        if self.holding == "low":
+            low = min(at, high - 1)
+        elif self.holding == "high":
+            high = max(at, low + 1)
+        elif self.holding == "move":
+            span = high - low
+            low = max(0, at - self.grabbed)
+            high = low + span
+        self.changed.emit(low, high)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self.holding = None
 
 
 def _nice_steps(axis: Axis) -> list:
@@ -642,6 +742,9 @@ class VariantA(QWidget):
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(2)
         left.addWidget(Preview(window), 1)
+        self.loopbar = LoopBar(window)
+        self.loopbar.changed.connect(window.set_loop_range)
+        left.addWidget(self.loopbar)
         self.ruler = Ruler(window)
         self.ruler.moved.connect(window.go_to)
         left.addWidget(self.ruler)
@@ -663,6 +766,7 @@ class VariantA(QWidget):
 
     def refresh(self) -> None:
         self.inspector.refresh()
+        self.loopbar.update()
         self.ruler.update()
         self.tracks.update()
 
@@ -750,6 +854,9 @@ class VariantB(QWidget):
         whole.setContentsMargins(0, 0, 0, 0)
         whole.setSpacing(2)
         whole.addWidget(Preview(window), 1)
+        self.loopbar = LoopBar(window)
+        self.loopbar.changed.connect(window.set_loop_range)
+        whole.addWidget(self.loopbar)
         self.ruler = Ruler(window)
         self.ruler.moved.connect(window.go_to)
         whole.addWidget(self.ruler)
@@ -764,6 +871,7 @@ class VariantB(QWidget):
 
     def refresh(self) -> None:
         self.inspector.refresh()
+        self.loopbar.update()
         self.ruler.update()
         self.tracks.update()
 
@@ -847,10 +955,26 @@ class Transport(QWidget):
         self.loop.setFixedWidth(58)
         self.loop.setToolTip(
             "Гонять плейхед по лупу и не выпускать, пока не отожмёшь (L).\n"
-            "Луп — это выбранный клип, а у клипа со своим диапазоном — он.")
+            "Сам луп — полоска над линейкой: тащи концы и середину.")
         self.loop.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.loop.toggled.connect(window.set_loop)
         line.addWidget(self.loop)
+
+        whole_clip = QPushButton("по клипу")
+        whole_clip.setFixedWidth(74)
+        whole_clip.setToolTip(
+            "Поставить луп на весь выбранный клип и включить его (Shift+L).")
+        whole_clip.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        whole_clip.clicked.connect(lambda: window.loop_the_clip())
+        line.addWidget(whole_clip)
+
+        everything = QPushButton("всё")
+        everything.setFixedWidth(40)
+        everything.setToolTip("Луп на всё шоу.")
+        everything.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        everything.clicked.connect(
+            lambda: window.set_loop_range(0, window.show_.length))
+        line.addWidget(everything)
 
         line.addSpacing(12)
         button("I", lambda: window.to_edge(False), "на начало клипа (I)", 28)
@@ -868,12 +992,11 @@ class Transport(QWidget):
 
     def refresh(self) -> None:
         self.play.setText("||" if self.window_.playing else ">")
-        loop = self.window_.loop_region()
-        said = (f"    луп {loop[0]}..{loop[1]}"
-                if loop is not None and self.window_.looping else "")
+        low, high = self.window_.loop_region()
         self.readout.setText(
             f"{showfile.timecode(self.window_.frame)}   "
-            f"{self.window_.frame} / {self.window_.show_.length}{said}")
+            f"{self.window_.frame} / {self.window_.show_.length}"
+            f"    луп {low}..{high}  ({(high - low) / showfile.FPS:.1f}с)")
 
 
 class Window(QMainWindow):
@@ -887,10 +1010,15 @@ class Window(QMainWindow):
         self.chosen = None
         self.playing = False
         self.looping = False
+        # A place on the timeline, not a property of the selection. Opens on
+        # the whole show so it is never empty and never a surprise.
+        self.loop_in = 0
+        self.loop_out = 79200
         self.backing = "Calibration"
         self.variant = next((n for n, (key, _) in enumerate(VARIANTS)
                              if key == first.upper()), 0)
         self.show_ = showfile.read(self.files[0])
+        self.loop_out = self.show_.length
         self.axis = Axis(self.show_.length)
 
         central = QWidget()
@@ -920,7 +1048,7 @@ class Window(QMainWindow):
         top.addWidget(fit)
         top.addWidget(QLabel("ЛКМ — выделить и тащить  ·  ПКМ — прокрутка  ·  "
                              "СКМ — плейхед сюда  ·  колесо — зум  ·  "
-                             "плейхед тащится за линейку"))
+                             "плейхед — за линейку, луп рисуется на полоске над ней"))
         top.addStretch(1)
         whole.addLayout(top)
 
@@ -988,12 +1116,12 @@ class Window(QMainWindow):
         now = time.perf_counter()
         gone, self.last = now - self.last, now
         at = self.frame + gone * showfile.FPS
-        loop = self.loop_region()
-        if self.looping and loop is not None:
+        low, high = self.loop_region()
+        if self.looping:
             # Round and round until the button is let go, which is the whole
             # point of the button.
-            if at >= loop[1] or at < loop[0]:
-                at = loop[0] + (at - loop[1]) % max(1, loop[1] - loop[0])
+            if at >= high or at < low:
+                at = low + (at - high) % max(1, high - low)
         elif at >= self.show_.length:
             at = self.show_.length
             self.playing = False
@@ -1003,22 +1131,37 @@ class Window(QMainWindow):
 
     def set_loop(self, on: bool) -> None:
         self.looping = bool(on)
-        loop = self.loop_region()
-        if self.looping and loop is not None \
-                and not loop[0] <= self.frame < loop[1]:
-            self.frame = loop[0]
+        low, high = self.loop_region()
+        if self.looping and not low <= self.frame < high:
+            self.frame = low
         self.redraw()
 
     def loop_region(self):
-        """What LOOP goes round: the chosen clip, or its own range inside it."""
+        """Where the loop is. A range of its own, set on the strip above."""
+        low = max(0, min(self.loop_in, self.show_.length))
+        high = max(low + 1, min(self.loop_out, self.show_.length))
+        return (int(low), int(high))
+
+    def set_loop_range(self, low: int, high: int) -> None:
+        self.loop_in = max(0, min(int(low), self.show_.length - 1))
+        self.loop_out = max(self.loop_in + 1, min(int(high), self.show_.length))
+        if self.looping and not self.loop_in <= self.frame < self.loop_out:
+            self.frame = self.loop_in
+        self.redraw()
+
+    def loop_the_clip(self) -> None:
+        """Put the loop round the whole of the selected clip, and switch it on.
+
+        Its own button because it is the common case -- watch this block over
+        and over -- while the strip is for the case the block does not cover.
+        """
         clip = self.chosen
         if clip is None or clip.kind == "cue":
-            return None
-        first, last = clip.first, clip.last
-        low, high = clip.loop_range
-        if clip.loop and (low, high) != (0, 100) and high > low:
-            first, last = clip.tx + int(low), clip.tx + int(high)
-        return (int(first), max(int(first) + 1, int(last)))
+            return
+        self.set_loop_range(clip.first, clip.last)
+        self.transport.loop.setChecked(True)
+        self.frame = self.loop_in
+        self.redraw()
 
     # -- moving about --------------------------------------------------------
 
@@ -1053,6 +1196,7 @@ class Window(QMainWindow):
     def open_show(self, index: int) -> None:
         self.show_ = showfile.read(self.files[index])
         self.chosen = None
+        self.loop_in, self.loop_out = 0, self.show_.length
         self.axis = Axis(self.show_.length)
         self.build()
 
@@ -1099,7 +1243,10 @@ class Window(QMainWindow):
         elif key == Qt.Key.Key_BracketRight:
             self.put_clip(True)
         elif key == Qt.Key.Key_L:
-            self.transport.loop.toggle()
+            if fast:
+                self.loop_the_clip()
+            else:
+                self.transport.loop.toggle()
         elif key == Qt.Key.Key_F:
             self.fit_axis()
         elif key == Qt.Key.Key_Tab:
