@@ -60,6 +60,10 @@ class Clip:
     loop: bool = False
     loop_range: tuple = (0, 100)
     ident: int = 0
+    # Kinetic only: how long after its declared end the last command is still
+    # being carried out. A motor told to move at frame N over 156 frames is
+    # still moving at N+155, whatever the file says its range is.
+    tail: int = 0
     # Cue only
     universe: int = 0
     channel: int = 0
@@ -81,7 +85,7 @@ class Clip:
             return self.tx + 1
         if not self.frames:
             return self.tx + (79200 if self.loop else 60)
-        return self.tx + self.frames + self.crop_end
+        return self.tx + self.frames + self.crop_end + self.tail
 
     @property
     def span(self) -> int:
@@ -95,6 +99,8 @@ class Clip:
         bits = [f"{self.row}", f"L{self.level}", f"{self.name}",
                 f"tx {self.tx}", f"len {self.frames}",
                 f"{self.first}..{self.last}"]
+        if self.tail:
+            bits.append(f"доезжает +{self.tail}")
         if self.crop_start or self.crop_end:
             bits.append(f"crop {self.crop_start}/{self.crop_end}")
         if self.fade_start or self.fade_end:
@@ -193,6 +199,50 @@ def frames_of(path: str, known: dict) -> int | None:
     return known[path]
 
 
+def motor_tail(path: str, known: dict) -> int:
+    """How far past its own range a motor file is still moving.
+
+    The exporter cuts at a frame, not at a rest: the last command a motor is
+    given starts inside the range and runs for its own length, which can be
+    well past the end. In BrendMT one pusher is told to move two frames before
+    the part ends and takes another 156 -- and those 156 frames are in no
+    file, they are the motor still travelling. The clip has to be that much
+    longer, or the show cuts the movement off mid-way.
+    """
+    key = f"tail:{path}"
+    if key in known:
+        return known[key] or 0
+    where = Path(path)
+    if not where.exists():
+        known[key] = 0
+        return 0
+    try:
+        raw = json.loads(where.read_text(encoding="utf-8"))
+        info = raw.get("info", {})
+        start = int(info.get("export_range", {}).get("start", 0))
+        end = info.get("export_range", {}).get("end")
+        declared = (int(end) - start if end is not None
+                    else int(info.get("total_frames") or 0))
+        furthest = 0
+        for groups in (raw.get("data") or {}).values():
+            if not isinstance(groups, dict):
+                continue
+            for ids in groups.values():
+                if not isinstance(ids, dict):
+                    continue
+                for segments in ids.values():
+                    for one in segments or []:
+                        if not isinstance(one, dict):
+                            continue
+                        furthest = max(furthest,
+                                       int(one.get("frame", 0))
+                                       + max(0, int(one.get("length", 0))))
+        known[key] = max(0, furthest - max(1, declared))
+    except Exception:
+        known[key] = 0
+    return known[key] or 0
+
+
 def listing() -> list:
     return sorted(SHOWS.glob("*.trix"))
 
@@ -231,6 +281,7 @@ def read(path: Path) -> Show:
         show.clips.append(Clip(kind="kinetic", row="Kinetic", level=0,
                                path=clip["path"], tx=int(clip["tx"]),
                                frames=got or 0, ident=int(ident),
+                               tail=motor_tail(clip["path"], known),
                                missing=got is None))
     for ident, clip in (raw.get("cue") or {}).items():
         show.clips.append(Clip(kind="cue", row="Cue", level=0, path="",

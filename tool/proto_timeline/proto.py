@@ -148,9 +148,13 @@ class Ruler(QWidget):
         if loop is not None:
             left = int(self.axis.x_of(loop[0]))
             right = int(self.axis.x_of(loop[1]))
-            brush.fillRect(QRect(left, 0, max(2, right - left), 5),
-                           QColor("#c9a227" if self.window_.looping
-                                  else "#463d20"))
+            on = self.window_.looping
+            brush.fillRect(QRect(left, 0, max(2, right - left), 6),
+                           QColor("#f0c040" if on else "#463d20"))
+            brush.setPen(QPen(QColor("#f0c040" if on else "#5a5030"),
+                              2 if on else 1))
+            brush.drawLine(left, 0, left, self.height())
+            brush.drawLine(right, 0, right, self.height())
         brush.setFont(QFont(MONO, 8))
         for seconds in _nice_steps(self.axis):
             x = self.axis.x_of(seconds * showfile.FPS)
@@ -427,6 +431,24 @@ class Clips(QWidget):
             brush.setPen(QPen(QColor(255, 255, 255, 45)))
             for x in range(band.left(), band.right(), 7):
                 brush.drawLine(x, band.top(), x - band.height(), band.bottom())
+        # A motor is still carrying out its last command after the file has
+        # run out, so the clip goes on -- hatched, because nothing is being
+        # read there, the screens are only still arriving.
+        if clip.tail:
+            over = int(clip.tail * self.axis.scale)
+            if over >= 1:
+                strip = QRect(band.right() - over, band.top(), over,
+                              band.height())
+                brush.setPen(QPen(QColor(255, 255, 255, 30)))
+                for x in range(strip.left(), strip.right() + 1, 4):
+                    brush.drawLine(x, strip.top(), x - strip.height(),
+                                   strip.bottom())
+                brush.setPen(QPen(QColor("#e0b0b0"), 1, Qt.PenStyle.DashLine))
+                brush.drawLine(strip.left(), band.top(),
+                               strip.left(), band.bottom())
+        # The fade: a wedge of shade, and over it the marks that make it
+        # readable at a glance -- a notch where it begins, the ramp itself,
+        # and the length when there is room to print it.
         if clip.fade_end:
             wide = abs(clip.fade_end) * self.axis.scale
             if wide > 2:
@@ -436,11 +458,28 @@ class Clips(QWidget):
                         brush.setPen(QPen(QColor(0, 0, 0,
                                                  int(165 * step / max(1.0, wide)))))
                         brush.drawLine(x, band.top(), x, band.bottom())
+                self.mark_fade(brush, band, wide, clip.fade_end)
+        if clip.fade_start:
+            wide = abs(clip.fade_start) * self.axis.scale
+            if wide > 2:
+                for step in range(int(wide)):
+                    x = band.left() + step
+                    if band.left() <= x <= band.right():
+                        brush.setPen(QPen(QColor(
+                            0, 0, 0, int(165 * (1 - step / max(1.0, wide))))))
+                        brush.drawLine(x, band.top(), x, band.bottom())
+                self.mark_fade(brush, band, wide, clip.fade_start, head=True)
         if clip.crop_end:
-            brush.setPen(QPen(QColor("#c04040"), 1, Qt.PenStyle.DotLine))
-            cut = band.right() + int(abs(clip.crop_end) * self.axis.scale)
+            cut = int(abs(clip.crop_end) * self.axis.scale)
+            brush.setPen(QPen(QColor("#d06060"), 1, Qt.PenStyle.DotLine))
             brush.drawLine(band.right(), band.center().y(),
-                           cut, band.center().y())
+                           band.right() + cut, band.center().y())
+            # A notch at the cut, so a trimmed end is not just a shorter box.
+            brush.setPen(QPen(QColor("#d06060"), 2))
+            brush.drawLine(band.right(), band.top() + 1,
+                           band.right(), band.top() + 4)
+            brush.drawLine(band.right(), band.bottom() - 4,
+                           band.right(), band.bottom() - 1)
         brush.setPen(QPen(QColor("#e8e8e8") if chosen else colour.lighter(130)))
         brush.drawRect(band)
         if band.width() > 34:
@@ -452,6 +491,29 @@ class Clips(QWidget):
                            metrics.elidedText(clip.name,
                                               Qt.TextElideMode.ElideMiddle,
                                               room.width()))
+
+    @staticmethod
+    def mark_fade(brush: QPainter, band: QRect, wide: float, frames: int,
+                  head: bool = False) -> None:
+        """Make a fade legible: a notch where it starts, and the ramp drawn."""
+        edge = band.left() + int(wide) if head else band.right() - int(wide)
+        pale = QColor("#ffe9a0")
+        brush.setPen(QPen(pale, 1))
+        # The ramp, as a line from full at one end to nothing at the other.
+        if head:
+            brush.drawLine(band.left(), band.bottom() - 1, edge, band.top() + 1)
+        else:
+            brush.drawLine(edge, band.top() + 1, band.right(), band.bottom() - 1)
+        # The notch: a bracket at the frame the fade begins.
+        brush.setPen(QPen(pale, 2))
+        brush.drawLine(edge, band.top() + 1, edge, band.top() + 5)
+        brush.drawLine(edge, band.bottom() - 5, edge, band.bottom() - 1)
+        if wide > 46 and band.height() > 14:
+            brush.setFont(QFont(MONO, 7))
+            brush.setPen(QPen(pale))
+            said = f"{abs(frames) / showfile.FPS:.1f}с"
+            brush.drawText(edge + 3 if head else edge + 3,
+                           band.center().y() + 3, said)
 
     def draw_cues(self, brush: QPainter, band: QRect) -> None:
         for clip in self.window_.show_.clips:
@@ -467,6 +529,37 @@ class Clips(QWidget):
                 brush.setPen(QPen(QColor("#f5dd70" if chosen else "#9a8420")))
                 brush.drawText(x + 4, band.top() + 10,
                                f"u{clip.universe}·ch{clip.channel}·v{clip.value}")
+
+    def draw_loop(self, brush: QPainter) -> None:
+        """The loop, over every row, so there is no doubt what is going round.
+
+        A tint plus a line down each end plus a hatched shoulder outside it:
+        on the ruler alone it was a thin bar nobody noticed.
+        """
+        loop = self.window_.loop_region()
+        if loop is None:
+            return
+        left = int(self.axis.x_of(loop[0]))
+        right = int(self.axis.x_of(loop[1]))
+        on = self.window_.looping
+        brush.fillRect(QRect(left, 0, max(2, right - left), self.height()),
+                       QColor(201, 162, 39, 34 if on else 12))
+        pen = QPen(QColor("#f0c040" if on else "#5a5030"), 2 if on else 1)
+        brush.setPen(pen)
+        brush.drawLine(left, 0, left, self.height())
+        brush.drawLine(right, 0, right, self.height())
+        if on:
+            brush.setFont(QFont(MONO, 8, QFont.Weight.Bold))
+            brush.setPen(QPen(QColor("#f0c040")))
+            brush.drawText(left + 5, 11, "LOOP")
+            # Arrows at both ends, pointing the way round.
+            for x, way in ((left + 3, 1), (right - 3, -1)):
+                brush.drawLine(x, self.height() - 4, x + 6 * way,
+                               self.height() - 4)
+                brush.drawLine(x, self.height() - 4, x + 3 * way,
+                               self.height() - 7)
+                brush.drawLine(x, self.height() - 4, x + 3 * way,
+                               self.height() - 1)
 
     def draw_playhead(self, brush: QPainter) -> None:
         x = int(self.axis.x_of(self.window_.frame))
@@ -523,6 +616,7 @@ class LevelTracks(Clips):
         brush.drawLine(self.HEAD - 6, 0, self.HEAD - 6, self.height())
         brush.setClipRect(QRect(self.HEAD - 6, 0,
                                 self.width() - self.HEAD + 6, self.height()))
+        self.draw_loop(brush)
         for clip in self.window_.show_.clips:
             if clip.kind == "cue":
                 continue
@@ -633,6 +727,7 @@ class StairTracks(Clips):
         brush.drawLine(self.HEAD - 6, 0, self.HEAD - 6, self.height())
         brush.setClipRect(QRect(self.HEAD - 6, 0,
                                 self.width() - self.HEAD + 6, self.height()))
+        self.draw_loop(brush)
         for clip in self.window_.show_.clips:
             if clip.kind == "cue":
                 continue
@@ -734,7 +829,11 @@ class Transport(QWidget):
         button("<<", lambda: window.nudge(-int(showfile.FPS)),
                "секунда назад (Shift+←)")
         button("<|", lambda: window.nudge(-1), "кадр назад (←)")
-        self.play = button(">", window.toggle_play,
+        # Through a lambda: `clicked` hands its handler a bool, and
+        # `toggle_play` takes no argument -- so the button raised every time
+        # and the playhead never moved. Space calls the method directly,
+        # which is why it worked and the button did not.
+        self.play = button(">", lambda: window.toggle_play(),
                            "играть / пауза (Space)", 44)
         button("|>", lambda: window.nudge(1), "кадр вперёд (→)")
         button(">>", lambda: window.nudge(int(showfile.FPS)),
