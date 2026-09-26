@@ -1,26 +1,24 @@
-"""PROTOTYPE -- throwaway. Two timelines for the Matreshka viewer.
+"""PROTOTYPE -- throwaway. The timeline for the Matreshka viewer.
 
-The question: which shape of timeline is comfortable to work a 22 minute show
-in, before any of it is built for real.
+One layout now: a row per level, the preview above, everything that is not
+the timeline itself down the right-hand column.
 
-  A  «Как в оригинале»  -- a row per level, inspector down the right side.
-  B  «Лестница»         -- a row per screen, the level drawn as the step's
-                           height, which is what the show editor itself does.
-                           Fewer rows, inspector as a strip underneath.
+  превью        what would be on each screen at this frame, and the keys
+  луп           a strip of its own with the LOOP switch at its head
+  линейка       the playhead, and the only place it is dragged
+  дорожки       a row per level, per screen
+  справа        the loop's own controls, then the selected clip's
 
-Switch with the yellow bar at the top, Tab, or `--variant=B`.
-
-The mouse, as asked for:
+The mouse:
   left      select a clip; drag it to move it. Empty space deselects.
   right     drag to scroll the timeline, without touching the playhead
   middle    click to teleport the playhead there
   wheel     zoom;  Shift+wheel scroll
-The playhead is dragged only by the ruler along the top of the tracks.
 
 Real shows, read from D:\\Content\\_SHOW. Nothing is ever written back: dragging
 a clip moves it in memory and the next reload forgets it.
 
-Run:   tool\\proto_timeline\\run.bat        or  python proto.py --variant=B
+Run:   tool\\proto_timeline\\run.bat
 """
 from __future__ import annotations
 
@@ -52,17 +50,17 @@ QPushButton:hover { background:#383838; }
 QPushButton:checked { background:#c9a227; color:#1a1a1a; border-color:#e0b830; }
 QComboBox { background:#2d2d2d; border:1px solid #3c3c3c; padding:2px 6px; }
 QComboBox QAbstractItemView { background:#252525; selection-background-color:#3d5a72; }
+QSpinBox { background:#2d2d2d; border:1px solid #3c3c3c; padding:1px 3px; }
 """
 
 ROWS = ["Top", "Bottom", "Lamels", "Sound", "Kinetic", "Cue"]
 HUE = {"Top": "#4a7ea8", "Bottom": "#4a9c78", "Lamels": "#a88a4a",
        "Sound": "#7a5aa8", "Kinetic": "#a85a5a", "Cue": "#c9a227"}
 # Three content levels per screen. The black backdrop that sits on level 3 of
-# every show file is not a clip here at all: the viewer already has its own
-# backing -- black, or the calibration picture -- and taking a second answer
-# out of the show file would only be a way for the two to disagree.
+# every show file is not a clip here: the viewer chooses its own backing.
 LEVELS = {"Top": 3, "Bottom": 3, "Lamels": 3, "Sound": 2, "Kinetic": 1,
           "Cue": 1}
+HEAD = 74            # the width of the labels down the left of every strip
 
 KEYS = [
     ("Space", "играть / пауза"),
@@ -70,18 +68,17 @@ KEYS = [
     ("Shift+← →", "секунда назад / вперёд"),
     ("I / O", "на начало / конец клипа"),
     ("[ / ]", "клип слева / справа от плейхеда"),
-    ("L", "луп"),
+    ("L", "лупы держат / отпустить"),
     ("Shift+L", "луп на весь клип"),
     ("Shift+тащить", "перенести луп целиком"),
     ("K", "запереть лупы"),
     ("Home / End", "в начало / в конец"),
     ("F", "вся длина"),
-    ("Tab", "другой вариант"),
 ]
 
 
 class Axis:
-    """Where time sits on the screen. Shared maths, not shared layout."""
+    """Where time sits on the screen."""
 
     origin = 0.0                   # pixels before frame `left` is drawn
 
@@ -89,9 +86,6 @@ class Axis:
         self.length = length
         self.left = 0.0
         self.width = 1200
-        # Fitted from the start: an arbitrary scale here reads as "fitted is
-        # false", so the first resize refused to fit and the ruler ran on
-        # past the end of the show.
         self.scale = self.width / max(1, length)
 
     def fit(self, width: int) -> None:
@@ -125,15 +119,19 @@ class Axis:
         self.left = max(0.0, min(max(0.0, self.length - span), self.left))
 
 
-# -- the pieces every variant is free to use or ignore -----------------------
+def _nice_steps(axis: Axis) -> list:
+    for step in (1, 2, 5, 10, 15, 30, 60, 120, 300):
+        if step * showfile.FPS * axis.scale > 70:
+            break
+    first = int(axis.left / showfile.FPS / step) * step
+    last = int((axis.left + axis.width / axis.scale) / showfile.FPS) + step
+    return list(range(first, last + 1, step))
+
+
+# -- the strips --------------------------------------------------------------
 
 class Ruler(QWidget):
-    """The time axis -- and the only place the playhead is dragged.
-
-    Asked for explicitly: inside the tracks the left button belongs to
-    selecting clips, so the playhead gets a strip of its own along the top.
-    The loop, when there is one, is a bar across the same strip.
-    """
+    """The time axis -- and the only place the playhead is dragged."""
 
     moved = Signal(int)
 
@@ -163,8 +161,6 @@ class Ruler(QWidget):
         brush.drawLine(x, 6, x, self.height())
         brush.setPen(Qt.PenStyle.NoPen)
         brush.setBrush(QColor("#4ec9e0"))
-        # A list, not three arguments: three loose QPoints land on another
-        # overload of drawPolygon and take the process down with them.
         brush.drawPolygon([QPoint(x - 5, 6), QPoint(x + 5, 6), QPoint(x, 14)])
         brush.end()
 
@@ -182,19 +178,13 @@ class Ruler(QWidget):
 
 
 class LoopBar(QWidget):
-    """The loop as a range of its own, on a strip of its own.
+    """The loops, on a strip of their own, with their switch at its head.
 
-    A row above the ruler, the way the show editor does it: the loop is a
-    place on the timeline, not a property of whatever happens to be selected.
-    Drag the ends to trim it; drag anywhere else to draw a new one; hold
-    Shift to slide the whole loop without changing its length -- unless the
-    strip is locked, which it is to begin with, because the loop that matters
-    comes out of the show file and a stray drag should not be able to lose it.
-
-    Drawing wins over sliding on purpose. The loop opens on the whole show,
-    so there is no empty strip left over -- when sliding had priority, every
-    attempt to draw a new loop dragged the old one instead, and there was no
-    way to make a short loop at all.
+    A show cut into blocks waits at every join, so there are several of them
+    and they are places on the timeline rather than properties of whatever
+    happens to be selected. They are read out of the show file; the strip is
+    locked to begin with so a stray drag cannot lose one that is already
+    right, and the exact frames are typed in the column on the right.
     """
 
     changed = Signal(int, int)
@@ -204,12 +194,22 @@ class LoopBar(QWidget):
         super().__init__()
         self.window_ = window
         self.axis = window.axis
-        self.setFixedHeight(13)
-        self.holding = None            # low | high | move | new
+        self.setFixedHeight(20)
+        self.holding = None            # low | high | move
         self.grabbed = 0
         self.setMouseTracking(True)
 
-    # -- drawing -------------------------------------------------------------
+        # The switch lives at the head of the strip it switches.
+        self.switch = QPushButton("LOOP", self)
+        self.switch.setCheckable(True)
+        self.switch.setChecked(True)
+        self.switch.setGeometry(2, 1, HEAD - 12, 18)
+        self.switch.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.switch.setToolTip(
+            "Держат ли лупы. Нажато — доехав до лупа, плейхед крутится в нём "
+            "и не идёт дальше, пока не отожмёшь (L). Отжато — едет насквозь.")
+        self.switch.setStyleSheet(
+            "QPushButton { font-size:10px; padding:0px; }")
 
     def paintEvent(self, event) -> None:      # noqa: N802
         brush = QPainter(self)
@@ -220,10 +220,10 @@ class LoopBar(QWidget):
             left, right = int(self.axis.x_of(low)), int(self.axis.x_of(high))
             running = on and here is not None and here == (low, high)
             picked = index == self.window_.loop_at
-            body = (QColor("#f0c040") if running
-                    else QColor("#8a7630") if picked else QColor("#4a411c"))
-            brush.fillRect(QRect(left, 2, max(3, right - left),
-                                 self.height() - 4), body)
+            brush.fillRect(
+                QRect(left, 3, max(3, right - left), self.height() - 6),
+                QColor("#f0c040") if running
+                else QColor("#8a7630") if picked else QColor("#4a411c"))
             for x in (left, right):
                 brush.fillRect(QRect(x - 2, 0, 4, self.height()),
                                QColor("#ffe9a0") if picked
@@ -231,36 +231,20 @@ class LoopBar(QWidget):
             if right - left > 70:
                 brush.setFont(QFont(MONO, 7, QFont.Weight.Bold))
                 brush.setPen(QPen(QColor("#1a1a1a" if running else "#c8b878")))
-                brush.drawText(left + 7, self.height() - 3,
-                               f"{index + 1}  {(high - low) / showfile.FPS:.1f}с")
-        low, high = self.window_.loop_region() or (0, 0)
-        left, right = int(self.axis.x_of(low)), int(self.axis.x_of(high))
-        brush.setPen(QPen(QColor("#3a3a3a")))
-        brush.drawText(4, self.height() - 3, "луп")
-        if self.window_.loop_locked:
-            # Hatched, so a strip that will not take a drag says so before
-            # the drag rather than after it.
-            brush.setPen(QPen(QColor(0, 0, 0, 90)))
-            for x in range(left, right, 5):
-                brush.drawLine(x, 2, x - self.height(), self.height() - 2)
-            if right - left > 120:
-                brush.setFont(QFont(MONO, 7))
-                brush.setPen(QPen(QColor("#1a1a1a" if on else "#8a7a3a")))
-                brush.drawText(left + 76, self.height() - 3, "заперт")
-        elif right - left > 240:
-            brush.setFont(QFont(MONO, 7))
-            brush.setPen(QPen(QColor("#1a1a1a" if on else "#6a5f30")))
-            brush.drawText(left + 76, self.height() - 3,
-                           "тащи — новый луп, за край — подрезать, "
-                           "Shift — перенести")
+                brush.drawText(left + 7, self.height() - 6,
+                               f"{index + 1}  "
+                               f"{(high - low) / showfile.FPS:.1f}с")
+            if self.window_.loop_locked:
+                brush.setPen(QPen(QColor(0, 0, 0, 80)))
+                for x in range(left, right, 5):
+                    brush.drawLine(x, 3, x - self.height(), self.height() - 3)
         brush.end()
 
     # -- mouse ---------------------------------------------------------------
 
-    def cursorShape(self, x: int):            # noqa: N802
+    def shape_at(self, x: int):
         picked = self.window_.loop_region() or (0, 0)
-        low = int(self.axis.x_of(picked[0]))
-        high = int(self.axis.x_of(picked[1]))
+        low, high = int(self.axis.x_of(picked[0])), int(self.axis.x_of(picked[1]))
         if abs(x - low) <= self.GRIP or abs(x - high) <= self.GRIP:
             return Qt.CursorShape.SizeHorCursor
         return Qt.CursorShape.CrossCursor
@@ -272,16 +256,13 @@ class LoopBar(QWidget):
             return
         x = event.position().x()
         at = int(self.axis.frame_of(x))
-        # Clicking a loop picks it up first: with several on the strip, the
-        # one being edited has to be the one under the hand.
+        near = 4 / max(1e-9, self.axis.scale)
         for index, (first, last) in enumerate(self.window_.loops):
-            if first - 4 / max(1e-9, self.axis.scale) <= at \
-                    <= last + 4 / max(1e-9, self.axis.scale):
+            if first - near <= at <= last + near:
                 self.window_.choose_loop(index)
                 break
         picked = self.window_.loop_region() or (0, 0)
-        low = int(self.axis.x_of(picked[0]))
-        high = int(self.axis.x_of(picked[1]))
+        low, high = int(self.axis.x_of(picked[0])), int(self.axis.x_of(picked[1]))
         sliding = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         if abs(x - low) <= self.GRIP:
             self.holding = "low"
@@ -289,7 +270,7 @@ class LoopBar(QWidget):
             self.holding = "high"
         elif sliding and low < x < high:
             self.holding = "move"
-            self.grabbed = at - self.window_.loop_in
+            self.grabbed = at - picked[0]
         else:
             self.holding = "high"
             self.changed.emit(at, at + 1)
@@ -299,8 +280,7 @@ class LoopBar(QWidget):
         x = event.position().x()
         if self.holding is None:
             self.setCursor(Qt.CursorShape.ForbiddenCursor
-                           if self.window_.loop_locked
-                           else self.cursorShape(int(x)))
+                           if self.window_.loop_locked else self.shape_at(int(x)))
             return
         self.drag(int(self.axis.frame_of(x)))
 
@@ -318,15 +298,6 @@ class LoopBar(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         self.holding = None
-
-
-def _nice_steps(axis: Axis) -> list:
-    for step in (1, 2, 5, 10, 15, 30, 60, 120, 300):
-        if step * showfile.FPS * axis.scale > 70:
-            break
-    first = int(axis.left / showfile.FPS / step) * step
-    last = int((axis.left + axis.width / axis.scale) / showfile.FPS) + step
-    return list(range(first, last + 1, step))
 
 
 class Preview(QWidget):
@@ -370,7 +341,6 @@ class Preview(QWidget):
                        f"{showfile.timecode(self.window_.frame)}    "
                        f"кадр {self.window_.frame} из {self.window_.show_.length}")
 
-        # The keys, bottom left of the preview, as asked.
         brush.setFont(QFont(MONO, 8))
         y = tall - 10 - len(KEYS) * 13
         brush.setPen(QPen(QColor("#5a5a5a")))
@@ -384,95 +354,11 @@ class Preview(QWidget):
         brush.end()
 
 
-class Inspector(QWidget):
-    """The selected clip. A cue is a different animal, so it says so."""
+class Tracks(QWidget):
+    """A row per level, per screen."""
 
-    MEDIA = [("Дорожка", "row"), ("Уровень", "level"),
-             ("Кадр начала", "tx"), ("Длина", "frames"),
-             ("Подрезка с хвоста", "crop_end"),
-             ("Фейд с хвоста", "fade_end"),
-             ("Подрезка с головы", "crop_start"),
-             ("Фейд с головы", "fade_start"),
-             ("Луп", "loop"), ("Свой луп", "loop_range"),
-             ("Занимает", "range"), ("Файл", "path")]
-    CUE = [("Кадр", "tx"), ("Время", "range"), ("Universe", "universe"),
-           ("Channel", "channel"), ("Value", "value"), ("Уровень", "level")]
-
-    def __init__(self, window, across: bool = False) -> None:
-        super().__init__()
-        self.window_ = window
-        self.across = across
-        self.shown: list = []
-        self.grid = QGridLayout(self)
-        self.grid.setContentsMargins(8, 6, 8, 6)
-        self.grid.setHorizontalSpacing(10)
-        self.grid.setVerticalSpacing(4)
-        self.title = QLabel("клип не выбран")
-        self.title.setFont(QFont(MONO, 10, QFont.Weight.Bold))
-        self.title.setWordWrap(not across)
-        self.grid.addWidget(self.title, 0, 0, 1, 8 if across else 2)
-        self.body: dict = {}
-        self.lay_out(self.MEDIA)
-
-    def lay_out(self, names) -> None:
-        for widget in self.shown:
-            self.grid.removeWidget(widget)
-            widget.setParent(None)
-        self.shown, self.body = [], {}
-        per = 4 if self.across else 1
-        for index, (label, key) in enumerate(names):
-            tag = QLabel(label)
-            tag.setStyleSheet("color:#8a8a8a;")
-            tag.setFixedWidth(126 if not self.across else 112)
-            value = QLabel("—")
-            value.setFont(QFont(MONO, 9))
-            value.setWordWrap(True)
-            value.setAlignment(Qt.AlignmentFlag.AlignLeft
-                               | Qt.AlignmentFlag.AlignVCenter)
-            column = (index % per) * 2
-            self.grid.addWidget(tag, 1 + index // per, column)
-            self.grid.addWidget(value, 1 + index // per, column + 1)
-            self.shown += [tag, value]
-            self.body[key] = value
-        if not self.across:
-            self.grid.setRowStretch(len(names) + 1, 1)
-            self.grid.setColumnStretch(1, 1)
-
-    def refresh(self) -> None:
-        clip = self.window_.chosen
-        if clip is None:
-            self.title.setText("клип не выбран")
-            for value in self.body.values():
-                value.setText("—")
-            return
-        wanted = self.CUE if clip.kind == "cue" else self.MEDIA
-        if [key for _, key in wanted] != list(self.body):
-            self.lay_out(wanted)
-        self.title.setText(f"кью на кадре {clip.tx}" if clip.kind == "cue"
-                           else clip.name)
-        got = {
-            "row": clip.row, "level": str(clip.level), "tx": str(clip.tx),
-            "frames": f"{clip.frames}  ({clip.frames / showfile.FPS:.1f} с)",
-            "crop_end": str(clip.crop_end), "fade_end": str(clip.fade_end),
-            "crop_start": str(clip.crop_start),
-            "fade_start": str(clip.fade_start),
-            "loop": "да" if clip.loop else "нет",
-            "loop_range": str(list(clip.loop_range)),
-            "range": (showfile.timecode(clip.tx) if clip.kind == "cue" else
-                      f"{clip.first}..{clip.last}  "
-                      f"{showfile.timecode(clip.first)}"),
-            "path": clip.path or "—",
-            "universe": str(clip.universe), "channel": str(clip.channel),
-            "value": str(clip.value),
-        }
-        for key, value in self.body.items():
-            value.setText(got.get(key, "—"))
-
-
-class Clips(QWidget):
-    """What both variants do with the mouse. Each lays its rows out itself."""
-
-    HEAD = 74
+    LANE = 19
+    GAP = 5
     picked = Signal(object)
     jumped = Signal(int)
 
@@ -488,15 +374,40 @@ class Clips(QWidget):
 
     def resizeEvent(self, event) -> None:      # noqa: N802
         was = self.axis.fitted
-        self.axis.width = max(1, self.width() - self.HEAD + 6)
-        self.axis.origin = self.HEAD - 6
+        self.axis.width = max(1, self.width() - HEAD + 6)
+        self.axis.origin = HEAD - 6
         if was:
             self.axis.fit(self.axis.width)
         self.axis.clamp()
         super().resizeEvent(event)
 
+    def lanes(self) -> list:
+        out, y = [], 2
+        for row in ROWS:
+            for level in range(LEVELS[row]):
+                out.append((row, level, y))
+                y += self.LANE
+            y += self.GAP
+        return out
+
+    def wanted_height(self) -> int:
+        return sum(LEVELS[row] * self.LANE + self.GAP for row in ROWS) + 4
+
     def band_of(self, clip):
-        raise NotImplementedError
+        if clip.kind == "cue":
+            for row, _level, y in self.lanes():
+                if row == "Cue":
+                    return QRect(int(self.axis.x_of(clip.tx)) - 4, y,
+                                 9, self.LANE - 2)
+            return None
+        for row, level, y in self.lanes():
+            if row == clip.row and level == min(clip.level, LEVELS[row] - 1):
+                left = self.axis.x_of(clip.first)
+                width = max(3.0, clip.span * self.axis.scale)
+                if left + width < HEAD or left > self.width():
+                    return None
+                return QRect(int(left), y, int(width), self.LANE - 2)
+        return None
 
     def clip_under(self, where: QPoint):
         for clip in reversed(self.window_.show_.clips):
@@ -527,7 +438,7 @@ class Clips(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         clip = self.clip_under(where)
-        self.picked.emit(clip)          # None deselects; it never scrubs
+        self.picked.emit(clip)
         if clip is not None and clip.kind != "cue":
             self.dragging = clip
             self.grabbed = int(self.axis.frame_of(where.x())) - clip.tx
@@ -553,6 +464,26 @@ class Clips(QWidget):
 
     # -- drawing -------------------------------------------------------------
 
+    @staticmethod
+    def mark_fade(brush: QPainter, band: QRect, wide: float, frames: int,
+                  head: bool = False) -> None:
+        """Make a fade legible: a notch where it starts, and the ramp drawn."""
+        edge = band.left() + int(wide) if head else band.right() - int(wide)
+        pale = QColor("#ffe9a0")
+        brush.setPen(QPen(pale, 1))
+        if head:
+            brush.drawLine(band.left(), band.bottom() - 1, edge, band.top() + 1)
+        else:
+            brush.drawLine(edge, band.top() + 1, band.right(), band.bottom() - 1)
+        brush.setPen(QPen(pale, 2))
+        brush.drawLine(edge, band.top() + 1, edge, band.top() + 5)
+        brush.drawLine(edge, band.bottom() - 5, edge, band.bottom() - 1)
+        if wide > 46 and band.height() > 14:
+            brush.setFont(QFont(MONO, 7))
+            brush.setPen(QPen(pale))
+            brush.drawText(edge + 3, band.center().y() + 3,
+                           f"{abs(frames) / showfile.FPS:.1f}с")
+
     def draw_clip(self, brush: QPainter, clip, band: QRect) -> None:
         colour = QColor("#a03030") if clip.missing else QColor(HUE[clip.row])
         chosen = clip is self.window_.chosen
@@ -563,32 +494,27 @@ class Clips(QWidget):
             brush.setPen(QPen(QColor(255, 255, 255, 45)))
             for x in range(band.left(), band.right(), 7):
                 brush.drawLine(x, band.top(), x - band.height(), band.bottom())
-        # A motor is still carrying out its last command after the file has
-        # run out, so the clip goes on -- hatched, because nothing is being
-        # read there, the screens are only still arriving.
+        # The motor is still carrying out its last command after the file has
+        # run out, so the clip goes on -- hatched, because nothing is read
+        # there, the screens are only still arriving.
         if clip.tail:
             over = int(clip.tail * self.axis.scale)
             if over >= 1:
-                strip = QRect(band.right() - over, band.top(), over,
-                              band.height())
                 brush.setPen(QPen(QColor(255, 255, 255, 30)))
-                for x in range(strip.left(), strip.right() + 1, 4):
-                    brush.drawLine(x, strip.top(), x - strip.height(),
-                                   strip.bottom())
+                for x in range(band.right() - over, band.right() + 1, 4):
+                    brush.drawLine(x, band.top(), x - band.height(),
+                                   band.bottom())
                 brush.setPen(QPen(QColor("#e0b0b0"), 1, Qt.PenStyle.DashLine))
-                brush.drawLine(strip.left(), band.top(),
-                               strip.left(), band.bottom())
-        # The fade: a wedge of shade, and over it the marks that make it
-        # readable at a glance -- a notch where it begins, the ramp itself,
-        # and the length when there is room to print it.
+                brush.drawLine(band.right() - over, band.top(),
+                               band.right() - over, band.bottom())
         if clip.fade_end:
             wide = abs(clip.fade_end) * self.axis.scale
             if wide > 2:
                 for step in range(int(wide)):
                     x = band.right() - int(wide) + step
                     if band.left() <= x <= band.right():
-                        brush.setPen(QPen(QColor(0, 0, 0,
-                                                 int(165 * step / max(1.0, wide)))))
+                        brush.setPen(QPen(QColor(
+                            0, 0, 0, int(165 * step / max(1.0, wide)))))
                         brush.drawLine(x, band.top(), x, band.bottom())
                 self.mark_fade(brush, band, wide, clip.fade_end)
         if clip.fade_start:
@@ -606,7 +532,6 @@ class Clips(QWidget):
             brush.setPen(QPen(QColor("#d06060"), 1, Qt.PenStyle.DotLine))
             brush.drawLine(band.right(), band.center().y(),
                            band.right() + cut, band.center().y())
-            # A notch at the cut, so a trimmed end is not just a shorter box.
             brush.setPen(QPen(QColor("#d06060"), 2))
             brush.drawLine(band.right(), band.top() + 1,
                            band.right(), band.top() + 4)
@@ -624,29 +549,6 @@ class Clips(QWidget):
                                               Qt.TextElideMode.ElideMiddle,
                                               room.width()))
 
-    @staticmethod
-    def mark_fade(brush: QPainter, band: QRect, wide: float, frames: int,
-                  head: bool = False) -> None:
-        """Make a fade legible: a notch where it starts, and the ramp drawn."""
-        edge = band.left() + int(wide) if head else band.right() - int(wide)
-        pale = QColor("#ffe9a0")
-        brush.setPen(QPen(pale, 1))
-        # The ramp, as a line from full at one end to nothing at the other.
-        if head:
-            brush.drawLine(band.left(), band.bottom() - 1, edge, band.top() + 1)
-        else:
-            brush.drawLine(edge, band.top() + 1, band.right(), band.bottom() - 1)
-        # The notch: a bracket at the frame the fade begins.
-        brush.setPen(QPen(pale, 2))
-        brush.drawLine(edge, band.top() + 1, edge, band.top() + 5)
-        brush.drawLine(edge, band.bottom() - 5, edge, band.bottom() - 1)
-        if wide > 46 and band.height() > 14:
-            brush.setFont(QFont(MONO, 7))
-            brush.setPen(QPen(pale))
-            said = f"{abs(frames) / showfile.FPS:.1f}с"
-            brush.drawText(edge + 3 if head else edge + 3,
-                           band.center().y() + 3, said)
-
     def draw_cues(self, brush: QPainter, band: QRect) -> None:
         for clip in self.window_.show_.clips:
             if clip.kind != "cue":
@@ -662,17 +564,11 @@ class Clips(QWidget):
                 brush.drawText(x + 4, band.top() + 10,
                                f"u{clip.universe}·ch{clip.channel}·v{clip.value}")
 
-    def draw_loop(self, brush: QPainter) -> None:
-        """The loop, over every row, so there is no doubt what is going round.
-
-        A tint plus a line down each end plus a hatched shoulder outside it:
-        on the ruler alone it was a thin bar nobody noticed.
-        """
+    def draw_loops(self, brush: QPainter) -> None:
         here = self.window_.loop_here()
         on = self.window_.looping
         for index, (low, high) in enumerate(self.window_.loops):
-            left = int(self.axis.x_of(low))
-            right = int(self.axis.x_of(high))
+            left, right = int(self.axis.x_of(low)), int(self.axis.x_of(high))
             running = on and here is not None and here == (low, high)
             brush.fillRect(QRect(left, 0, max(2, right - left), self.height()),
                            QColor(201, 162, 39, 34 if running else 12))
@@ -692,46 +588,6 @@ class Clips(QWidget):
                     brush.drawLine(x, self.height() - 4,
                                    x + 3 * way, self.height() - 1)
 
-    def draw_playhead(self, brush: QPainter) -> None:
-        x = int(self.axis.x_of(self.window_.frame))
-        brush.setPen(QPen(QColor("#4ec9e0"), 1))
-        brush.drawLine(x, 0, x, self.height())
-
-
-# -- variant A: a row per level ---------------------------------------------
-
-class LevelTracks(Clips):
-    LANE = 19
-    GAP = 5
-
-    def lanes(self) -> list:
-        out, y = [], 2
-        for row in ROWS:
-            for level in range(LEVELS[row]):
-                out.append((row, level, y))
-                y += self.LANE
-            y += self.GAP
-        return out
-
-    def wanted_height(self) -> int:
-        return sum(LEVELS[row] * self.LANE + self.GAP for row in ROWS) + 4
-
-    def band_of(self, clip):
-        if clip.kind == "cue":
-            for row, _level, y in self.lanes():
-                if row == "Cue":
-                    return QRect(int(self.axis.x_of(clip.tx)) - 4, y,
-                                 9, self.LANE - 2)
-            return None
-        for row, level, y in self.lanes():
-            if row == clip.row and level == min(clip.level, LEVELS[row] - 1):
-                left = self.axis.x_of(clip.first)
-                width = max(3.0, clip.span * self.axis.scale)
-                if left + width < self.HEAD or left > self.width():
-                    return None
-                return QRect(int(left), y, int(width), self.LANE - 2)
-        return None
-
     def paintEvent(self, event) -> None:       # noqa: N802
         brush = QPainter(self)
         brush.fillRect(self.rect(), QColor("#191919"))
@@ -744,10 +600,10 @@ class LevelTracks(Clips):
             brush.drawText(6, y + self.LANE - 7,
                            f"{row} L{level}" if LEVELS[row] > 1 else row)
         brush.setPen(QPen(QColor("#2a2a2a")))
-        brush.drawLine(self.HEAD - 6, 0, self.HEAD - 6, self.height())
-        brush.setClipRect(QRect(self.HEAD - 6, 0,
-                                self.width() - self.HEAD + 6, self.height()))
-        self.draw_loop(brush)
+        brush.drawLine(HEAD - 6, 0, HEAD - 6, self.height())
+        brush.setClipRect(QRect(HEAD - 6, 0,
+                                self.width() - HEAD + 6, self.height()))
+        self.draw_loops(brush)
         for clip in self.window_.show_.clips:
             if clip.kind == "cue":
                 continue
@@ -757,196 +613,207 @@ class LevelTracks(Clips):
         for row, _level, y in self.lanes():
             if row == "Cue":
                 self.draw_cues(brush, QRect(0, y, self.width(), self.LANE - 2))
-        self.draw_playhead(brush)
+        x = int(self.axis.x_of(self.window_.frame))
+        brush.setPen(QPen(QColor("#4ec9e0"), 1))
+        brush.drawLine(x, 0, x, self.height())
         brush.end()
 
 
-class VariantA(QWidget):
-    NAME = "Как в оригинале — дорожка на уровень"
+# -- the right-hand column ---------------------------------------------------
+
+class LoopPanel(QWidget):
+    """Everything about the loops that is not the strip itself."""
 
     def __init__(self, window) -> None:
         super().__init__()
-        whole = QHBoxLayout(self)
-        whole.setContentsMargins(0, 0, 0, 0)
-        whole.setSpacing(0)
-        left = QVBoxLayout()
-        left.setContentsMargins(0, 0, 0, 0)
-        left.setSpacing(2)
-        left.addWidget(Preview(window), 1)
-        self.loopbar = LoopBar(window)
-        self.loopbar.changed.connect(window.set_loop_range)
-        left.addWidget(self.loopbar)
-        self.ruler = Ruler(window)
-        self.ruler.moved.connect(window.go_to)
-        left.addWidget(self.ruler)
-        self.tracks = LevelTracks(window)
-        self.tracks.setFixedHeight(self.tracks.wanted_height())
-        self.tracks.picked.connect(window.pick)
-        self.tracks.jumped.connect(window.go_to)
-        left.addWidget(self.tracks)
-        whole.addLayout(left, 1)
-
-        self.inspector = Inspector(window)
-        board = QWidget()
-        holder = QVBoxLayout(board)
-        holder.setContentsMargins(0, 0, 0, 0)
-        holder.addWidget(self.inspector)
-        board.setFixedWidth(270)
-        board.setStyleSheet("background:#232323;")
-        whole.addWidget(board)
-
-    def refresh(self) -> None:
-        self.inspector.refresh()
-        self.loopbar.update()
-        self.ruler.update()
-        self.tracks.update()
-
-
-# -- variant B: a row per screen, the level as a step ------------------------
-
-class StairTracks(Clips):
-    BAND = 44
-    GAP = 6
-
-    def bands(self) -> list:
-        out, y = [], 2
-        for row in ROWS:
-            tall = self.BAND if LEVELS[row] > 1 else 22
-            out.append((row, y, tall))
-            y += tall + self.GAP
-        return out
-
-    def wanted_height(self) -> int:
-        return sum((self.BAND if LEVELS[row] > 1 else 22) + self.GAP
-                   for row in ROWS) + 4
-
-    def step(self, row: str, y: int, tall: int, level: int) -> tuple:
-        steps = LEVELS[row]
-        high = max(10, (tall - 4) // steps)
-        if steps == 1:
-            return y + 2, high
-        gap = (tall - 4 - high) // (steps - 1)
-        return y + 2 + (steps - 1 - min(level, steps - 1)) * gap, high
-
-    def band_of(self, clip):
-        for row, y, tall in self.bands():
-            if clip.kind == "cue":
-                if row == "Cue":
-                    return QRect(int(self.axis.x_of(clip.tx)) - 4, y, 9, tall)
-                continue
-            if row != clip.row:
-                continue
-            top, high = self.step(row, y, tall, clip.level)
-            left = self.axis.x_of(clip.first)
-            width = max(3.0, clip.span * self.axis.scale)
-            if left + width < self.HEAD or left > self.width():
-                return None
-            return QRect(int(left), int(top), int(width), high)
-        return None
-
-    def paintEvent(self, event) -> None:       # noqa: N802
-        brush = QPainter(self)
-        brush.fillRect(self.rect(), QColor("#191919"))
-        for row, y, tall in self.bands():
-            brush.fillRect(QRect(0, y, self.width(), tall), QColor("#1d1d1d"))
-            brush.setFont(QFont(MONO, 9))
-            brush.setPen(QPen(QColor(HUE[row])))
-            brush.drawText(6, y + 13, row)
-            if LEVELS[row] > 1:
-                brush.setFont(QFont(MONO, 7))
-                brush.setPen(QPen(QColor("#4a4a4a")))
-                for level in range(LEVELS[row]):
-                    top, high = self.step(row, y, tall, level)
-                    brush.drawText(56, top + high - 2, f"{level}")
-        brush.setPen(QPen(QColor("#2a2a2a")))
-        brush.drawLine(self.HEAD - 6, 0, self.HEAD - 6, self.height())
-        brush.setClipRect(QRect(self.HEAD - 6, 0,
-                                self.width() - self.HEAD + 6, self.height()))
-        self.draw_loop(brush)
-        for clip in self.window_.show_.clips:
-            if clip.kind == "cue":
-                continue
-            band = self.band_of(clip)
-            if band is not None:
-                self.draw_clip(brush, clip, band)
-        for row, y, tall in self.bands():
-            if row == "Cue":
-                self.draw_cues(brush, QRect(0, y, self.width(), tall))
-        self.draw_playhead(brush)
-        brush.end()
-
-
-class VariantB(QWidget):
-    NAME = "Лестница — дорожка на экран, уровень это высота ступени"
-
-    def __init__(self, window) -> None:
-        super().__init__()
-        whole = QVBoxLayout(self)
-        whole.setContentsMargins(0, 0, 0, 0)
-        whole.setSpacing(2)
-        whole.addWidget(Preview(window), 1)
-        self.loopbar = LoopBar(window)
-        self.loopbar.changed.connect(window.set_loop_range)
-        whole.addWidget(self.loopbar)
-        self.ruler = Ruler(window)
-        self.ruler.moved.connect(window.go_to)
-        whole.addWidget(self.ruler)
-        self.tracks = StairTracks(window)
-        self.tracks.setFixedHeight(self.tracks.wanted_height())
-        self.tracks.picked.connect(window.pick)
-        self.tracks.jumped.connect(window.go_to)
-        whole.addWidget(self.tracks)
-        self.inspector = Inspector(window, across=True)
-        self.inspector.setStyleSheet("background:#232323;")
-        whole.addWidget(self.inspector)
-
-    def refresh(self) -> None:
-        self.inspector.refresh()
-        self.loopbar.update()
-        self.ruler.update()
-        self.tracks.update()
-
-
-VARIANTS = [("A", VariantA), ("B", VariantB)]
-
-
-class Switcher(QWidget):
-    """Deliberately unlike the rest: this bar is not part of the design."""
-
-    def __init__(self, window) -> None:
-        super().__init__(window)
         self.window_ = window
-        self.setObjectName("switcher")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(
-            "#switcher { background:#f0c040; border-radius:13px; }"
-            "QLabel { color:#1a1a1a; font-weight:bold; background:transparent; }"
-            "QPushButton { background:#1a1a1a; color:#f0c040; border:none;"
-            " border-radius:10px; font-weight:bold; padding:0px; }")
-        line = QHBoxLayout(self)
-        line.setContentsMargins(6, 4, 6, 4)
-        line.setSpacing(8)
-        back = QPushButton("←")
-        back.setFixedSize(22, 20)
-        back.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        back.clicked.connect(lambda: window.cycle(-1))
-        line.addWidget(back)
-        self.label = QLabel()
-        line.addWidget(self.label)
-        on = QPushButton("→")
-        on.setFixedSize(22, 20)
-        on.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        on.clicked.connect(lambda: window.cycle(1))
-        line.addWidget(on)
+        whole = QVBoxLayout(self)
+        whole.setContentsMargins(8, 6, 8, 8)
+        whole.setSpacing(5)
+
+        title = QLabel("Лупы")
+        title.setFont(QFont(MONO, 10, QFont.Weight.Bold))
+        whole.addWidget(title)
+
+        self.says = QLabel()
+        self.says.setFont(QFont(MONO, 9))
+        self.says.setStyleSheet("color:#c9a227;")
+        self.says.setWordWrap(True)
+        whole.addWidget(self.says)
+
+        frames = QHBoxLayout()
+        frames.setSpacing(4)
+        frames.addWidget(QLabel("с"))
+        self.low = QSpinBox()
+        self.low.setRange(0, 10_000_000)
+        self.low.setKeyboardTracking(False)
+        frames.addWidget(self.low, 1)
+        frames.addWidget(QLabel("по"))
+        self.high = QSpinBox()
+        self.high.setRange(0, 10_000_000)
+        self.high.setKeyboardTracking(False)
+        frames.addWidget(self.high, 1)
+        whole.addLayout(frames)
+
+        line = QHBoxLayout()
+        line.setSpacing(4)
+
+        def button(text, what, hint, wide=0):
+            one = QPushButton(text)
+            if wide:
+                one.setFixedWidth(wide)
+            one.setToolTip(hint)
+            one.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            one.clicked.connect(what)
+            line.addWidget(one)
+            return one
+
+        button("+", lambda: window.add_loop(),
+               "Поставить ещё один луп с того кадра, где плейхед.", 26)
+        button("−", lambda: window.drop_loop(), "Убрать выбранный луп.", 26)
+        button("по клипу", lambda: window.loop_the_clip(),
+               "Луп на весь выбранный клип, и включить (Shift+L).")
+        button("из файла", lambda: window.loop_from_file(),
+               "Вернуть лупы, записанные в самом шоу: каждый зацикленный "
+               "клип от своего кадра и до прихода следующего. Во всех сорока "
+               "файлах это один луп, 800..1099.")
+        line.addStretch(1)
+        # The lock on the right, as asked.
+        self.lock = QPushButton("🔒")
+        self.lock.setCheckable(True)
+        self.lock.setChecked(True)
+        self.lock.setFixedWidth(34)
+        self.lock.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.lock.setToolTip(
+            "Запретить рисовать лупы мышью (K). Числами их всё равно можно "
+            "поправить — на 22 минутах один пиксель это 56 кадров, и мышь "
+            "тут промахивается по определению.")
+        self.lock.toggled.connect(window.lock_loop)
+        line.addWidget(self.lock)
+        whole.addLayout(line)
+
+        self._saying = False
+        self.low.valueChanged.connect(self.typed)
+        self.high.valueChanged.connect(self.typed)
+
+    def typed(self, _value: int = 0) -> None:
+        if self._saying:
+            return
+        self.window_.set_loop_range(self.low.value(), self.high.value())
 
     def refresh(self) -> None:
-        key, made = VARIANTS[self.window_.variant]
-        self.label.setText(f"вариант {key} — {made.NAME}    (Tab)")
-        self.adjustSize()
+        picked = self.window_.loop_region()
+        self._saying = True
+        self.low.setValue(picked[0] if picked else 0)
+        self.high.setValue(picked[1] if picked else 0)
+        self._saying = False
+        self.lock.setText("🔒" if self.window_.loop_locked else "🔓")
+        here = self.window_.loop_here()
+        said = "лупов нет"
+        if picked is not None:
+            said = (f"луп {self.window_.loop_at + 1} из "
+                    f"{len(self.window_.loops)}   "
+                    f"{(picked[1] - picked[0]) / showfile.FPS:.1f}с")
+        if here is not None:
+            said += ("   ДЕРЖИТ" if self.window_.looping
+                     else "   плейхед внутри, но лупы отжаты")
+        self.says.setText(said)
+
+
+class Inspector(QWidget):
+    """The selected clip. A cue is a different animal, so it says so."""
+
+    MEDIA = [("Дорожка", "row"), ("Уровень", "level"),
+             ("Кадр начала", "tx"), ("Длина", "frames"),
+             ("Доезд моторов", "tail"),
+             ("Подрезка с хвоста", "crop_end"),
+             ("Фейд с хвоста", "fade_end"),
+             ("Подрезка с головы", "crop_start"),
+             ("Фейд с головы", "fade_start"),
+             ("Занимает", "range"), ("Начинается", "at"),
+             ("Файл", "path")]
+    CUE = [("Кадр", "tx"), ("Время", "range"), ("Universe", "universe"),
+           ("Channel", "channel"), ("Value", "value"), ("Уровень", "level")]
+
+    def __init__(self, window) -> None:
+        super().__init__()
+        self.window_ = window
+        self.shown: list = []
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(8, 6, 8, 6)
+        self.grid.setHorizontalSpacing(10)
+        self.grid.setVerticalSpacing(4)
+        self.title = QLabel("клип не выбран")
+        self.title.setFont(QFont(MONO, 10, QFont.Weight.Bold))
+        self.title.setWordWrap(True)
+        self.grid.addWidget(self.title, 0, 0, 1, 2)
+        self.body: dict = {}
+        self.lay_out(self.MEDIA)
+
+    def lay_out(self, names) -> None:
+        for widget in self.shown:
+            self.grid.removeWidget(widget)
+            widget.setParent(None)
+        self.shown, self.body = [], {}
+        for index, (label, key) in enumerate(names):
+            tag = QLabel(label)
+            tag.setStyleSheet("color:#8a8a8a;")
+            tag.setFixedWidth(126)
+            value = QLabel("—")
+            value.setFont(QFont(MONO, 9))
+            # One line each. A wrapping label here does not make its grid row
+            # any taller, so the second line lands on the row below it.
+            value.setWordWrap(False)
+            value.setAlignment(Qt.AlignmentFlag.AlignLeft
+                               | Qt.AlignmentFlag.AlignVCenter)
+            self.grid.addWidget(tag, 1 + index, 0)
+            self.grid.addWidget(value, 1 + index, 1)
+            self.shown += [tag, value]
+            self.body[key] = value
+        self.grid.setRowStretch(len(names) + 1, 1)
+        self.grid.setColumnStretch(1, 1)
+
+    def refresh(self) -> None:
+        clip = self.window_.chosen
+        if clip is None:
+            self.title.setText("клип не выбран")
+            for value in self.body.values():
+                value.setText("—")
+            return
+        wanted = self.CUE if clip.kind == "cue" else self.MEDIA
+        if [key for _, key in wanted] != list(self.body):
+            self.lay_out(wanted)
+        self.title.setText(f"кью на кадре {clip.tx}" if clip.kind == "cue"
+                           else clip.name)
+        got = {
+            "row": clip.row, "level": str(clip.level), "tx": str(clip.tx),
+            "frames": f"{clip.frames}  ({clip.frames / showfile.FPS:.1f} с)",
+            "tail": (f"+{clip.tail}  ({clip.tail / showfile.FPS:.1f} с)"
+                     if clip.tail else "—"),
+            "crop_end": str(clip.crop_end), "fade_end": str(clip.fade_end),
+            "crop_start": str(clip.crop_start),
+            "fade_start": str(clip.fade_start),
+            "range": (showfile.timecode(clip.tx) if clip.kind == "cue" else
+                      f"{clip.first}..{clip.last}"),
+            "at": showfile.timecode(clip.first),
+            "path": clip.path or "—",
+            "universe": str(clip.universe), "channel": str(clip.channel),
+            "value": str(clip.value),
+        }
+        for key, value in self.body.items():
+            said = got.get(key, "—")
+            if key == "path":
+                # The whole path is in the hover; the row shows its tail.
+                value.setToolTip(said)
+                room = max(120, value.width() or 150)
+                metrics = QFontMetrics(value.font())
+                said = metrics.elidedText(said, Qt.TextElideMode.ElideLeft,
+                                          room)
+            value.setText(said)
 
 
 class Transport(QWidget):
-    """The play bar: the buttons, the loop, and where we are."""
+    """The play bar. The loop's own switch lives on the loop strip."""
 
     def __init__(self, window) -> None:
         super().__init__()
@@ -968,92 +835,12 @@ class Transport(QWidget):
         button("<<", lambda: window.nudge(-int(showfile.FPS)),
                "секунда назад (Shift+←)")
         button("<|", lambda: window.nudge(-1), "кадр назад (←)")
-        # Through a lambda: `clicked` hands its handler a bool, and
-        # `toggle_play` takes no argument -- so the button raised every time
-        # and the playhead never moved. Space calls the method directly,
-        # which is why it worked and the button did not.
         self.play = button(">", lambda: window.toggle_play(),
                            "играть / пауза (Space)", 44)
         button("|>", lambda: window.nudge(1), "кадр вперёд (→)")
         button(">>", lambda: window.nudge(int(showfile.FPS)),
                "секунда вперёд (Shift+→)")
-        button(">|", lambda: window.go_to(window.show_.length),
-               "в конец (End)")
-
-        line.addSpacing(12)
-        self.loop = QPushButton("LOOP")
-        self.loop.setCheckable(True)
-        self.loop.setFixedWidth(58)
-        self.loop.setToolTip(
-            "Гонять плейхед по лупу и не выпускать, пока не отожмёшь (L).\n"
-            "Сам луп — полоска над линейкой: тащи концы и середину.")
-        self.loop.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.loop.toggled.connect(window.set_loop)
-        line.addWidget(self.loop)
-
-        whole_clip = QPushButton("по клипу")
-        whole_clip.setFixedWidth(74)
-        whole_clip.setToolTip(
-            "Поставить луп на весь выбранный клип и включить его (Shift+L).")
-        whole_clip.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        whole_clip.clicked.connect(lambda: window.loop_the_clip())
-        line.addWidget(whole_clip)
-
-        more = QPushButton("+")
-        more.setFixedWidth(26)
-        more.setToolTip("Поставить ещё один луп с того кадра, где плейхед.")
-        more.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        more.clicked.connect(lambda: window.add_loop())
-        line.addWidget(more)
-
-        less = QPushButton("−")
-        less.setFixedWidth(26)
-        less.setToolTip("Убрать выбранный луп.")
-        less.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        less.clicked.connect(lambda: window.drop_loop())
-        line.addWidget(less)
-
-        from_file = QPushButton("из файла")
-        from_file.setFixedWidth(72)
-        from_file.setToolTip(
-            "Вернуть лупы, записанные в самом шоу: каждый зацикленный клип "
-            "от своего кадра и до прихода следующего. Во всех сорока файлах "
-            "это один луп, 800..1099.")
-        from_file.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        from_file.clicked.connect(lambda: window.loop_from_file())
-        line.addWidget(from_file)
-
-        self.lock = QPushButton("замок")
-        self.lock.setCheckable(True)
-        self.lock.setChecked(True)
-        self.lock.setFixedWidth(58)
-        self.lock.setToolTip(
-            "Запретить рисовать луп мышью. Числами его всё равно можно "
-            "поправить — мышь тут и промахивается.")
-        self.lock.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.lock.toggled.connect(window.lock_loop)
-        line.addWidget(self.lock)
-
-        # The exact control: two frame numbers, typed.
-        line.addSpacing(6)
-        line.addWidget(QLabel("с"))
-        self.loop_low = QSpinBox()
-        self.loop_low.setRange(0, 10_000_000)
-        self.loop_low.setFixedWidth(78)
-        self.loop_low.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
-        self.loop_low.setKeyboardTracking(False)
-        line.addWidget(self.loop_low)
-        line.addWidget(QLabel("по"))
-        self.loop_high = QSpinBox()
-        self.loop_high.setRange(0, 10_000_000)
-        self.loop_high.setFixedWidth(78)
-        self.loop_high.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
-        self.loop_high.setKeyboardTracking(False)
-        line.addWidget(self.loop_high)
-        self._saying = False
-        self.loop_low.valueChanged.connect(self.typed)
-        self.loop_high.valueChanged.connect(self.typed)
-
+        button(">|", lambda: window.go_to(window.show_.length), "в конец (End)")
         line.addSpacing(12)
         button("I", lambda: window.to_edge(False), "на начало клипа (I)", 28)
         button("O", lambda: window.to_edge(True), "на конец клипа (O)", 28)
@@ -1061,65 +848,37 @@ class Transport(QWidget):
                "поставить клип слева от плейхеда ([)", 28)
         button("]", lambda: window.put_clip(True),
                "поставить клип справа от плейхеда (])", 28)
-
         line.addSpacing(16)
         self.readout = QLabel()
         self.readout.setFont(QFont(MONO, 11))
         line.addWidget(self.readout)
         line.addStretch(1)
 
-    def typed(self, _value: int = 0) -> None:
-        """A number was typed into one of the boxes."""
-        if self._saying:
-            return
-        self.window_.set_loop_range(self.loop_low.value(),
-                                    self.loop_high.value())
-
-    def say_loop(self) -> None:
-        """Put the loop being edited into the boxes without hearing it back."""
-        picked = self.window_.loop_region()
-        self._saying = True
-        self.loop_low.setValue(picked[0] if picked else 0)
-        self.loop_high.setValue(picked[1] if picked else 0)
-        self._saying = False
-
     def refresh(self) -> None:
         self.play.setText("||" if self.window_.playing else ">")
-        self.say_loop()
-        picked = self.window_.loop_region()
-        here = self.window_.loop_here()
-        said = "лупов нет"
-        if picked is not None:
-            said = (f"луп {self.window_.loop_at + 1} из "
-                    f"{len(self.window_.loops)}: {picked[0]}..{picked[1]}"
-                    f"  ({(picked[1] - picked[0]) / showfile.FPS:.1f}с)")
-        if here is not None:
-            said += "   плейхед внутри лупа"
         self.readout.setText(
             f"{showfile.timecode(self.window_.frame)}   "
-            f"{self.window_.frame} / {self.window_.show_.length}    {said}")
+            f"{self.window_.frame} / {self.window_.show_.length}")
 
 
 class Window(QMainWindow):
-    def __init__(self, first: str = "A") -> None:
+    def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("ПРОТОТИП — таймлайн Matreshka Viewer")
         self.resize(1680, 980)
 
         self.files = showfile.listing()
-        self.frame = 11742
+        # The clock is a float. An int one loses the 0.96 of a frame that a
+        # sixteen millisecond tick is worth, every tick, and the playhead
+        # crawls at about three frames a second instead of sixty.
+        self.raw = 11742.0
         self.chosen = None
         self.playing = False
-        self.looping = False
-        # Places on the timeline, not properties of the selection, and not
-        # something to be invented here: the show file says where they are.
-        # Several, because a show cut into blocks waits at every join.
-        self.loops: list = [[0, 79200]]
-        self.loop_at = 0               # the one the numbers and the mouse edit
-        self.loop_locked = True
+        self.looping = True
         self.backing = "Calibration"
-        self.variant = next((n for n, (key, _) in enumerate(VARIANTS)
-                             if key == first.upper()), 0)
+        self.loops: list = [[0, 79200]]
+        self.loop_at = 0
+        self.loop_locked = True
         self.show_ = showfile.read(self.files[0])
         self.loops = [list(one) for one in self.show_.loops]
         self.axis = Axis(self.show_.length)
@@ -1151,14 +910,45 @@ class Window(QMainWindow):
         top.addWidget(fit)
         top.addWidget(QLabel("ЛКМ — выделить и тащить  ·  ПКМ — прокрутка  ·  "
                              "СКМ — плейхед сюда  ·  колесо — зум  ·  "
-                             "плейхед — за линейку, луп рисуется на полоске над ней"))
+                             "плейхед — за линейку"))
         top.addStretch(1)
         whole.addLayout(top)
 
-        self.holder = QWidget()
-        self.stack = QVBoxLayout(self.holder)
-        self.stack.setContentsMargins(0, 0, 0, 0)
-        whole.addWidget(self.holder, 1)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+
+        left = QVBoxLayout()
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(2)
+        left.addWidget(Preview(self), 1)
+        self.loopbar = LoopBar(self)
+        self.loopbar.changed.connect(self.set_loop_range)
+        self.loopbar.switch.toggled.connect(self.set_loop)
+        left.addWidget(self.loopbar)
+        self.ruler = Ruler(self)
+        self.ruler.moved.connect(self.go_to)
+        left.addWidget(self.ruler)
+        self.tracks = Tracks(self)
+        self.tracks.setFixedHeight(self.tracks.wanted_height())
+        self.tracks.picked.connect(self.pick)
+        self.tracks.jumped.connect(self.go_to)
+        left.addWidget(self.tracks)
+        body.addLayout(left, 1)
+
+        column = QWidget()
+        column.setFixedWidth(290)
+        column.setStyleSheet("background:#232323;")
+        stack = QVBoxLayout(column)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setSpacing(0)
+        self.loop_panel = LoopPanel(self)
+        self.loop_panel.setStyleSheet("background:#282520;")
+        stack.addWidget(self.loop_panel)
+        self.inspector = Inspector(self)
+        stack.addWidget(self.inspector, 1)
+        body.addWidget(column)
+        whole.addLayout(body, 1)
 
         self.transport = Transport(self)
         whole.addWidget(self.transport)
@@ -1171,40 +961,16 @@ class Window(QMainWindow):
         self.state.setFixedHeight(46)
         whole.addWidget(self.state)
 
-        self.switcher = Switcher(self)
-        self.view = None
         self.beat = QTimer(self)
         self.beat.timeout.connect(self.tick)
         self.last = time.perf_counter()
-        self.build()
-
-    # -- the variant ---------------------------------------------------------
-
-    def build(self) -> None:
-        if self.view is not None:
-            self.view.setParent(None)
-            self.view.deleteLater()
-        _key, made = VARIANTS[self.variant]
-        self.view = made(self)
-        self.stack.addWidget(self.view)
-        self.switcher.refresh()
-        self.place_switcher()
         self.redraw()
 
-    def cycle(self, by: int) -> None:
-        self.variant = (self.variant + by) % len(VARIANTS)
-        self.build()
+    # -- the clock -----------------------------------------------------------
 
-    def place_switcher(self) -> None:
-        self.switcher.adjustSize()
-        self.switcher.move((self.width() - self.switcher.width()) // 2, 44)
-        self.switcher.raise_()
-
-    def resizeEvent(self, event) -> None:      # noqa: N802
-        super().resizeEvent(event)
-        self.place_switcher()
-
-    # -- playing -------------------------------------------------------------
+    @property
+    def frame(self) -> int:
+        return int(self.raw)
 
     def toggle_play(self) -> None:
         self.playing = not self.playing
@@ -1218,11 +984,11 @@ class Window(QMainWindow):
     def tick(self) -> None:
         now = time.perf_counter()
         gone, self.last = now - self.last, now
-        at = self.frame + gone * showfile.FPS
+        at = self.raw + gone * showfile.FPS
         here = self.loop_here()
         if self.looping and here is not None:
             # Round and round the loop the playhead is standing in, until the
-            # button is let go -- and then on to the next block, and the next
+            # switch is let go -- and then on to the next block, and the next
             # wait. That is what a show cut into blocks does.
             low, high = here
             if at >= high or at < low:
@@ -1231,24 +997,15 @@ class Window(QMainWindow):
             at = self.show_.length
             self.playing = False
             self.beat.stop()
-        self.frame = int(at)
+        self.raw = at
         self.redraw()
 
-    def set_loop(self, on: bool) -> None:
-        self.looping = bool(on)
-        # Nothing is moved: the loop that holds is the one the playhead is
-        # already in, and if it is in none, the show simply plays on.
-        self.redraw()
+    # -- the loops -----------------------------------------------------------
 
     def loop_here(self):
-        """The loop the playhead is standing in, if it is standing in one.
-
-        This is what playing obeys. A show cut into blocks waits at each join
-        and goes on when the loop is let go, so which loop is running is a
-        question about where the playhead is, not about what is selected.
-        """
+        """The loop the playhead is standing in, if it is standing in one."""
         for low, high in self.loops:
-            if low <= self.frame < high:
+            if low <= self.raw < high:
                 return (int(low), int(high))
         return None
 
@@ -1262,8 +1019,10 @@ class Window(QMainWindow):
 
     def choose_loop(self, index: int) -> None:
         self.loop_at = max(0, min(int(index), len(self.loops) - 1))
-        if hasattr(self, "transport"):
-            self.transport.say_loop()
+        self.redraw()
+
+    def set_loop(self, on: bool) -> None:
+        self.looping = bool(on)
         self.redraw()
 
     def set_loop_range(self, low: int, high: int) -> None:
@@ -1272,63 +1031,46 @@ class Window(QMainWindow):
         low = max(0, min(int(low), self.show_.length - 1))
         high = max(low + 1, min(int(high), self.show_.length))
         self.loops[self.loop_at] = [low, high]
-        here = self.loop_here()
-        if self.looping and here is None:
-            self.frame = low
-        if hasattr(self, "transport"):
-            self.transport.say_loop()
         self.redraw()
 
     def add_loop(self) -> None:
-        """Another wait, starting where the playhead is."""
-        low = int(self.frame)
+        low = self.frame
         high = min(self.show_.length, low + int(showfile.FPS) * 5)
-        self.loops.append([low, max(low + 1, high)])
+        wanted = [low, max(low + 1, high)]
+        self.loops.append(wanted)
         self.loops.sort()
-        self.loop_at = self.loops.index([low, max(low + 1, high)])
-        if hasattr(self, "transport"):
-            self.transport.say_loop()
+        self.loop_at = self.loops.index(wanted)
         self.redraw()
 
     def drop_loop(self) -> None:
-        if len(self.loops) <= 0:
+        if not self.loops:
             return
         self.loops.pop(self.loop_at)
         self.loop_at = max(0, min(self.loop_at, len(self.loops) - 1))
-        if hasattr(self, "transport"):
-            self.transport.say_loop()
         self.redraw()
 
     def lock_loop(self, on: bool) -> None:
-        """Stop the strip taking a drag, so a loop that is right stays right."""
         self.loop_locked = bool(on)
         self.redraw()
 
     def loop_from_file(self) -> None:
         self.loops = [list(one) for one in self.show_.loops]
         self.loop_at = 0
-        if hasattr(self, "transport"):
-            self.transport.say_loop()
         self.redraw()
 
     def loop_the_clip(self) -> None:
-        """Put the loop round the whole of the selected clip, and switch it on.
-
-        Its own button because it is the common case -- watch this block over
-        and over -- while the strip is for the case the block does not cover.
-        """
         clip = self.chosen
         if clip is None or clip.kind == "cue":
             return
         self.set_loop_range(clip.first, clip.last)
-        self.transport.loop.setChecked(True)
-        self.frame = self.loops[self.loop_at][0]
+        self.loopbar.switch.setChecked(True)
+        self.raw = float(self.loops[self.loop_at][0])
         self.redraw()
 
     # -- moving about --------------------------------------------------------
 
     def go_to(self, frame: int) -> None:
-        self.frame = max(0, min(self.show_.length, int(frame)))
+        self.raw = float(max(0, min(self.show_.length, int(frame))))
         self.redraw()
 
     def nudge(self, by: int) -> None:
@@ -1339,7 +1081,6 @@ class Window(QMainWindow):
             self.go_to(self.chosen.last - 1 if end else self.chosen.first)
 
     def put_clip(self, right: bool) -> None:
-        """Stand the selected clip against the playhead, on one side or the other."""
         clip = self.chosen
         if clip is None or clip.kind == "cue":
             return
@@ -1361,7 +1102,10 @@ class Window(QMainWindow):
         self.loops = [list(one) for one in self.show_.loops]
         self.loop_at = 0
         self.axis = Axis(self.show_.length)
-        self.build()
+        for one in (self.loopbar, self.ruler, self.tracks):
+            one.axis = self.axis
+        self.tracks.resizeEvent(None)
+        self.redraw()
 
     def pick(self, clip) -> None:
         self.chosen = clip
@@ -1409,13 +1153,11 @@ class Window(QMainWindow):
             if fast:
                 self.loop_the_clip()
             else:
-                self.transport.loop.toggle()
+                self.loopbar.switch.toggle()
         elif key == Qt.Key.Key_K:
-            self.transport.lock.toggle()
+            self.loop_panel.lock.toggle()
         elif key == Qt.Key.Key_F:
             self.fit_axis()
-        elif key == Qt.Key.Key_Tab:
-            self.cycle(1)
         else:
             super().keyPressEvent(event)
 
@@ -1423,9 +1165,10 @@ class Window(QMainWindow):
 
     def redraw(self) -> None:
         live = self.show_.live_at(self.frame)
+        here = self.loop_here()
         said = [f"кадр {self.frame}  {showfile.timecode(self.frame)}"
                 f"   {'ИГРАЕТ' if self.playing else 'стоит'}"
-                f"{'  ЛУП' if self.looping else ''}"
+                f"{'  В ЛУПЕ' if here is not None and self.looping else ''}"
                 f"   на экранах {len(live)}: "
                 + ("  |  ".join(f"{one.row} L{one.level} {one.name[:22]}"
                                 for one in live) or "ничего")]
@@ -1433,19 +1176,17 @@ class Window(QMainWindow):
                                    else "ничего"))
         self.state.setText("\n".join(said))
         self.transport.refresh()
-        if self.view is not None:
-            self.view.refresh()
-            self.view.update()
+        self.loop_panel.refresh()
+        self.inspector.refresh()
+        self.loopbar.update()
+        self.ruler.update()
+        self.tracks.update()
 
 
 def main() -> int:
-    first = "A"
-    for word in sys.argv[1:]:
-        if word.startswith("--variant="):
-            first = word.split("=", 1)[1]
     app = QApplication(sys.argv)
     app.setStyleSheet(SHEET)
-    window = Window(first)
+    window = Window()
     window.show()
     return app.exec()
 
