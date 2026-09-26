@@ -53,7 +53,9 @@ QComboBox QAbstractItemView { background:#252525; selection-background-color:#3d
 QSpinBox { background:#2d2d2d; border:1px solid #3c3c3c; padding:1px 3px; }
 """
 
-ROWS = ["Top", "Bottom", "Lamels", "Sound", "Kinetic", "Cue"]
+# Top to bottom as asked: what triggers first is highest.
+ROWS = ["Cue", "Kinetic", "Top", "Bottom", "Lamels", "Sound"]
+SCREENS = ["Top", "Bottom", "Lamels", "Sound", "Kinetic"]
 HUE = {"Top": "#4a7ea8", "Bottom": "#4a9c78", "Lamels": "#a88a4a",
        "Sound": "#7a5aa8", "Kinetic": "#a85a5a", "Cue": "#c9a227"}
 # Three content levels per screen. The black backdrop that sits on level 3 of
@@ -202,14 +204,30 @@ class LoopBar(QWidget):
         # The switch lives at the head of the strip it switches.
         self.switch = QPushButton("LOOP", self)
         self.switch.setCheckable(True)
-        self.switch.setChecked(True)
         self.switch.setGeometry(2, 1, HEAD - 12, 18)
         self.switch.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.switch.setToolTip(
-            "Держат ли лупы. Нажато — доехав до лупа, плейхед крутится в нём "
-            "и не идёт дальше, пока не отожмёшь (L). Отжато — едет насквозь.")
+            "Загорается сам, когда плейхед въезжает в луп: с этого момента "
+            "луп держит. Нажми, чтобы отпустить — плейхед поедет дальше до "
+            "следующего лупа (L).")
         self.switch.setStyleSheet(
             "QPushButton { font-size:10px; padding:0px; }")
+
+        # The lock sits at the other end of the strip it locks.
+        self.lock = QPushButton("\U0001f512", self)
+        self.lock.setCheckable(True)
+        self.lock.setChecked(True)
+        self.lock.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.lock.setToolTip(
+            "Запретить рисовать лупы мышью (K). Числами справа их всё равно "
+            "можно поправить — на 22 минутах один пиксель это 56 кадров, и "
+            "мышь тут промахивается по определению.")
+        self.lock.setStyleSheet(
+            "QPushButton { font-size:11px; padding:0px; }")
+
+    def resizeEvent(self, event) -> None:      # noqa: N802
+        self.lock.setGeometry(self.width() - 32, 1, 30, 18)
+        super().resizeEvent(event)
 
     def paintEvent(self, event) -> None:      # noqa: N802
         brush = QPainter(self)
@@ -327,7 +345,7 @@ class Preview(QWidget):
         live = self.window_.show_.live_at(self.window_.frame)
         brush.setFont(QFont(MONO, 9))
         y = box.top() + 20
-        for row in ROWS[:5]:
+        for row in SCREENS:
             here = [one for one in live if one.row == row]
             brush.setPen(QPen(QColor(HUE[row])))
             brush.drawText(box.left() + 10, y, f"{row:8}")
@@ -567,7 +585,7 @@ class Tracks(QWidget):
     def draw_loops(self, brush: QPainter) -> None:
         here = self.window_.loop_here()
         on = self.window_.looping
-        for index, (low, high) in enumerate(self.window_.loops):
+        for _index, (low, high) in enumerate(self.window_.loops):
             left, right = int(self.axis.x_of(low)), int(self.axis.x_of(high))
             running = on and here is not None and here == (low, high)
             brush.fillRect(QRect(left, 0, max(2, right - left), self.height()),
@@ -576,9 +594,8 @@ class Tracks(QWidget):
                               2 if running else 1))
             brush.drawLine(left, 0, left, self.height())
             brush.drawLine(right, 0, right, self.height())
-            brush.setFont(QFont(MONO, 8, QFont.Weight.Bold))
-            brush.setPen(QPen(QColor("#f0c040" if running else "#6a6040")))
-            brush.drawText(left + 5, 11, f"LOOP {index + 1}")
+            # No number here: the strip above numbers them, and down here
+            # the label landed on the first row's own text.
             if running:
                 for x, way in ((left + 3, 1), (right - 3, -1)):
                     brush.drawLine(x, self.height() - 4,
@@ -678,18 +695,6 @@ class LoopPanel(QWidget):
                "клип от своего кадра и до прихода следующего. Во всех сорока "
                "файлах это один луп, 800..1099.")
         line.addStretch(1)
-        # The lock on the right, as asked.
-        self.lock = QPushButton("🔒")
-        self.lock.setCheckable(True)
-        self.lock.setChecked(True)
-        self.lock.setFixedWidth(34)
-        self.lock.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.lock.setToolTip(
-            "Запретить рисовать лупы мышью (K). Числами их всё равно можно "
-            "поправить — на 22 минутах один пиксель это 56 кадров, и мышь "
-            "тут промахивается по определению.")
-        self.lock.toggled.connect(window.lock_loop)
-        line.addWidget(self.lock)
         whole.addLayout(line)
 
         self._saying = False
@@ -707,7 +712,6 @@ class LoopPanel(QWidget):
         self.low.setValue(picked[0] if picked else 0)
         self.high.setValue(picked[1] if picked else 0)
         self._saying = False
-        self.lock.setText("🔒" if self.window_.loop_locked else "🔓")
         here = self.window_.loop_here()
         said = "лупов нет"
         if picked is not None:
@@ -721,33 +725,74 @@ class LoopPanel(QWidget):
 
 
 class Inspector(QWidget):
-    """The selected clip. A cue is a different animal, so it says so."""
+    """The selected clip, and the fields of it that can be changed.
 
-    MEDIA = [("Дорожка", "row"), ("Уровень", "level"),
-             ("Кадр начала", "tx"), ("Длина", "frames"),
-             ("Доезд моторов", "tail"),
-             ("Подрезка с хвоста", "crop_end"),
-             ("Фейд с хвоста", "fade_end"),
-             ("Подрезка с головы", "crop_start"),
-             ("Фейд с головы", "fade_start"),
-             ("Занимает", "range"), ("Начинается", "at"),
-             ("Файл", "path")]
-    CUE = [("Кадр", "tx"), ("Время", "range"), ("Universe", "universe"),
-           ("Channel", "channel"), ("Value", "value"), ("Уровень", "level")]
+    What can be typed is what the show file actually stores: where the clip
+    starts, which level it is on, how much is trimmed, how long it fades. The
+    rest -- how long the file is, what it comes to, where the motors are still
+    moving -- is worked out from those and from the media, so it is shown and
+    not offered. A cue is a different animal and gets its own fields.
+    """
+
+    # (label, key, editable, lowest, highest)
+    MEDIA = [("Дорожка", "row", False, 0, 0),
+             ("Уровень", "level", True, 0, 3),
+             ("Кадр начала", "tx", True, 0, 10_000_000),
+             ("Длина", "frames", False, 0, 0),
+             ("Доезд моторов", "tail", False, 0, 0),
+             ("Подрезка с хвоста", "crop_end", True, -1_000_000, 0),
+             ("Фейд с хвоста", "fade_end", True, -1_000_000, 0),
+             ("Подрезка с головы", "crop_start", True, 0, 1_000_000),
+             ("Фейд с головы", "fade_start", True, 0, 1_000_000),
+             ("Занимает", "range", False, 0, 0),
+             ("Начинается", "at", False, 0, 0)]
+    CUE = [("Кадр", "tx", True, 0, 10_000_000),
+           ("Время", "range", False, 0, 0),
+           ("Universe", "universe", True, 0, 64),
+           ("Channel", "channel", True, 1, 512),
+           ("Value", "value", True, 0, 255),
+           ("Уровень", "level", True, 0, 3)]
 
     def __init__(self, window) -> None:
         super().__init__()
         self.window_ = window
         self.shown: list = []
-        self.grid = QGridLayout(self)
-        self.grid.setContentsMargins(8, 6, 8, 6)
-        self.grid.setHorizontalSpacing(10)
-        self.grid.setVerticalSpacing(4)
+        self.body: dict = {}
+        self._saying = False
+
+        whole = QVBoxLayout(self)
+        whole.setContentsMargins(0, 0, 0, 0)
+        whole.setSpacing(2)
+
         self.title = QLabel("клип не выбран")
         self.title.setFont(QFont(MONO, 10, QFont.Weight.Bold))
         self.title.setWordWrap(True)
-        self.grid.addWidget(self.title, 0, 0, 1, 2)
-        self.body: dict = {}
+        self.title.setContentsMargins(8, 6, 8, 0)
+        whole.addWidget(self.title)
+
+        holder = QWidget()
+        self.grid = QGridLayout(holder)
+        self.grid.setContentsMargins(8, 4, 8, 4)
+        self.grid.setHorizontalSpacing(10)
+        self.grid.setVerticalSpacing(3)
+        whole.addWidget(holder)
+
+        # The path gets a block of its own, across the whole column, because
+        # it has to be readable in full and a grid row will not grow for it.
+        tag = QLabel("Файл")
+        tag.setStyleSheet("color:#8a8a8a;")
+        tag.setContentsMargins(8, 6, 8, 0)
+        whole.addWidget(tag)
+        self.path = QLabel("—")
+        self.path.setFont(QFont(MONO, 9))
+        self.path.setWordWrap(True)
+        self.path.setContentsMargins(8, 0, 8, 6)
+        self.path.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.path.setStyleSheet("color:#b4b4b4;")
+        whole.addWidget(self.path)
+        whole.addStretch(1)
+
         self.lay_out(self.MEDIA)
 
     def lay_out(self, names) -> None:
@@ -755,61 +800,76 @@ class Inspector(QWidget):
             self.grid.removeWidget(widget)
             widget.setParent(None)
         self.shown, self.body = [], {}
-        for index, (label, key) in enumerate(names):
+        for index, (label, key, editable, lowest, highest) in enumerate(names):
             tag = QLabel(label)
             tag.setStyleSheet("color:#8a8a8a;")
             tag.setFixedWidth(126)
-            value = QLabel("—")
-            value.setFont(QFont(MONO, 9))
-            # One line each. A wrapping label here does not make its grid row
-            # any taller, so the second line lands on the row below it.
-            value.setWordWrap(False)
-            value.setAlignment(Qt.AlignmentFlag.AlignLeft
-                               | Qt.AlignmentFlag.AlignVCenter)
-            self.grid.addWidget(tag, 1 + index, 0)
-            self.grid.addWidget(value, 1 + index, 1)
-            self.shown += [tag, value]
-            self.body[key] = value
-        self.grid.setRowStretch(len(names) + 1, 1)
+            if editable:
+                field = QSpinBox()
+                field.setRange(lowest, highest)
+                field.setKeyboardTracking(False)
+                field.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+                field.valueChanged.connect(
+                    lambda value, which=key: self.typed(which, value))
+            else:
+                field = QLabel("—")
+                field.setFont(QFont(MONO, 9))
+                field.setWordWrap(False)
+                field.setAlignment(Qt.AlignmentFlag.AlignLeft
+                                   | Qt.AlignmentFlag.AlignVCenter)
+            self.grid.addWidget(tag, index, 0)
+            self.grid.addWidget(field, index, 1)
+            self.shown += [tag, field]
+            self.body[key] = field
         self.grid.setColumnStretch(1, 1)
+
+    def typed(self, key: str, value: int) -> None:
+        """A number was changed by hand. Put it on the clip and redraw."""
+        if self._saying:
+            return
+        clip = self.window_.chosen
+        if clip is None:
+            return
+        setattr(clip, key, int(value))
+        self.window_.redraw()
 
     def refresh(self) -> None:
         clip = self.window_.chosen
+        wanted = self.CUE if (clip is not None and clip.kind == "cue") \
+            else self.MEDIA
+        if [one[1] for one in wanted] != list(self.body):
+            self.lay_out(wanted)
         if clip is None:
             self.title.setText("клип не выбран")
-            for value in self.body.values():
-                value.setText("—")
+            self.path.setText("—")
+            self._saying = True
+            for field in self.body.values():
+                if isinstance(field, QSpinBox):
+                    field.setEnabled(False)
+                else:
+                    field.setText("—")
+            self._saying = False
             return
-        wanted = self.CUE if clip.kind == "cue" else self.MEDIA
-        if [key for _, key in wanted] != list(self.body):
-            self.lay_out(wanted)
         self.title.setText(f"кью на кадре {clip.tx}" if clip.kind == "cue"
                            else clip.name)
-        got = {
-            "row": clip.row, "level": str(clip.level), "tx": str(clip.tx),
+        self.path.setText(clip.path or "—")
+        said = {
+            "row": clip.row,
             "frames": f"{clip.frames}  ({clip.frames / showfile.FPS:.1f} с)",
             "tail": (f"+{clip.tail}  ({clip.tail / showfile.FPS:.1f} с)"
                      if clip.tail else "—"),
-            "crop_end": str(clip.crop_end), "fade_end": str(clip.fade_end),
-            "crop_start": str(clip.crop_start),
-            "fade_start": str(clip.fade_start),
-            "range": (showfile.timecode(clip.tx) if clip.kind == "cue" else
-                      f"{clip.first}..{clip.last}"),
+            "range": (showfile.timecode(clip.tx) if clip.kind == "cue"
+                      else f"{clip.first}..{clip.last}"),
             "at": showfile.timecode(clip.first),
-            "path": clip.path or "—",
-            "universe": str(clip.universe), "channel": str(clip.channel),
-            "value": str(clip.value),
         }
-        for key, value in self.body.items():
-            said = got.get(key, "—")
-            if key == "path":
-                # The whole path is in the hover; the row shows its tail.
-                value.setToolTip(said)
-                room = max(120, value.width() or 150)
-                metrics = QFontMetrics(value.font())
-                said = metrics.elidedText(said, Qt.TextElideMode.ElideLeft,
-                                          room)
-            value.setText(said)
+        self._saying = True
+        for key, field in self.body.items():
+            if isinstance(field, QSpinBox):
+                field.setEnabled(True)
+                field.setValue(int(getattr(clip, key, 0) or 0))
+            else:
+                field.setText(said.get(key, "—"))
+        self._saying = False
 
 
 class Transport(QWidget):
@@ -874,7 +934,12 @@ class Window(QMainWindow):
         self.raw = 11742.0
         self.chosen = None
         self.playing = False
-        self.looping = True
+        # Off to begin with. It lights itself when the playhead drives into a
+        # loop, and goes out when somebody presses it -- which is what lets
+        # the show move on to the next block.
+        self.looping = False
+        self.let_go = None             # the loop we have already been let out of
+        self._switching = False
         self.backing = "Calibration"
         self.loops: list = [[0, 79200]]
         self.loop_at = 0
@@ -925,6 +990,7 @@ class Window(QMainWindow):
         self.loopbar = LoopBar(self)
         self.loopbar.changed.connect(self.set_loop_range)
         self.loopbar.switch.toggled.connect(self.set_loop)
+        self.loopbar.lock.toggled.connect(self.lock_loop)
         left.addWidget(self.loopbar)
         self.ruler = Ruler(self)
         self.ruler.moved.connect(self.go_to)
@@ -985,12 +1051,25 @@ class Window(QMainWindow):
         now = time.perf_counter()
         gone, self.last = now - self.last, now
         at = self.raw + gone * showfile.FPS
-        here = self.loop_here()
-        if self.looping and here is not None:
-            # Round and round the loop the playhead is standing in, until the
-            # switch is let go -- and then on to the next block, and the next
-            # wait. That is what a show cut into blocks does.
-            low, high = here
+        # The loop is looked up at where the playhead IS, not where it is
+        # going. Looking it up at the new place let a single tick step over
+        # the far edge, and from outside there was nothing left to catch it.
+        was = self.loop_over(self.raw)
+        if self.let_go is not None and was != self.let_go:
+            self.let_go = None       # clear of it; it may catch us next time
+
+        holding = was if (self.looping and was is not None) else None
+        if holding is None:
+            # Crossing a loop's start from the left is what arms it. Starting
+            # already inside one does not: that is the show being scrubbed
+            # into the middle of a wait, not arriving at it.
+            for low, high in self.loops:
+                if self.raw < low <= at and (int(low), int(high)) != self.let_go:
+                    holding = (int(low), int(high))
+                    self.light_switch(True)
+                    break
+        if holding is not None:
+            low, high = holding
             if at >= high or at < low:
                 at = low + (at - high) % max(1, high - low)
         elif at >= self.show_.length:
@@ -1004,10 +1083,22 @@ class Window(QMainWindow):
 
     def loop_here(self):
         """The loop the playhead is standing in, if it is standing in one."""
+        return self.loop_over(self.raw)
+
+    def loop_over(self, frame: float):
+        """The loop covering a frame. Named apart from `loop_at`, which is an
+        index into the list -- one name for both was a number being called."""
         for low, high in self.loops:
-            if low <= self.raw < high:
+            if low <= frame < high:
                 return (int(low), int(high))
         return None
+
+    def light_switch(self, on: bool) -> None:
+        """Move the switch without it answering back."""
+        self._switching = True
+        self.looping = bool(on)
+        self.loopbar.switch.setChecked(self.looping)
+        self._switching = False
 
     def loop_region(self):
         """The loop being edited -- what the numbers and the mouse act on."""
@@ -1022,7 +1113,14 @@ class Window(QMainWindow):
         self.redraw()
 
     def set_loop(self, on: bool) -> None:
+        """The switch was pressed by a hand, not by the playhead arriving."""
+        if self._switching:
+            return
         self.looping = bool(on)
+        # Letting it go here means letting it go from this loop in
+        # particular: the playhead has to be able to leave without the loop
+        # catching it again on the very next tick.
+        self.let_go = self.loop_here() if not self.looping else None
         self.redraw()
 
     def set_loop_range(self, low: int, high: int) -> None:
@@ -1051,6 +1149,8 @@ class Window(QMainWindow):
 
     def lock_loop(self, on: bool) -> None:
         self.loop_locked = bool(on)
+        self.loopbar.lock.setText("\U0001f512" if self.loop_locked
+                                  else "\U0001f513")
         self.redraw()
 
     def loop_from_file(self) -> None:
@@ -1063,7 +1163,8 @@ class Window(QMainWindow):
         if clip is None or clip.kind == "cue":
             return
         self.set_loop_range(clip.first, clip.last)
-        self.loopbar.switch.setChecked(True)
+        self.let_go = None
+        self.light_switch(True)
         self.raw = float(self.loops[self.loop_at][0])
         self.redraw()
 
@@ -1155,7 +1256,7 @@ class Window(QMainWindow):
             else:
                 self.loopbar.switch.toggle()
         elif key == Qt.Key.Key_K:
-            self.loop_panel.lock.toggle()
+            self.loopbar.lock.toggle()
         elif key == Qt.Key.Key_F:
             self.fit_axis()
         else:
