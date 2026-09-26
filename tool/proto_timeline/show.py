@@ -117,6 +117,9 @@ class Show:
     name: str = ""
     length: int = 79200
     clips: list = field(default_factory=list)
+    # Where the file says the show waits: one range per looped clip. A show
+    # cut into blocks waits at every join, so there can be several.
+    loops: list = field(default_factory=list)
 
     def rows(self) -> dict:
         out: dict = {}
@@ -247,12 +250,41 @@ def listing() -> list:
     return sorted(SHOWS.glob("*.trix"))
 
 
+def loops_of(raw: dict, length: int) -> list:
+    """Every loop the show file describes, in order.
+
+    Not ranges somebody drew: a clip with `loop` set stands from its own `tx`
+    until the next clip arrives, and that is the installation waiting. A show
+    cut into blocks has one of these at every join; the forty files here have
+    exactly one each, the black still before the show starts, and it comes to
+    800..1099 in all of them.
+    """
+    looped, others = [], []
+    for layers in (raw.get("video") or {}).values():
+        for clip in layers.values():
+            (looped if clip.get("loop") else others).append(clip)
+    for section in ("audio", "jsons"):
+        for clip in (raw.get(section) or {}).values():
+            others.append(clip)
+    starts = sorted({int(one["tx"]) for one in looped})
+    edges = sorted({int(one["tx"]) for one in others})
+    found = []
+    for first in starts:
+        after = [one for one in edges if one > first] \
+            + [one for one in starts if one > first]
+        stop = min(after) - 1 if after else length
+        if stop > first:
+            found.append([first, stop])
+    return found or [[0, length]]
+
+
 def read(path: Path) -> Show:
     """One show file, with every clip's length filled in."""
     known = _cache()
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     show = Show(name=raw.get("project", {}).get("name", Path(path).stem),
                 length=int(raw.get("project", {}).get("length") or 79200))
+    show.loops = loops_of(raw, show.length)
 
     for canvas, row in CANVASES:
         for ident, clip in (raw.get("video", {}).get(canvas) or {}).items():
