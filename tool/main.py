@@ -20,6 +20,7 @@ from PySide6.QtGui import (QColor, QFont, QIcon, QImage, QKeySequence,
                            QPainter, QPen, QPixmap, QShortcut)
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox,
                                QComboBox, QDialog, QFileDialog, QFrame,
+                               QMessageBox,
                                QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QProgressBar, QListView,
                                QPushButton, QSizePolicy, QSlider, QSpinBox,
@@ -31,6 +32,7 @@ import numpy as np
 import wgpu
 
 import depends
+import draft as drafts
 import export
 import jobs
 import logfile
@@ -652,8 +654,21 @@ class Viewer(QMainWindow):
         self._split_sizes: list = []
         self._keys_open = False
         self._levels_open = True       # the floating panel of brightnesses
-        self._motors_kept = None       # (key, placed): the last show's motors
-        self._motors_key = None
+        # The editor's: the show's history, and its working file once it has
+        # one. `ask_resume` is what asks whether to carry on with a draft --
+        # a dialog, which the tests answer for themselves.
+        self.history = drafts.History()
+        self._history_for = None       # which draft the history is of
+        self._took = False             # whether the change begun took a snapshot
+        self.draft = None
+        self.ask_resume = self._ask_resume
+        self._show_source = ""         # trix | draft | rows
+        self.layer_of: list = []       # which level each show track is
+        self._wavs: dict = {}          # the show's sounds, read once
+        self._motor_cache: dict = {}   # the show's motors, built once
+        self._draft_timer = QTimer(self)
+        self._draft_timer.setSingleShot(True)
+        self._draft_timer.timeout.connect(self._save_draft)
 
         try:
             self.adapter, self.device = screen_gpu.make_device()
@@ -870,6 +885,11 @@ class Viewer(QMainWindow):
         self.show_view.jumped.connect(
             lambda frame: self._move(frame / showfile.FPS))
         self.show_view.looping_changed.connect(self._say_loop)
+        self.show_view.about_to_change.connect(self._before_change)
+        self.show_view.unchanged.connect(self._change_dropped)
+        self.show_view.edited.connect(self._after_change)
+        self.show_view.dropped.connect(self._drop_files)
+        self.show_view.editing_changed.connect(self._editing_shown)
         layout.addWidget(self.split, 1)
 
         layout.addLayout(self._transport())
@@ -999,22 +1019,56 @@ class Viewer(QMainWindow):
         return bar
 
     def _show_bar(self) -> QWidget:
-        """The line above everything in Шоу: opening a show, and its name."""
+        """The line above everything in Шоу: which show, and the editor.
+
+        Opening a show and starting a new one; the editor's switch; the name,
+        which is the show file's `project.name` and is typed into only in the
+        editor; what is in it; and in the editor, going back and forward
+        through the changes, a cue, deleting, and giving the draft up.
+        """
         holder = QWidget()
         holder.setObjectName("qa_show_bar")
         bar = QHBoxLayout(holder)
         bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(6)
-        opener = QPushButton("Открыть шоу…")
-        opener.setObjectName("qa_open_show")
-        opener.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        opener.setToolTip("Открыть .trix из редактора шоу и перейти в Шоу. "
-                          "Файл только читается; ничего в него не пишется.")
-        opener.clicked.connect(self._open_show)
-        opener.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.open_show_button = opener
-        bar.addWidget(opener)
+
+        def button(text, name, hint, act, checkable=False):
+            one = QPushButton(text)
+            one.setObjectName(name)
+            one.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            one.setToolTip(hint)
+            one.setCheckable(checkable)
+            one.setSizePolicy(QSizePolicy.Policy.Fixed,
+                              QSizePolicy.Policy.Fixed)
+            one.clicked.connect(act)
+            bar.addWidget(one)
+            return one
+
+        self.open_show_button = button(
+            "Открыть шоу…", "qa_open_show",
+            "Открыть .trix из редактора шоу. Файл только читается; ничего в "
+            "него не пишется. Если у шоу есть черновик — спросит, продолжать "
+            "ли его.", lambda: self._open_show())
+        button("Новое шоу", "qa_new_show",
+               "Пустое шоу на 22 минуты, сразу в редакторе: файлы бросаются "
+               "из проводника прямо на дорожки.", lambda: self._new_show())
         bar.addWidget(_divider())
+        self.editor_button = button(
+            "\u270e Редактор", "qa_editor",
+            "Отпереть шоу: клипы тащатся, поля справа пишут в клип, лупы "
+            "рисуются, файлы бросаются на дорожки. Каждая правка сама "
+            "пишется в черновик рядом с программой (drafts); сам .trix не "
+            "трогается никогда.", lambda on: self._set_editing(on), True)
+        self.editor_button.setStyleSheet(LEVEL_BUTTON)
+        self.project_name = QLineEdit()
+        self.project_name.setObjectName("qa_project_name")
+        self.project_name.setPlaceholderText("имя шоу")
+        self.project_name.setFixedWidth(300)
+        self.project_name.setReadOnly(True)
+        self.project_name.setToolTip("Имя шоу — project.name в .trix. Правится "
+                                     "в редакторе.")
+        self.project_name.editingFinished.connect(self._renamed)
+        bar.addWidget(self.project_name)
         self.project = QLabel()
         self.project.setObjectName("qa_project")
         self.project.setFont(QFont(MONO, 9))
@@ -1025,7 +1079,273 @@ class Viewer(QMainWindow):
         self.project.setSizePolicy(QSizePolicy.Policy.Ignored,
                                    QSizePolicy.Policy.Preferred)
         bar.addWidget(self.project, 1)
+        self.editor_only = [
+            button("\u21b6", "qa_undo", "Отменить (Ctrl+Z)", lambda: self._undo()),
+            button("\u21b7", "qa_redo", "Вернуть (Ctrl+Y)", lambda: self._redo()),
+            button("+ кью", "qa_cue_add",
+                   "Кью на кадре плейхеда, с тем же адресом, что у кью перед "
+                   "ним. Universe, channel и value — справа.",
+                   lambda: self.show_view.add_cue()),
+            button("Удалить", "qa_delete", "Удалить выбранный клип (Delete)",
+                   lambda: self.show_view.delete_chosen()),
+            button("Вернуть файл", "qa_revert",
+                   "Бросить черновик и открыть .trix как он есть. Черновик не "
+                   "стирается: уходит в drafts\\old.", lambda: self._revert()),
+        ]
+        for widget in self.editor_only[:2]:
+            widget.setFixedWidth(30)
+            widget.setStyleSheet("QPushButton { padding:2px 0px; "
+                                 "font-size:14px; }")
+        for widget in self.editor_only:
+            widget.setVisible(False)
         return holder
+
+    # -- the editor ------------------------------------------------------------
+
+    def _set_editing(self, on: bool) -> None:
+        self.show_view.set_editing(bool(on) and self.level == "show")
+
+    def _editing_shown(self, on: bool) -> None:
+        """What the editor being on or off looks like."""
+        self.editor_button.blockSignals(True)
+        self.editor_button.setChecked(on)
+        self.editor_button.blockSignals(False)
+        self.project_name.setReadOnly(not on)
+        for widget in self.editor_only:
+            widget.setVisible(on)
+        self.keys_card.setText(timeline.keys_text(on))
+        self._say_undo()
+        self._lay_overlays()
+        logfile.write(f"show: editor {'on' if on else 'off'}")
+        self._remember()
+
+    def _say_undo(self) -> None:
+        back, ahead = self.history.back, self.history.ahead
+        undo, redo = self.editor_only[0], self.editor_only[1]
+        undo.setEnabled(bool(back))
+        redo.setEnabled(bool(ahead))
+        undo.setToolTip(f"Отменить: {back[-1][0]} (Ctrl+Z)" if back
+                        else "Нечего отменять")
+        redo.setToolTip(f"Вернуть: {ahead[-1][0]} (Ctrl+Y)" if ahead
+                        else "Нечего возвращать")
+        self.editor_only[4].setEnabled(
+            self.draft is not None and bool(self.draft.source))
+
+    def _before_change(self, label: str, key) -> None:
+        """A change is coming: the show as it stands goes into the history."""
+        if self.show_open is None:
+            return
+        self._took = self.history.before(self.show_open, label, key)
+
+    def _change_dropped(self) -> None:
+        """Begun and not made -- a click on a clip rather than a drag."""
+        if self._took:
+            self.history.forget_last()
+        self._took = False
+
+    def _after_change(self, what) -> None:
+        """A change has been made: settled, played, and written down."""
+        show = self.show_open
+        if show is None:
+            return
+        self._took = False
+        was = show.length
+        drafts.settle(show)
+        self._ensure_draft()
+        self.draft.changes += 1
+        self._replay(set(what), was)
+        self._say_project(show)
+        self._say_undo()
+        self._draft_timer.start(800)
+
+    def _replay(self, what: set, length_was: int | None = None) -> None:
+        """Play what was touched again, and nothing else."""
+        show = self.show_open
+        if what & {"Top", "Bottom", "Lamels", "all"}:
+            self._play_video()
+        if what & {"Sound", "all"}:
+            self._play_sound()
+        if what & {"Kinetic", "all"}:
+            self._play_motors()
+        if length_was is not None and show.length != length_was:
+            self.clock.duration = show.length / showfile.FPS
+            self.show_view.axis.stretch(show.length)
+            self._reset_range()
+        self.show_view.changed.emit()
+        self.touch()
+
+    def _undo(self) -> None:
+        self._through_history(self.history.undo, "отменено")
+
+    def _redo(self) -> None:
+        self._through_history(self.history.redo, "возвращено")
+
+    def _through_history(self, step, how: str) -> None:
+        if not self.show_view.editing or self.show_open is None:
+            return
+        was = self.show_open.length
+        label = step(self.show_open)
+        if label is None:
+            self.show_view.say("нечего " + ("отменять" if how == "отменено"
+                                            else "возвращать"))
+            return
+        drafts.settle(self.show_open)
+        self.show_view.reopen()
+        self._ensure_draft()
+        self.draft.changes += 1
+        self._replay({"all"}, was)
+        self._say_project(self.show_open)
+        self._say_undo()
+        self.show_view.say(f"{how}: {label}")
+        self._draft_timer.start(800)
+
+    def _renamed(self) -> None:
+        show = self.show_open
+        name = self.project_name.text().strip()
+        if show is None or not self.show_view.editing or name == show.name:
+            return
+        if not self.show_view.begin("имя шоу", key="name"):
+            return
+        show.name = name
+        self.show_view.done({"name"})
+
+    def _ensure_draft(self) -> None:
+        """The working file, begun at the first change."""
+        if self.draft is not None:
+            return
+        source = self.trix_path if self._show_source == "trix" else ""
+        where = drafts.path_for(logfile.app_dir(), source)
+        if where.exists():
+            # One that was not taken up when the file was opened: aside, not
+            # over it.
+            aside = drafts.Draft(where).put_aside()
+            logfile.write(f"show: an older draft put aside as {aside}")
+        self.draft = drafts.Draft(where, source,
+                                  drafts.stamp(source) if source else {})
+        self.draft.file_loops = list(self.show_view.file_loops)
+        if not source and not self.show_open.name:
+            self.show_open.name = "Новое шоу"
+        self._history_for = str(where)
+        logfile.write(f"show: draft begun at {where}")
+        self._remember()
+
+    def _save_draft(self) -> None:
+        self._draft_timer.stop()
+        if self.draft is None or self.show_open is None \
+                or self._show_source not in ("draft", "trix", "rows"):
+            return
+        try:
+            self.draft.save(self.show_open)
+        except OSError as trouble:  # noqa: BLE001 -- said, and tried again
+            logfile.write(f"show: the draft could not be written: {trouble}")
+            self.show_view.say(f"черновик не записался: {trouble}")
+
+    def _flush_draft(self) -> None:
+        if self._draft_timer.isActive():
+            self._save_draft()
+
+    def _ask_resume(self, found) -> str | None:
+        """Carry on with the draft, open the file afresh, or neither."""
+        said = (f"У этого шоу есть черновик: правок {found.changes}, последняя "
+                f"записана {found.saved or found.started}.")
+        if found.source_changed():
+            said += ("\n\nФайл шоу изменился после того, как черновик был "
+                     "начат: черновик сделан на прежней версии файла.")
+        said += ("\n\n«Открыть файл заново» не стирает черновик — он уходит "
+                 "в drafts\\old.")
+        box = QMessageBox(self)
+        box.setWindowTitle("Черновик")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(said)
+        carry = box.addButton("Продолжить черновик",
+                              QMessageBox.ButtonRole.AcceptRole)
+        afresh = box.addButton("Открыть файл заново",
+                               QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(carry)
+        box.exec()
+        chosen = box.clickedButton()
+        return ("draft" if chosen is carry else "file" if chosen is afresh
+                else None)
+
+    def _new_show(self) -> None:
+        """An empty show on a draft of its own, straight into the editor."""
+        if self.job is not None:
+            return
+        self._flush_draft()
+        show = showfile.Show(name="Новое шоу", length=showfile.LENGTH)
+        where = drafts.path_for(logfile.app_dir(), "")
+        self.draft = drafts.Draft(where)
+        self.draft.save(show)
+        self.trix_path = ""
+        self.history.clear()
+        self._history_for = str(where)
+        logfile.write(f"show: a new show, drafted at {where}")
+        if self.level == "show":
+            self._load_show()
+        else:
+            self._set_level("show")
+        self.show_view.set_editing(True)
+        self._remember()
+
+    def _revert(self) -> None:
+        """Give the draft up and open the show file as it is."""
+        if self.draft is None or not self.draft.source:
+            return
+        self._draft_timer.stop()
+        aside = self.draft.put_aside()
+        logfile.write(f"show: draft put aside as {aside}; the file reopened")
+        self.trix_path = self.draft.source
+        self.draft = None
+        self.history.clear()
+        self.show_view.set_editing(False)
+        self._load_show()
+        self.show_view.say(f"черновик убран в drafts\\old\\{Path(str(aside)).name}")
+        self._remember()
+
+    def _drop_files(self, paths: list, row: str, level: int, frame: int) -> None:
+        """Files from a folder onto a lane: clips, one after another from
+        where they were let go."""
+        show = self.show_open
+        if show is None or not self.show_view.begin("файлы на дорожку"):
+            return
+        at, made, trouble = int(frame), [], []
+        for path in paths:
+            try:
+                tail = 0
+                if row == "Sound":
+                    got, kind = showfile.sound_frames(path), "audio"
+                    if got is None:
+                        raise showfile.ShowError(f"{Path(path).name} is not a WAV")
+                elif row == "Kinetic":
+                    got, tail = showfile.motor_frames(path)
+                    kind = "kinetic"
+                    if got is None:
+                        raise showfile.ShowError(
+                            f"{Path(path).name} is not a motor file")
+                else:
+                    got, kind = showfile.media_frames(path, strict=True), "video"
+            except showfile.ShowError as error:
+                trouble.append(str(error))
+                continue
+            clip = showfile.Clip(kind=kind, row=row, level=level,
+                                 path=str(path), tx=at, frames=got or 0,
+                                 tail=tail, ident=drafts.next_ident(show))
+            show.clips.append(clip)
+            made.append(clip)
+            # The next one where this one stops showing; a picture has no
+            # length, and is given five seconds before the next.
+            at = (clip.last - clip.tail if clip.frames
+                  else at + int(5 * showfile.FPS))
+        if trouble:
+            self.show_view.say("; ".join(trouble)[:160])
+            logfile.write("show: not placed: " + "; ".join(trouble))
+        if not made:
+            self.show_view.cancel()
+            return
+        self.show_view.chosen = made[-1]
+        logfile.write(f"show: {len(made)} placed on {row} L{level} from {frame}")
+        self.show_view.done({row})
 
     def _set_level(self, level: str) -> None:
         """Into the quick look or into the show, each with its own content.
@@ -1045,6 +1365,9 @@ class Viewer(QMainWindow):
             return
         if self.clock.playing:
             self._toggle()
+        if level != "show":
+            self._flush_draft()
+            self.show_view.set_editing(False)
         self.level = level
         self.level_buttons[level].setChecked(True)
         showing = level == "show"
@@ -1099,13 +1422,41 @@ class Viewer(QMainWindow):
             self.open_show_file(chosen)
 
     def open_show_file(self, path: str) -> None:
-        """Open a show and go to it. Opening one is asking for the show mode."""
+        """Open a show and go to it. Opening one is asking for the show mode.
+
+        If the show has a draft, `ask_resume` is asked whether to carry on
+        with it or open the file afresh -- afresh puts the draft aside, it
+        does not delete it -- or to leave things as they are.
+        """
+        self._flush_draft()
+        where = drafts.path_for(logfile.app_dir(), str(path))
+        resume = None
+        if where.exists():
+            try:
+                found, _ = drafts.Draft.load(where)
+            except ValueError as error:
+                logfile.write(f"show: {error}")
+                found = None
+            if found is not None:
+                answer = self.ask_resume(found)
+                if answer is None:
+                    return
+                if answer == "draft":
+                    resume = found
+                else:
+                    aside = found.put_aside()
+                    logfile.write(f"show: draft put aside as {aside}")
         self.trix_path = str(path)
+        self.draft = resume
+        if resume is None:
+            self.history.clear()
+            self._history_for = None
         if self.level == "show":
             self._load_show()
-            self._remember()
         else:
             self._set_level("show")
+        self.show_view.set_editing(resume is not None)
+        self._remember()
 
     def _rows_as_show(self):
         """The rows, as a show: a 0.3 chain laid out where there is one.
@@ -1141,15 +1492,12 @@ class Viewer(QMainWindow):
                 rows[row.title] = [(text, 1)]
         return showfile.chained(rows)
 
-    def _let_go_of_screens(self) -> None:
-        """Everything that was playing, stopped and handed back.
-
-        Every reader is told first and waited for afterwards, on a thread of
-        its own: each takes about sixty milliseconds to notice, and waited for
-        one at a time they were a third of a second of the window standing
-        still at every switch.
-        """
-        going = list(self.streams)
+    @staticmethod
+    def _stop_readers(streams) -> None:
+        """Every reader told first, and waited for on a thread of its own:
+        each takes about sixty milliseconds to notice, and waited for one at
+        a time they were a third of a second of the window standing still."""
+        going = list(streams)
         for stream in going:
             asking = getattr(stream, "ask_to_stop", None)
             if asking is not None:
@@ -1157,7 +1505,12 @@ class Viewer(QMainWindow):
         if going:
             threading.Thread(target=lambda: [one.stop() for one in going],
                              daemon=True).start()
+
+    def _let_go_of_screens(self) -> None:
+        """Everything that was playing, stopped and handed back."""
+        self._stop_readers(self.streams)
         self.streams, self.screens, self.held = [], [], []
+        self.layer_of = []
         self._on_card: dict = {}     # which frame each screen's texture holds
         self.feeding = []            # which baked screen each stream feeds
         self.frame_at = None         # which of them is the overlay, if any
@@ -1178,14 +1531,12 @@ class Viewer(QMainWindow):
             self.solid.clear_all_videos()
 
     def _load_show(self) -> None:
-        """The show on the timeline: the .trix that is open, or the rows.
+        """The show on the timeline: its draft, the .trix, or the rows.
 
-        Each screen is its tracks -- a Track a level -- composed into one
-        texture of the screen's own size, added, and that texture is what
-        the scene is given, as already light. The sounds are added into one
-        mix, which keeps the time as a WAV does in the quick look. The motor
-        files are sampled on a thread of their own and arrive when they are
-        ready; until then the cells stand at rest.
+        A draft first, when there is one in hand -- it is the show as edited.
+        Otherwise the show file that is open, read afresh, and otherwise the
+        rows of the quick look as a show. Then it is played: see
+        `_play_video`, `_play_sound` and `_play_motors`.
         """
         started = time.perf_counter()
         self._let_go_of_screens()
@@ -1197,21 +1548,80 @@ class Viewer(QMainWindow):
         if self.device is None:
             return
 
-        show, trouble = None, ""
-        if self.trix_path:
+        show, trouble, file_loops = None, "", None
+        if self.draft is not None:
+            try:
+                self.draft, show = drafts.Draft.load(self.draft.where)
+                file_loops = self.draft.file_loops
+                self._show_source = "draft"
+                if self.draft.source:
+                    self.trix_path = self.draft.source
+            except ValueError as error:
+                trouble = str(error)
+                logfile.write(f"show: {error}")
+                self.draft = None
+        if show is None and self.trix_path:
             try:
                 show = showfile.read(self.trix_path)
+                self._show_source = "trix"
             except showfile.ShowError as error:
                 trouble = str(error)
                 logfile.write(f"show: {error}")
         if show is None:
             show = self._rows_as_show()
+            self._show_source = "rows"
+        mine = str(self.draft.where) if self.draft is not None else None
+        if mine is None or mine != self._history_for:
+            self.history.clear()
+        self._history_for = mine
         self.show_open = show
-        self.show_view.open(show)
+        self.show_view.open(show, file_loops)
         self._say_project(show, trouble)
 
+        self._play_video()
+        self._play_sound()
+        self._play_motors(fresh=True)
+
+        self.clock.duration = show.length / showfile.FPS
+        self.clock.move_to(0.0)
+        self._show_was = 0.0
+        self.show_view.set_frame(0.0)
+        self._reset_range()
+        self._name_from_show(show)
+        self._say_undo()
+        self._show_stats()
+        self.touch()
+        logfile.write(f"show: {show.describe()}  {len(self.streams)} tracks on "
+                      f"{len(self.composers)} screens, from the "
+                      f"{self._show_source}, opened in "
+                      f"{time.perf_counter() - started:.2f} s")
+        for clip in show.missing():
+            logfile.write(f"show: not on this machine: {clip.row} L{clip.level} "
+                          f"at {clip.tx}: {clip.path}")
+
+    def _play_video(self) -> None:
+        """Every screen's tracks, from the show as it now stands.
+
+        A Track a level, composed by adding into a texture of the screen's own
+        size, and that texture is what the scene is given as already light.
+        Played again after an edit, a level keeps the surface it had -- and
+        the picture on it, until the new track sends one -- so moving a clip
+        does not put the screen out for a frame.
+        """
+        show = self.show_open
+        kept = {}
+        for index, track in enumerate(self.streams):
+            if index < len(self.layer_of):
+                kept[(self.feeding[index], self.layer_of[index])] = (
+                    self.screens[index], index in self._on_card)
+        self._stop_readers(self.streams)
+        self.streams, self.screens, self.held = [], [], []
+        self.feeding, self.layer_of = [], []
+        self._on_card = {}
         for title, name in SHOW_SCREENS:
             across, down = self._pixels(name)
+            if min(across, down) < 2:
+                continue
             members = []
             for level in show.levels(title):
                 try:
@@ -1219,7 +1629,10 @@ class Viewer(QMainWindow):
                                          screen=(across, down))
                     if not track.clips:
                         continue
-                    surface = screen_gpu.Screen(self.device, track.movie)
+                    surface, carded = kept.get((name, level), (None, False))
+                    if surface is None or not surface.fits(track.movie):
+                        surface = screen_gpu.Screen(self.device, track.movie)
+                        carded = False
                 except Exception as error:  # noqa: BLE001 -- said in the log
                     logfile.write(f"show: {title} L{level}: {error}")
                     continue
@@ -1227,87 +1640,158 @@ class Viewer(QMainWindow):
                 self.screens.append(surface)
                 self.held.append(None)
                 self.feeding.append(name)
+                self.layer_of.append(level)
                 at = len(self.streams) - 1
+                if carded:
+                    self._on_card[at] = -1   # a picture, if not this frame's
                 track.on_change = lambda _track, at=at: self._reshape_layer(at)
                 members.append(at)
-            if not members or min(across, down) < 2:
-                continue
-            composer = screen_gpu.Compositor(self.device, across, down)
+            composer = self.composers.get(name, (None, None))[0]
+            if composer is None:
+                composer = screen_gpu.Compositor(self.device, across, down)
+                if self.solid is not None and name in self.solid.calibration:
+                    self.solid.set_video(name, composer.texture,
+                                         composer.texture, False, 3, (1.0, 1.0))
+                    self.solid.set_video_opacity(1.0)
             self.composers[name] = (composer, members)
-            if self.solid is not None and name in self.solid.calibration:
-                self.solid.set_video(name, composer.texture, composer.texture,
-                                     False, 3, (1.0, 1.0))
-                self.solid.set_video_opacity(1.0)
+        self._gains_changed()
 
-        sounds = [one for one in show.clips
-                  if one.kind == "audio" and not one.missing]
-        if sounds:
+    def _wav(self, path: str):
+        """A WAV of the show, read once while the show is open."""
+        try:
+            stamp = Path(path).stat().st_mtime_ns
+        except OSError:
+            return None
+        key = (str(path), stamp)
+        if key not in self._wavs:
             try:
-                self.mix = sound.mix_show(show)
-                self.player = sound.Player(self.mix)
-            except Exception as error:  # noqa: BLE001 -- said in the log
-                logfile.write(f"show: no sound: {error}")
-                self.mix, self.player = None, None
-        if self.player is not None:
-            self._volume_changed()
-            self.clock.source = lambda: (self.player.played
-                                         if self.player is not None
-                                         and self.player.playing else None)
-            logfile.write(f"show: {self.mix.describe()}")
-            for note in self.mix.notes:
-                logfile.write(f"show: sound: {note}")
+                self._wavs[key] = sound.read_wav(path)
+            except sound.SoundError as error:
+                logfile.write(f"show: sound: {error}")
+                self._wavs[key] = None
+        return self._wavs[key]
 
-        if self.solid is not None:
-            self.solid.rest_cells()
-        self._moved_to = None
-        self._pick_top()
+    def _play_sound(self) -> None:
+        """The show's sounds, added into one mix, which keeps the time."""
+        show = self.show_open
+        playing = self.player is not None and self.player.playing
+        if self.player is not None:
+            self.player.stop()
+        self.player, self.mix = None, None
+        self.clock.source = None
+        pieces, wanted = [], set()
+        for clip in show.clips:
+            if clip.kind != "audio" or clip.missing:
+                continue
+            read = self._wav(clip.path)
+            if read is not None:
+                pieces.append((read, clip.tx / showfile.FPS, 1.0))
+                wanted.add(str(clip.path))
+        self._wavs = {key: one for key, one in self._wavs.items()
+                      if key[0] in wanted}
+        if not pieces:
+            return
+        try:
+            self.mix = sound.Mix(pieces, show.length / showfile.FPS)
+            self.player = sound.Player(self.mix)
+        except Exception as error:  # noqa: BLE001 -- said in the log
+            logfile.write(f"show: no sound: {error}")
+            self.mix, self.player = None, None
+            return
+        self._volume_changed()
+        self.clock.source = lambda: (self.player.played
+                                     if self.player is not None
+                                     and self.player.playing else None)
+        self.player.move_to(self.clock.seconds)
+        if playing and self.clock.playing:
+            self.player.play()
+        for note in self.mix.notes:
+            logfile.write(f"show: sound: {note}")
+
+    @staticmethod
+    def _motor_key(clip) -> tuple:
+        """What one file's motors are, to know them again by: the file, how
+        far past its end it is sampled, and how it stood on the disk."""
+        try:
+            stamp = Path(clip.path).stat().st_mtime_ns
+        except OSError:
+            stamp = 0
+        return (str(clip.path), int(clip.tail), stamp)
+
+    def _play_motors(self, fresh: bool = False) -> None:
+        """The show's motor files, each at its own frame.
+
+        The motors of a file are built once, on a thread, and kept while the
+        show is open -- and for the last show after it closes, so going into
+        the quick look and back does not spend four seconds again. A file
+        moved along the timeline is the same motors somewhere else.
+        """
+        show = self.show_open
+        self._motors_for += 1
+        if self.motors_job is not None:
+            self.motors_job.cancel()
+            self.motors_job = None
         moving = [one for one in show.clips
                   if one.kind == "kinetic" and not one.missing]
-        if moving and self.solid is not None and self.mesh is not None:
+        if self.solid is None or self.mesh is None:
+            return
+        wanted = {self._motor_key(one): one for one in moving}
+        if fresh:
+            self._motor_cache = {key: one for key, one in
+                                 self._motor_cache.items() if key in wanted}
+        self._place_motors()
+        missing = [(key, one.path, one.tail) for key, one in wanted.items()
+                   if key not in self._motor_cache]
+        if missing:
             ticket = self._motors_for
-            self._motors_key = self._motors_wanted(moving)
-            if self._motors_kept and self._motors_kept[0] == self._motors_key:
-                # The same files as last time: four seconds and a third of a
-                # gigabyte not spent again for going into the quick look and
-                # coming back.
-                self._motors_ready(ticket, (self._motors_kept[1], []), 0.0)
-                moving = []
-        if moving and self.solid is not None and self.mesh is not None:
-            ticket = self._motors_for
-            self.motors_job = jobs.MotorsJob(moving, parent=self)
+            self.motors_job = jobs.MotorsJob(missing, parent=self)
             self.motors_job.finished_ok.connect(
-                lambda got, took, ticket=ticket: self._motors_ready(
+                lambda got, took, ticket=ticket: self._motors_built(
                     ticket, got, took))
             self.motors_job.start()
 
-        self._gains_changed()
-        self.clock.duration = show.length / showfile.FPS
-        self.clock.move_to(0.0)
-        self._show_was = 0.0
-        self.show_view.set_frame(0.0)
-        self._reset_range()
-        self._name_from_show(show)
-        self._show_stats()
+    def _place_motors(self) -> None:
+        show = self.show_open
+        placed = []
+        for clip in show.clips:
+            if clip.kind == "kinetic" and not clip.missing:
+                motors = self._motor_cache.get(self._motor_key(clip))
+                if motors is not None:
+                    placed.append((clip.tx, motors))
+        if placed and self.cell_at is None:
+            self.cell_at = self.mesh.cell_middles(scene3d.KINETIC_SCREEN)
+            self.cell_is = kinetic.cell_addresses(self.cell_at)
+        self.show_motors = kinetic.Placed(placed) if placed else None
+        self._moved_to = -1               # nothing is where it should be yet
+        if self.show_motors is None and self.solid is not None:
+            self.solid.rest_cells()
+            self._moved_to = None
+        self._pick_top()
         self.touch()
-        logfile.write(f"show: {show.describe()}  {len(self.streams)} tracks on "
-                      f"{len(self.composers)} screens, opened in "
-                      f"{time.perf_counter() - started:.2f} s")
-        for clip in show.missing():
-            logfile.write(f"show: not on this machine: {clip.row} L{clip.level} "
-                          f"at {clip.tx}: {clip.path}")
 
     def _say_project(self, show, trouble: str = "") -> None:
+        """The name in its field, and what the show is, beside it."""
+        self.project_name.blockSignals(True)
+        self.project_name.setText(show.name)
+        self.project_name.blockSignals(False)
         if trouble:
             said = f"{trouble}  —  показаны строки Просмотра"
             self.project.setStyleSheet("color:#e06c6c;")
         else:
-            said = (f"{show.name}   {show.describe()[len(show.name):].strip()}"
-                    if show.name else "строки Просмотра как шоу   "
-                    + show.describe().strip())
+            described = show.describe()
+            said = (described[len(show.name):].strip()
+                    if show.name and described.startswith(show.name)
+                    else described.strip())
+            if self._show_source == "rows" and self.draft is None:
+                said = "строки Просмотра как шоу   " + said
+            if self.draft is not None:
+                said += f"   \u270e черновик, правок {self.draft.changes}"
             self.project.setStyleSheet(
                 "color:#d9a441;" if show.missing() else "color:#9a9a9a;")
         self.project.setText(said)
-        self.project.setToolTip(self.trix_path or "строки Просмотра")
+        self.project.setToolTip(
+            (f"черновик: {self.draft.where}\n" if self.draft else "")
+            + (self.trix_path or "строки Просмотра"))
 
     def _name_from_show(self, show) -> None:
         """The render is called after the show, while the name is still ours."""
@@ -1321,43 +1805,25 @@ class Viewer(QMainWindow):
         self._auto_name = f"{stem}_v1{suffix}"
         self.out_name.setText(self._auto_name)
 
-    @staticmethod
-    def _motors_wanted(clips) -> tuple:
-        """What a show's motors are made of, to know them again by."""
-        wanted = []
-        for clip in clips:
-            try:
-                stamp = Path(clip.path).stat().st_mtime_ns
-            except OSError:
-                stamp = 0
-            wanted.append((clip.tx, clip.path, clip.tail, stamp))
-        return tuple(sorted(wanted))
+    def _motors_built(self, ticket: int, got, took: float) -> None:
+        if ticket != self._motors_for or self.level != "show":
+            return                        # built for a show no longer open
+        built, notes = got
+        self.motors_job = None
+        for note in notes:
+            logfile.write(f"show: kinetic: {note}")
+        self._motor_cache.update(built)
+        self._place_motors()
+        if self.show_motors is not None:
+            logfile.write(f"show: {self.show_motors.describe()}, "
+                          f"{len(built)} built in {took:.2f} s")
 
     @staticmethod
     def _safe_stem(name: str) -> str:
         return "".join(one if one.isalnum() or one in "-_." else "_"
                        for one in name).strip("._")
 
-    def _motors_ready(self, ticket: int, got, took: float) -> None:
-        if ticket != self._motors_for or self.level != "show":
-            return                        # built for a show no longer open
-        placed, notes = got
-        self.motors_job = None
-        # Only the last show's: they are a third of a gigabyte for a long one.
-        self._motors_kept = (self._motors_key, placed)
-        for note in notes:
-            logfile.write(f"show: kinetic: {note}")
-        if not placed.placed:
-            return
-        if self.cell_at is None:
-            self.cell_at = self.mesh.cell_middles(scene3d.KINETIC_SCREEN)
-            self.cell_is = kinetic.cell_addresses(self.cell_at)
-        self.show_motors = placed
-        self._moved_to = -1               # nothing is where it should be yet
-        self._pick_top()
-        logfile.write(f"show: {placed.describe()} "
-                      + (f"in {took:.2f} s" if took else "kept from before"))
-        self.touch()
+
 
     def _reshape_layer(self, at: int) -> None:
         """A track of a show has reached a clip of another shape or codec.
@@ -1861,9 +2327,13 @@ class Viewer(QMainWindow):
         split = saved.get("split") or []
         if len(split) == 2:
             self._split_sizes = [int(one) for one in split]
+        if saved.get("draft") and Path(str(saved["draft"])).exists():
+            self.draft = drafts.Draft(Path(str(saved["draft"])))
         if saved.get("level") == "show":
             logfile.write("carried over from the last session: the show mode")
             self._set_level("show")
+            if saved.get("editing") and self.draft is not None:
+                self.show_view.set_editing(True)
         # Only if there is something to open. `_load` on six empty fields is
         # harmless but it clears and rebuilds every screen for nothing.
         elif files:
@@ -1919,6 +2389,9 @@ class Viewer(QMainWindow):
             "trix": self.trix_path,
             "split": list(self._split_sizes),
             "show_panel": self._levels_open,
+            # The working file, and whether the editor was on over it.
+            "draft": str(self.draft.where) if self.draft is not None else "",
+            "editing": bool(self.show_view.editing),
         }
 
     def _remember(self, now: bool = False) -> None:
@@ -3276,7 +3749,9 @@ class Viewer(QMainWindow):
     # so they work on a Russian layout the same.
     SHOW_KEYS = (Qt.Key.Key_I, Qt.Key.Key_O, Qt.Key.Key_L, Qt.Key.Key_F,
                  Qt.Key.Key_Home, Qt.Key.Key_End, Qt.Key.Key_Question,
-                 Qt.Key.Key_Slash)
+                 Qt.Key.Key_Slash, Qt.Key.Key_K, Qt.Key.Key_Z, Qt.Key.Key_Y,
+                 Qt.Key.Key_Delete, Qt.Key.Key_BracketLeft,
+                 Qt.Key.Key_BracketRight)
 
     def eventFilter(self, watched, event):  # noqa: N802 -- Qt naming
         if watched is self.canvas and event.type() == QEvent.Type.Resize:
@@ -3376,9 +3851,29 @@ class Viewer(QMainWindow):
                                              Qt.Key.Key_Right):
             self._jump_by(-1.0 if key == Qt.Key.Key_Left else 1.0)
             return True
+        view = self.show_view
+        if view.editing:
+            if control and key == Qt.Key.Key_Z:
+                self._redo() if shift else self._undo()
+                return True
+            if control and key == Qt.Key.Key_Y and not shift:
+                self._redo()
+                return True
+            if shift and not control and key == Qt.Key.Key_L:
+                view.loop_the_clip()
+                return True
+            if not shift and not control:
+                if key == Qt.Key.Key_Delete:
+                    view.delete_chosen()
+                    return True
+                if key in (Qt.Key.Key_BracketLeft, Qt.Key.Key_BracketRight):
+                    view.put_clip(key == Qt.Key.Key_BracketRight)
+                    return True
+                if key == Qt.Key.Key_K:
+                    view.set_locked(not view.locked)
+                    return True
         if shift or control:
             return False
-        view = self.show_view
         if key == Qt.Key.Key_I:
             view.to_edge(False)
         elif key == Qt.Key.Key_O:
@@ -5300,6 +5795,7 @@ class Viewer(QMainWindow):
         self.stats.setText("\n".join(lines))
 
     def closeEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        self._flush_draft()
         self._remember(now=True)
         if self.motors_job is not None:
             self.motors_job.cancel()

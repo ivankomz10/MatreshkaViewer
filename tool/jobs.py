@@ -437,19 +437,21 @@ class NoiseJob(QThread):
 
 
 class MotorsJob(QThread):
-    """Every motor file of a show, built off the window's thread.
+    """Motor files of a show, built off the window's thread.
 
     A show has a handful and each is sampled over every frame of every motor:
-    the RusDay show's four came to 332 MB and three and a half seconds, which
-    is not a thing to hold the window still for. Until they land the cells
-    stand at rest.
+    the RusDay show's five came to 318 MB and four seconds, which is not a
+    thing to hold the window still for. Until they land the cells stand at
+    rest. Handed (key, path, tail) for each file wanted, it hands back the
+    motors by the same keys -- the window keeps them, and a file moved along
+    the timeline is the same motors somewhere else, not new ones.
     """
 
-    finished_ok = Signal(object, float)     # (kinetic.Placed, notes), seconds
+    finished_ok = Signal(object, float)     # ({key: Motors}, notes), seconds
 
-    def __init__(self, clips, parent=None) -> None:
+    def __init__(self, wanted, parent=None) -> None:
         super().__init__(parent)
-        self.clips = [(one.tx, one.path, one.tail) for one in clips]
+        self.wanted = list(wanted)
         self._stop = False
 
     def cancel(self) -> None:
@@ -458,14 +460,13 @@ class MotorsJob(QThread):
     def run(self) -> None:  # noqa: D102 -- QThread entry point
         import kinetic
         started = time.perf_counter()
-        placed, notes = [], []
-        for tx, path, tail in self.clips:
+        built, notes = {}, []
+        for key, path, tail in self.wanted:
             if self._stop:
                 return
             try:
-                placed.append((tx, kinetic.Motors([path], reach=tail)))
+                built[key] = kinetic.Motors([path], reach=tail)
             except Exception as error:  # noqa: BLE001 -- said in the log
                 notes.append(f"{Path(path).name}: {error}")
         if not self._stop:
-            self.finished_ok.emit((kinetic.Placed(placed), notes),
-                                  time.perf_counter() - started)
+            self.finished_ok.emit((built, notes), time.perf_counter() - started)

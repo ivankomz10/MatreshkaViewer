@@ -327,7 +327,7 @@ def test_a_show_opens_with_its_loops_and_its_levels(quick_look, tick):
     assert window.level == "show"
     assert show.loops == [(800, 1099)]
     assert window.show_view.loops == [(800, 1099)]
-    assert show.name in window.project.text()
+    assert window.project_name.text() == show.name
     assert sorted(window.composers) == ["Lamel_screen", "Screen_Bottom",
                                         "Screen_Top"]
     assert window.clock.duration == pytest.approx(79200 / 60.0)
@@ -402,11 +402,13 @@ def test_the_motors_are_kept_for_coming_back(quick_look, tick):
         pytest.skip("no motor file of this show is on this machine")
     wait_for(tick, lambda: window.show_motors is not None,
              "the motors never arrived", 60)
-    first = window.show_motors
+    first = [motors for _, motors in window.show_motors.placed]
     window._set_level("view")
     tick(0.3)
     window._set_level("show")
-    assert window.show_motors is first, "the motors were built again"
+    assert window.show_motors is not None, "the motors were not there at once"
+    again = [motors for _, motors in window.show_motors.placed]
+    assert all(one is other for one, other in zip(first, again))         and len(first) == len(again), "the motors were built again"
 
 
 @needs_rusday

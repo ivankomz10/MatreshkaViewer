@@ -128,6 +128,38 @@ def test_full_screen_from_the_show_keeps_the_picture(app):
                    "the strips did not come back", 10)
 
 
+def tx_now(app) -> int:
+    said = app.says("qa_show_field_tx")
+    return int(said.split()[0]) if said else -1
+
+
+def test_the_editor_moves_a_clip_and_ctrl_z_puts_it_back(app):
+    into_show(app)
+    at_start(app)
+    if not app.at("qa_editor").checked:
+        app.click("qa_editor", settle=0.5)
+    tracks = app.at("qa_show_tracks")
+    # Top L0, in the lane's own pixels: the lanes are laid out in logical
+    # pixels, and the tracks' height says how many physical ones that is.
+    scale = tracks.tall / 281.0
+    y = tracks.top + int(59 * scale)
+    x = tracks.left + int(tracks.wide * 0.3)
+    app.click_at(x, y)
+    assert tx_now(app) == 0, f"the clip does not start at 0: {tx_now(app)}"
+    app.drag(x, y, x + int(tracks.wide * 0.2), y)
+    time.sleep(0.4)
+    moved = tx_now(app)
+    assert moved > 0, "the clip did not move under the mouse"
+    app.key("z", "ctrl")
+    time.sleep(0.4)
+    assert tx_now(app) == 0, f"Ctrl+Z left it at {tx_now(app)}"
+    app.key("y", "ctrl")
+    time.sleep(0.4)
+    assert tx_now(app) == moved, "Ctrl+Y did not bring the move back"
+    app.key("z", "ctrl")
+    app.click("qa_editor", settle=0.5)
+
+
 def test_back_to_the_quick_look(app):
     into_show(app)
     app.click("qa_level_view", settle=0.8)
@@ -146,6 +178,6 @@ def test_a_session_left_in_the_show_opens_in_it(fresh):
     running.wait_until(lambda: shown(running, "qa_show_tracks"),
                        "it opened in the quick look", 30)
     if RUSDAY.exists():
-        said = running.says("qa_project")
+        said = running.says("qa_project_name")
         assert "RusDay" in said, said
         running.log_has("motor files placed", within=60)

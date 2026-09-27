@@ -146,6 +146,7 @@ SCAN = {
     "ctrl": 0x1D, "shift": 0x2A, "alt": 0x38,
     "f4": 0x3E, "f11": 0x57, "a": 0x1E, "s": 0x1F,
     "i": 0x17, "o": 0x18, "l": 0x26, "f": 0x21, "slash": 0x35,
+    "z": 0x2C, "y": 0x15, "k": 0x25,
 }
 EXTENDED = {"left", "right", "up", "down", "home", "end", "delete"}
 
