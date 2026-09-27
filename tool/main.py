@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -21,7 +22,8 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox,
                                QComboBox, QDialog, QFileDialog, QFrame,
                                QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QProgressBar, QListView,
-                               QPushButton, QSlider, QSpinBox, QSplitter,
+                               QPushButton, QSizePolicy, QSlider, QSpinBox,
+                               QSplitter,
                                QStyleFactory, QToolTip, QVBoxLayout, QWidget)
 from rendercanvas.pyside6 import RenderCanvas
 
@@ -63,9 +65,9 @@ SHOW_FOLDER = Path(r"D:\Content\_SHOW")
 # The show's screens, as the rows call them and as the scene does.
 SHOW_SCREENS = (("Top", "Screen_Top"), ("Bottom", "Screen_Bottom"),
                 ("Lamels", "Lamel_screen"))
-# What a show draws the building with. Flat and ReBake are about files laid
-# out one by one; a show is several at once on each screen.
-SHOW_MODES = (PREVIEW, "Inspection")
+# What a show draws the building with. ReBake is about one source file and
+# its alpha; a show's screen is several files at once, already added up.
+SHOW_MODES = (PREVIEW, "Flat", "Inspection")
 
 APP_NAME = "Matreshka Viewer"
 APP_VERSION = "0.3"
@@ -587,9 +589,13 @@ class Row(QWidget):
 
 FOLD_HEADER = ("QPushButton { text-align:left; padding:2px 6px; border:none; "
                "color:#9a9a9a; } QPushButton:hover { color:#dcdcdc; }")
-LEVEL_BUTTON = ("QPushButton { padding:3px 14px; } "
+LEVEL_BUTTON = ("QPushButton { padding:2px 10px; } "
                 "QPushButton:checked { background:#3d5a72; "
                 "border-color:#4a7ea8; color:#f0f0f0; }")
+SHOW_PANEL = ("QFrame#qa_show_levels { background:rgba(24,24,24,225); "
+              "border:1px solid #3a3a3a; border-radius:4px; } "
+              "QFrame#qa_show_levels QLabel, QFrame#qa_show_levels QCheckBox, "
+              "QFrame#qa_show_levels QSlider { background:transparent; }")
 
 
 class Viewer(QMainWindow):
@@ -645,6 +651,9 @@ class Viewer(QMainWindow):
         self._show_was = 0.0           # where the playhead was, for the loops
         self._split_sizes: list = []
         self._keys_open = False
+        self._levels_open = True       # the floating panel of brightnesses
+        self._motors_kept = None       # (key, placed): the last show's motors
+        self._motors_key = None
 
         try:
             self.adapter, self.device = screen_gpu.make_device()
@@ -669,7 +678,11 @@ class Viewer(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.addLayout(self._level_bar())
+        # The show's own line: which show, and opening another. Only in Шоу --
+        # in the quick look it would be a line of the window given to nothing.
+        self.show_bar = self._show_bar()
+        layout.addWidget(self.show_bar)
+        self.show_bar.setVisible(False)
 
         # Named, not ordered: the fields can be rearranged without the videos
         # quietly going to the wrong screens.
@@ -814,6 +827,7 @@ class Viewer(QMainWindow):
         self._full_screen_button()
         self._frame_line()
         self._keys_card()
+        self._levels_panel()
         # How far into the flat layout somebody is looking. One is the whole
         # of it, and the focus is which point of it sits in the middle.
         #
@@ -948,10 +962,15 @@ class Viewer(QMainWindow):
         beat.start(16)
         self._beat_timer = beat
 
-    def _level_bar(self) -> QHBoxLayout:
-        """Просмотр or Шоу, and the show that is open."""
+    def _level_switch(self) -> QHBoxLayout:
+        """Просмотр or Шоу: two small buttons at the head of the bar of modes.
+
+        In that bar rather than on a line of their own above everything. On
+        their own, with nothing beside them in the quick look, they took half
+        the window's width each; here they are the same size in both.
+        """
         bar = QHBoxLayout()
-        bar.setSpacing(6)
+        bar.setSpacing(0)
         self.levels = QButtonGroup(self)
         self.levels.setExclusive(True)
         self.level_buttons = {}
@@ -970,17 +989,30 @@ class Viewer(QMainWindow):
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             button.setStyleSheet(LEVEL_BUTTON)
             button.setToolTip(story)
+            button.setSizePolicy(QSizePolicy.Policy.Fixed,
+                                 QSizePolicy.Policy.Fixed)
             button.clicked.connect(lambda _=False, k=key: self._set_level(k))
             self.levels.addButton(button)
             self.level_buttons[key] = button
             bar.addWidget(button)
         self.level_buttons["view"].setChecked(True)
+        return bar
+
+    def _show_bar(self) -> QWidget:
+        """The line above everything in Шоу: opening a show, and its name."""
+        holder = QWidget()
+        holder.setObjectName("qa_show_bar")
+        bar = QHBoxLayout(holder)
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setSpacing(6)
         opener = QPushButton("Открыть шоу…")
         opener.setObjectName("qa_open_show")
         opener.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         opener.setToolTip("Открыть .trix из редактора шоу и перейти в Шоу. "
                           "Файл только читается; ничего в него не пишется.")
         opener.clicked.connect(self._open_show)
+        opener.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.open_show_button = opener
         bar.addWidget(opener)
         bar.addWidget(_divider())
         self.project = QLabel()
@@ -989,9 +1021,11 @@ class Viewer(QMainWindow):
         self.project.setTextFormat(Qt.TextFormat.PlainText)
         self.project.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.project.setVisible(False)
+        # However long the name, it does not get to widen the window.
+        self.project.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                   QSizePolicy.Policy.Preferred)
         bar.addWidget(self.project, 1)
-        return bar
+        return holder
 
     def _set_level(self, level: str) -> None:
         """Into the quick look or into the show, each with its own content.
@@ -1018,14 +1052,18 @@ class Viewer(QMainWindow):
         self.slider.setVisible(not showing)     # the ruler is the timeline
         self.show_side.setVisible(showing)
         self.show_pane.setVisible(showing)
-        self.project.setVisible(showing)
+        self.show_bar.setVisible(showing)
         # The strips need their three hundred pixels, and the picture can
         # spare them: the boundary gives them back.
         self.canvas.setMinimumHeight(240 if showing else 420)
         model = self.mode.model()
+        listed = self.mode.view()
         for index in range(self.mode.count()):
             if self.mode.itemText(index) not in SHOW_MODES:
+                # Not offered at all, rather than offered grey.
                 model.item(index).setEnabled(not showing)
+                if hasattr(listed, "setRowHidden"):
+                    listed.setRowHidden(index, showing)
         if (showing and self.mode.isEnabled()
                 and self.mode.currentText() not in SHOW_MODES):
             self.mode.setCurrentText(PREVIEW)
@@ -1104,9 +1142,21 @@ class Viewer(QMainWindow):
         return showfile.chained(rows)
 
     def _let_go_of_screens(self) -> None:
-        """Everything that was playing, stopped and handed back."""
-        for stream in self.streams:
-            stream.stop()
+        """Everything that was playing, stopped and handed back.
+
+        Every reader is told first and waited for afterwards, on a thread of
+        its own: each takes about sixty milliseconds to notice, and waited for
+        one at a time they were a third of a second of the window standing
+        still at every switch.
+        """
+        going = list(self.streams)
+        for stream in going:
+            asking = getattr(stream, "ask_to_stop", None)
+            if asking is not None:
+                asking()
+        if going:
+            threading.Thread(target=lambda: [one.stop() for one in going],
+                             daemon=True).start()
         self.streams, self.screens, self.held = [], [], []
         self._on_card: dict = {}     # which frame each screen's texture holds
         self.feeding = []            # which baked screen each stream feeds
@@ -1215,6 +1265,15 @@ class Viewer(QMainWindow):
                   if one.kind == "kinetic" and not one.missing]
         if moving and self.solid is not None and self.mesh is not None:
             ticket = self._motors_for
+            self._motors_key = self._motors_wanted(moving)
+            if self._motors_kept and self._motors_kept[0] == self._motors_key:
+                # The same files as last time: four seconds and a third of a
+                # gigabyte not spent again for going into the quick look and
+                # coming back.
+                self._motors_ready(ticket, (self._motors_kept[1], []), 0.0)
+                moving = []
+        if moving and self.solid is not None and self.mesh is not None:
+            ticket = self._motors_for
             self.motors_job = jobs.MotorsJob(moving, parent=self)
             self.motors_job.finished_ok.connect(
                 lambda got, took, ticket=ticket: self._motors_ready(
@@ -1254,20 +1313,38 @@ class Viewer(QMainWindow):
         """The render is called after the show, while the name is still ours."""
         if self.out_name.text().strip() != (self._auto_name or ""):
             return
-        stem = show.name or (Path(self.trix_path).stem if self.trix_path else "")
-        stem = "".join(one if one.isalnum() or one in "-_." else "_"
-                       for one in stem).strip("._")
+        stem = self._safe_stem(
+            show.name or (Path(self.trix_path).stem if self.trix_path else ""))
         if not stem:
             return
         _, suffix = self.format_choice.currentData()
         self._auto_name = f"{stem}_v1{suffix}"
         self.out_name.setText(self._auto_name)
 
+    @staticmethod
+    def _motors_wanted(clips) -> tuple:
+        """What a show's motors are made of, to know them again by."""
+        wanted = []
+        for clip in clips:
+            try:
+                stamp = Path(clip.path).stat().st_mtime_ns
+            except OSError:
+                stamp = 0
+            wanted.append((clip.tx, clip.path, clip.tail, stamp))
+        return tuple(sorted(wanted))
+
+    @staticmethod
+    def _safe_stem(name: str) -> str:
+        return "".join(one if one.isalnum() or one in "-_." else "_"
+                       for one in name).strip("._")
+
     def _motors_ready(self, ticket: int, got, took: float) -> None:
         if ticket != self._motors_for or self.level != "show":
             return                        # built for a show no longer open
         placed, notes = got
         self.motors_job = None
+        # Only the last show's: they are a third of a gigabyte for a long one.
+        self._motors_kept = (self._motors_key, placed)
         for note in notes:
             logfile.write(f"show: kinetic: {note}")
         if not placed.placed:
@@ -1278,7 +1355,8 @@ class Viewer(QMainWindow):
         self.show_motors = placed
         self._moved_to = -1               # nothing is where it should be yet
         self._pick_top()
-        logfile.write(f"show: {placed.describe()} in {took:.2f} s")
+        logfile.write(f"show: {placed.describe()} "
+                      + (f"in {took:.2f} s" if took else "kept from before"))
         self.touch()
 
     def _reshape_layer(self, at: int) -> None:
@@ -1298,12 +1376,20 @@ class Viewer(QMainWindow):
         logfile.write(f"show: a track reached {movie.width}x{movie.height} "
                       f"{movie.kind}; its surface was remade")
 
-    def _compose(self, encoder, seconds: float, held,
+    def _compose(self, encoder, seconds: float, ready,
                  premultiplied: bool | None = None) -> None:
         """Every screen of a show made out of the layers on show this instant.
 
         A layer is on show where its track has a clip, faded as far as the
-        clip says, and only once something of that clip has reached the card.
+        clip says, and once `ready` says its surface holds a picture.
+
+        In the window that is "the card has been sent a frame of it", not "a
+        frame is held": a seek hands the held frames back, and asked the
+        second way every scrub along the ruler put the screens out until the
+        readers caught up -- the picture blinked. The quick look never did,
+        because the scene draws a surface straight, and a surface keeps its
+        last picture until it is given the next. Now so does this. A render
+        asks the other way, because it has the exact frame or nothing.
         """
         if not self.composers:
             return
@@ -1313,7 +1399,7 @@ class Viewer(QMainWindow):
         for composer, members in self.composers.values():
             layers = []
             for index in members:
-                if index >= len(self.streams) or held[index] is None:
+                if index >= len(self.streams) or not ready(index):
                     continue
                 clip = self.streams[index].showing(frame)
                 if clip is None:
@@ -1323,6 +1409,14 @@ class Viewer(QMainWindow):
                     layers.append((self.screens[index], level))
             composer.compose(layers, premultiplied=premultiplied,
                              encoder=encoder)
+
+    def _render_compose(self):
+        """What a render calls to make a show's screens, or None."""
+        if not self.composers:
+            return None
+        premultiplied = self.alpha_mode() == "premultiplied"
+        return (lambda seconds, held, p=premultiplied: self._compose(
+            None, seconds, lambda index, h=held: h[index] is not None, p))
 
     def _keys_card(self) -> None:
         """The keys of the show mode, over the picture, when asked for."""
@@ -1352,6 +1446,103 @@ class Viewer(QMainWindow):
         here = view.loop_here() or (view.caught if on else view.let_go)
         where = f" {here[0]}..{here[1]}" if here else ""
         logfile.write(f"show: loop{where} {'holds' if on else 'let go'}")
+
+    def _levels_panel(self) -> None:
+        """Match, the screens' brightness and the sound, over the picture.
+
+        In Шоу the rows are put away, and with them the sliders that were the
+        only way to turn a screen up. So the same sliders -- the rows' own
+        values, moved from here -- float over the right-hand side of the
+        picture, where the file's frame never reaches, and fold away.
+        """
+        panel = QFrame(self.canvas)
+        panel.setObjectName("qa_show_levels")
+        panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        panel.setStyleSheet(SHOW_PANEL)
+        panel.setFixedWidth(250)
+        whole = QVBoxLayout(panel)
+        whole.setContentsMargins(10, 6, 8, 8)
+        whole.setSpacing(4)
+        head = QHBoxLayout()
+        title = QLabel("Экраны")
+        title.setFont(QFont(MONO, 10, QFont.Weight.Bold))
+        head.addWidget(title)
+        head.addStretch(1)
+        hide = QPushButton("\u203a")
+        hide.setObjectName("qa_show_levels_hide")
+        hide.setFixedSize(22, 20)
+        hide.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        hide.setStyleSheet("QPushButton { padding:0px; }")
+        hide.setToolTip("Убрать панель; вернуть — кнопкой у правого края")
+        hide.clicked.connect(lambda: self._fold_levels(False))
+        head.addWidget(hide)
+        whole.addLayout(head)
+
+        self.levels_mirrors = []          # (source, mirror): kept in step
+        for source, text, qa in ((self.matching, "Match", "qa_show_match"),
+                                 (self.linked, "Связать Top и Bottom",
+                                  "qa_show_link")):
+            box = QCheckBox(text)
+            box.setObjectName(qa)
+            box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            box.setToolTip(source.toolTip() or HINTS.get(source, ("", ""))[1])
+            box.setChecked(source.isChecked())
+            box.toggled.connect(source.setChecked)
+            source.toggled.connect(
+                lambda on, b=box: (b.blockSignals(True), b.setChecked(on),
+                                   b.blockSignals(False)))
+            whole.addWidget(box)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(2)
+        self.levels_sliders = {}
+        for line, (title, said) in enumerate((("Top", "Top"),
+                                              ("Bottom", "Bottom"),
+                                              ("Lamels", "Lamels"),
+                                              ("Sound", "Звук"))):
+            row = self.row_for(title)
+            if row is None or row.gain is None:
+                continue
+            tag = QLabel(said)
+            tag.setFixedWidth(52)
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setObjectName(f"qa_show_gain_{title.lower()}")
+            slider.setRange(row.gain.minimum(), row.gain.maximum())
+            slider.setValue(row.gain.value())
+            slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            slider.setToolTip(row.gain.toolTip())
+            value = QLabel(f"{row.multiplier:.2f}")
+            value.setObjectName(f"qa_show_gainvalue_{title.lower()}")
+            value.setFont(QFont(MONO, 9))
+            value.setFixedWidth(34)
+            slider.valueChanged.connect(row.gain.setValue)
+            row.gain.valueChanged.connect(
+                lambda amount, s=slider, v=value: (
+                    s.blockSignals(True), s.setValue(amount),
+                    s.blockSignals(False), v.setText(f"{amount / 100:.2f}")))
+            grid.addWidget(tag, line, 0)
+            grid.addWidget(slider, line, 1)
+            grid.addWidget(value, line, 2)
+            self.levels_sliders[title] = slider
+        whole.addLayout(grid)
+        panel.setVisible(False)
+        self.levels_panel = panel
+
+        self.levels_tab = QPushButton("\u2039", self.canvas)
+        self.levels_tab.setObjectName("qa_show_levels_open")
+        self.levels_tab.setFixedSize(22, 60)
+        self.levels_tab.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.levels_tab.setStyleSheet(
+            self.OVERLAY_BUTTON + " QPushButton { padding:0px; }")
+        self.levels_tab.setToolTip("Экраны: Match, яркость экранов, звук")
+        self.levels_tab.clicked.connect(lambda: self._fold_levels(True))
+        self.levels_tab.setVisible(False)
+
+    def _fold_levels(self, open_it: bool) -> None:
+        self._levels_open = bool(open_it)
+        self._lay_overlays()
+        self._remember()
 
     def _toggle_keys(self) -> None:
         self._keys_open = not self._keys_open
@@ -1394,6 +1585,8 @@ class Viewer(QMainWindow):
     def _scene_controls(self) -> QHBoxLayout:
         bar = QHBoxLayout()
         bar.setSpacing(6)
+        bar.addLayout(self._level_switch())
+        bar.addWidget(_divider())
 
         self.mode = QComboBox()
         self.mode.setObjectName("qa_mode")
@@ -1663,6 +1856,8 @@ class Viewer(QMainWindow):
             self.trix_path = str(saved["trix"])
             if not Path(self.trix_path).exists():
                 logfile.write(f"show: {self.trix_path} is no longer there")
+        if "show_panel" in saved:
+            self._levels_open = bool(saved["show_panel"])
         split = saved.get("split") or []
         if len(split) == 2:
             self._split_sizes = [int(one) for one in split]
@@ -1723,6 +1918,7 @@ class Viewer(QMainWindow):
             "level": self.level,
             "trix": self.trix_path,
             "split": list(self._split_sizes),
+            "show_panel": self._levels_open,
         }
 
     def _remember(self, now: bool = False) -> None:
@@ -1840,6 +2036,10 @@ class Viewer(QMainWindow):
                             and feeds)), None)
             if row is not None:
                 self.screens[index].set_gain((row.multiplier,) * 3)
+        for title, name in SHOW_SCREENS:
+            if name in self.composers:
+                self.composers[name][0].as_screen().set_gain(
+                    (self.row_for(title).multiplier,) * 3)
         self.touch()
 
     def alpha_mode(self) -> str:
@@ -3269,6 +3469,20 @@ class Viewer(QMainWindow):
                 card.adjustSize()
                 card.move(edge, max(edge, button.y() - card.height() - 6))
                 card.raise_()
+        if hasattr(self, "levels_panel"):
+            # Against the right edge, under the buttons in that corner.
+            showing = self.level == "show" and not getattr(self, "_full", False)
+            panel, tab = self.levels_panel, self.levels_tab
+            panel.setVisible(showing and self._levels_open)
+            tab.setVisible(showing and not self._levels_open)
+            below = edge + 28 + 8
+            if panel.isVisible():
+                panel.adjustSize()
+                panel.move(max(edge, wide - panel.width() - edge), below)
+                panel.raise_()
+            if tab.isVisible():
+                tab.move(max(edge, wide - tab.width() - edge), below)
+                tab.raise_()
 
     def _lay_frame_edge(self) -> None:
         """Where the render's rectangle lands on the canvas, as a line.
@@ -3760,11 +3974,17 @@ class Viewer(QMainWindow):
         scale = float(self.size_choice.currentData() or 1.0)
         work = []
         _, suffix = self.format_choice.currentData()
+        in_show = self.level == "show" and self.show_open is not None
         for name in self._flat_showing():
             row = next((r for r in self.rows
                         if r.screen == name and not r.overlay
                         and r.field.text().strip()), None)
-            if row is None:
+            if in_show:
+                # A show's strip is the show's screen, named after the show.
+                row = None
+                if name not in self.composers:
+                    continue
+            elif row is None:
                 continue
             across, down = self._pixels(name)
             # Down to a multiple of four. Every encoder here wants an even
@@ -3774,11 +3994,17 @@ class Viewer(QMainWindow):
             # by pixel beats a render that will not start.
             wide = max(4, int(across * scale) // 4 * 4)
             tall = max(4, int(down * scale) // 4 * 4)
-            source = Path(row.field.text().strip())
-            # A sequence of stills is not a file but a heap of them, and three
-            # heaps of three sizes in one folder cannot be told apart. Each
-            # gets a folder of its own, named the way the videos are.
-            stem = f"{source.stem}{self.FLAT_SUFFIX}"
+            if in_show:
+                source = Path(self.trix_path or "rows")
+                named = self._safe_stem(self.show_open.name or source.stem)
+                stem = f"{named}_{SHORT.get(name, name)}{self.FLAT_SUFFIX}"
+            else:
+                source = Path(row.field.text().strip())
+                # A sequence of stills is not a file but a heap of them, and
+                # three heaps of three sizes in one folder cannot be told
+                # apart. Each gets a folder of its own, named the way the
+                # videos are.
+                stem = f"{source.stem}{self.FLAT_SUFFIX}"
             kind, _ = self.format_choice.currentData()
             target = (self.out_dir / stem if kind.startswith("png")
                       else self.out_dir / f"{stem}{suffix}")
@@ -3841,7 +4067,7 @@ class Viewer(QMainWindow):
                 screen, wide, tall, bare=bare),
             [(name, target, wide, tall) for name, _, target, wide, tall in work],
             kind, first, count, rate, int(self.fps_choice.currentData()),
-            parent=self)
+            compose=self._render_compose(), parent=self)
         self.job.progress.connect(self._export_progress)
         self.job.failed.connect(self._export_failed)
         self.job.finished_ok.connect(self._export_done)
@@ -3930,11 +4156,7 @@ class Viewer(QMainWindow):
         self.progress.setRange(0, count)
         self.progress.setValue(0)
 
-        premultiplied = self.alpha_mode() == "premultiplied"
-        compose = None
-        if self.composers:
-            compose = (lambda seconds, held, p=premultiplied:
-                       self._compose(None, seconds, held, p))
+        compose = self._render_compose()
         self.job = jobs.ExportJob(self.streams, self.screens, self.solid,
                                   output, first, count, rate,
                                   move=self._move_screens, compose=compose,
@@ -4441,7 +4663,7 @@ class Viewer(QMainWindow):
         encoder = self.device.create_command_encoder()
         # A show's screens first, each out of its layers, in the same
         # encoder: they are what the scene below is about to sample.
-        self._compose(encoder, seconds, self.held)
+        self._compose(encoder, seconds, lambda index: index in self._on_card)
         self.painter.clear(encoder, view)
         chosen = self.mode.currentText()
         if chosen == "ReBake":
@@ -4975,10 +5197,15 @@ class Viewer(QMainWindow):
         black one.
         """
         drawing = None
-        for index, feeds in enumerate(self.feeding):
-            if feeds == name and index < len(self.screens):
-                drawing = self.screens[index]
-                break
+        composed = self.composers.get(name)
+        if composed is not None:
+            # A show's screen is its layers added up, drawn as it is.
+            drawing = composed[0].as_screen()
+        else:
+            for index, feeds in enumerate(self.feeding):
+                if feeds == name and index < len(self.screens):
+                    drawing = self.screens[index]
+                    break
 
         behind = None
         if not bare and self.backing.currentText() == "Calibration":
@@ -4994,7 +5221,8 @@ class Viewer(QMainWindow):
 
         if drawing is not None:
             self.painter.draw(encoder, drawing, view, viewport=box,
-                              alpha=self.alpha_mode())
+                              alpha=("premultiplied" if composed is not None
+                                     else self.alpha_mode()))
 
         # And the frame over the top of it, in the part of the strip it covers.
         # A viewport rather than a transform in the shader: the strip is

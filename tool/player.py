@@ -413,6 +413,13 @@ class Track:
     def start(self) -> None:
         pass              # each clip's reader is started when it is opened
 
+    def ask_to_stop(self) -> None:
+        """Tell every reader to finish, without waiting for any of them."""
+        for live in list(self._live.values()):
+            asking = getattr(live, "ask_to_stop", None)
+            if asking is not None:
+                asking()
+
     def stop(self) -> None:
         for live in list(self._live.values()):
             live.stop()
@@ -518,6 +525,12 @@ class Stream:
         if self._thread is None:
             self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
+
+    def ask_to_stop(self) -> None:
+        """Tell the reader to finish, and do not wait for it. A reader takes
+        about sixty milliseconds to notice, and six of them told one at a
+        time were a third of a second of the window standing still."""
+        self._stop.set()
 
     def stop(self) -> None:
         self._stop.set()

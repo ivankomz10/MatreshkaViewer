@@ -42,10 +42,13 @@ class FlatExportJob(QThread):
     finished_ok = Signal(dict)
 
     def __init__(self, streams, screens, draw, work, kind: str, first: int,
-                 count: int, rate: float, fps: int, parent=None) -> None:
+                 count: int, rate: float, fps: int, compose=None,
+                 parent=None) -> None:
         super().__init__(parent)
         self.streams = streams
         self.screens = screens
+        # A show's screens made out of their layers, as in the other render.
+        self.compose = compose
         # How to draw one screen at a size, handed in rather than reached for:
         # this runs on a thread of its own and the window is not its to touch.
         self.draw = draw
@@ -64,6 +67,10 @@ class FlatExportJob(QThread):
             if stream.duration and seconds > stream.duration:
                 continue                      # this one has ended; it goes dark
             wanted = stream.index_at(seconds)
+            # Between two clips of a show there is nothing to wait for.
+            showing = getattr(stream, "showing", None)
+            if showing is not None and showing(wanted) is None:
+                continue
             frame = stream.exact(wanted, self.held[index],
                                  should_stop=lambda: self._stop)
             if frame is None:
@@ -74,6 +81,8 @@ class FlatExportJob(QThread):
                 stream.give_back(self.held[index])
             self.held[index] = frame
             self.screens[index].upload([memoryview(b) for b in frame.buffers])
+        if self.compose is not None:
+            self.compose(seconds, self.held)
         return True
 
     def run(self) -> None:  # noqa: D102 -- QThread entry point

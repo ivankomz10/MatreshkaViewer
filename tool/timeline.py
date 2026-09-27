@@ -688,6 +688,11 @@ class TimelinePane(QWidget):
         self.state.setFont(QFont(MONO, 9))
         self.state.setStyleSheet("color:#8fbf8f;")
         self.state.setTextFormat(Qt.TextFormat.PlainText)
+        # Ignored across: this line lists whatever is on the screens, and a
+        # label is otherwise as wide as its text -- the window grew by the
+        # width of a clip's name every time one more came on during playing.
+        self.state.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                 QSizePolicy.Policy.Preferred)
         whole.addWidget(self.state)
 
         self.loopbar = LoopBar(view)

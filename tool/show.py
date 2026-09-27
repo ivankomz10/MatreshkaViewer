@@ -259,16 +259,33 @@ def sound_frames(path: str) -> int | None:
         return None
 
 
+_MOTOR_FRAMES: dict = {}
+
+
 def motor_frames(path: str) -> tuple:
     """A motor file's declared length, and how far past it a motor keeps going.
 
     Off the JSON itself rather than by building the motors: sampling 1829
     tracks to learn a length is a second per file, and a show has a handful.
     None for the length when the file is not here.
+
+    Kept by the file's size and time: reading five of them was two thirds of
+    a second of opening a show, every time the show mode was gone into.
     """
     where = Path(path)
     if not where.exists():
         return None, 0
+    try:
+        facts = where.stat()
+        key = (str(where), facts.st_size, facts.st_mtime_ns)
+    except OSError:
+        return None, 0
+    if key not in _MOTOR_FRAMES:
+        _MOTOR_FRAMES[key] = _motor_frames(where)
+    return _MOTOR_FRAMES[key]
+
+
+def _motor_frames(where: Path) -> tuple:
     try:
         raw = json.loads(where.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001

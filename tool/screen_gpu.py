@@ -230,7 +230,10 @@ class Screen:
         # clamp the colour to its alpha; whether to ignore the gain.
         self.rebake = (0.0, 0.0, 0.0, 0.0)
         self._take_shape(movie)
+        self._make_buffers()
 
+    def _make_buffers(self) -> None:
+        device = self.device
         self.sampler = device.create_sampler(
             mag_filter="linear", min_filter="linear",
             address_mode_u="clamp-to-edge", address_mode_v="clamp-to-edge")
@@ -856,6 +859,13 @@ class Compositor:
         self._uniforms: list = []
         self._groups: dict = {}
 
+    def as_screen(self) -> "ComposedScreen":
+        """This screen, dressed as a Screen, for what draws screens flat."""
+        if getattr(self, "_dressed", None) is None:
+            self._dressed = ComposedScreen(self.device, self.texture,
+                                           self.width, self.height)
+        return self._dressed
+
     def _uniform(self, index: int):
         while len(self._uniforms) <= index:
             self._uniforms.append(self.device.create_buffer(
@@ -932,3 +942,46 @@ class Compositor:
         rows = raw[:stride * self.height].reshape(self.height, stride)[:, :row]
         return rows.copy().view(np.float16).reshape(
             self.height, self.width, 4).astype(np.float32)
+
+
+class _Held:
+    """A texture standing where a plane of a movie would."""
+
+    def __init__(self, texture) -> None:
+        self.texture = texture
+        self.view = texture.create_view()
+
+
+class ComposedScreen(Screen):
+    """A show's screen, composed out of its layers, as the painter sees one.
+
+    Flat draws each screen as a strip through the painter, which takes a
+    Screen. This is the composer's texture wearing one: its colour is the
+    light the layers give out, its alpha how much of the backing they cover
+    -- which is exactly what the premultiplied blend lays over a backing. So
+    it is always drawn premultiplied, whichever way the files are read: that
+    reading has already been made, layer by layer, in the composing.
+    """
+
+    def __init__(self, device, texture, width: int, height: int) -> None:
+        self.device = device
+        self.gain = (1.0, 1.0, 1.0)
+        self.rebake = (0.0, 0.0, 0.0, 0.0)
+        self.width, self.height = int(width), int(height)
+        held = _Held(texture)
+        self.planes = [held, held]
+        self.shape = None
+        self.ycocg = False
+        self.has_alpha = True
+        self.alpha_from = 2              # the alpha is the colour's own
+        self.uv_scale = (1.0, 1.0)
+        self._make_buffers()
+
+    def fits(self, movie) -> bool:
+        return True
+
+    def adopt(self, movie) -> None:
+        pass
+
+    def upload(self, buffers) -> None:
+        raise TypeError("a composed screen is drawn into, not uploaded to")
