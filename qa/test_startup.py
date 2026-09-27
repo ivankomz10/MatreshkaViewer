@@ -25,8 +25,9 @@ def test_says_what_it_found(app):
     line = app.log_has("GPU:", within=40)
     assert "GPU: ok" in line, line
     assert "ffmpeg" in line, line
-    shown = app.says("qa_stats")
-    assert "GPU" in shown or "ok" in shown, f"the footer says {shown!r}"
+    shown = app.says("qa_stats_header")
+    assert "Vulkan" in shown or "D3D12" in shown or "Metal" in shown \
+        or "idle" in shown, f"the footer says {shown!r}"
 
 
 def test_carries_the_last_session_over(app):
@@ -43,7 +44,7 @@ def test_the_whole_window_is_there(app):
     """Every control a test will reach for, on the screen and reachable."""
     for qa in ("qa_mode", "qa_timeline", "qa_play", "qa_render", "qa_snapshot",
                "qa_log", "qa_size", "qa_format", "qa_out_name", "qa_full",
-               "qa_frame_edge_button", "qa_link", "qa_stats"):
+               "qa_frame_edge_button", "qa_link", "qa_stats_header"):
         found = app.at(qa)
         assert found.showing, f"{qa} is not showing"
         assert found.wide > 0 and found.tall > 0, f"{qa} has no size"

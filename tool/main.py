@@ -917,11 +917,32 @@ class Viewer(QMainWindow):
             combo.currentIndexChanged.connect(lambda _: self._remember())
         self.out_name.textChanged.connect(lambda _: self._remember())
 
+        # The line about the card and how fast it is drawing, with the file by
+        # file counts under it. They fold away the same way the rows do: the
+        # counts are for when something stutters, and the rest of the time
+        # they are six lines of the window given to numbers.
+        self.stats_open = True
+        self.stats_head = QPushButton()
+        self.stats_head.setObjectName("qa_stats_header")
+        self.stats_head.setFlat(True)
+        self.stats_head.setStyleSheet(FOLD_HEADER)
+        self.stats_head.setFont(QFont(MONO, 9))
+        self.stats_head.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.stats_head.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                      QSizePolicy.Policy.Fixed)
+        self.stats_head.setToolTip("Скорость отрисовки и счётчики чтения по "
+                                   "каждому файлу. Свернуть — останется одна "
+                                   "строка. Состояние запоминается.")
+        # Through a lambda: `clicked` would hand its bool to `open_it`.
+        self.stats_head.clicked.connect(lambda: self._fold_stats())
+        layout.addWidget(self.stats_head)
         self.stats = QLabel()
         self.stats.setObjectName("qa_stats")
         self.stats.setFont(QFont(MONO, 9))
         self.stats.setStyleSheet("color:#9a9a9a;")
         self.stats.setTextFormat(Qt.TextFormat.PlainText)
+        self.stats.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                 QSizePolicy.Policy.Preferred)
         layout.addWidget(self.stats)
 
         self.painter = None
@@ -960,7 +981,7 @@ class Viewer(QMainWindow):
                     self.solid.load_calibration(name, read_rgba(picture))
             self.canvas.request_draw(self._draw)
         else:
-            self.stats.setText(self.failure)
+            self.stats_head.setText(self.failure)
 
         self._note_output()
         self._framing_changed()
@@ -2279,6 +2300,8 @@ class Viewer(QMainWindow):
             if "sources_open" in saved:
                 self.sources_open = bool(saved["sources_open"])
                 self.sources_body.setVisible(self.sources_open)
+            if "stats_open" in saved:
+                self.stats_open = bool(saved["stats_open"])
             if "frame_edge" in saved:
                 self.frame_button.setChecked(bool(saved["frame_edge"]))
             if "tile_flat" in saved:
@@ -2383,6 +2406,7 @@ class Viewer(QMainWindow):
             # Whether the rows are on show. Remembered because on a small
             # screen the picture wants that room and the rows are set once.
             "sources_open": self.sources_open,
+            "stats_open": self.stats_open,
             # The show mode, the show that was open in it and how much of the
             # window its strips were given.
             "level": self.level,
@@ -5778,8 +5802,9 @@ class Viewer(QMainWindow):
         # there is no way to say what you are looking at, or to get back to it.
         if self.inspecting() and self.solid is not None and self.solid.free:
             pace = f"{pace}   camera {self.solid.free.describe()}"
-        lines = [f"{self.adapter.info.get('device', '?')} "
-                 f"({self.adapter.info.get('backend_type', '?')})   {pace}"]
+        head = (f"{self.adapter.info.get('device', '?')} "
+                f"({self.adapter.info.get('backend_type', '?')})   {pace}")
+        lines = []
         for stream in self.streams:
             counts = stream.counts
             if stream.movie is None:
@@ -5792,7 +5817,19 @@ class Viewer(QMainWindow):
                 f"demux {counts.demux_ms:5.2f}  unpack {counts.unpack_ms:5.2f} ms"
                 + (f"   {stream.error}" if stream.error else "")
                 + ("   at the end" if stream.at_end else ""))
+        arrow = "\u25be" if self.stats_open else "\u25b8"
+        more = "" if self.stats_open or not lines else \
+            f"   ({len(lines)} файлов)"
+        self.stats_head.setText(f"{arrow} {head}{more}")
         self.stats.setText("\n".join(lines))
+        self.stats.setVisible(self.stats_open and bool(lines))
+
+    def _fold_stats(self, open_it=None) -> None:
+        """The counts under the line about the card, shown or put away."""
+        self.stats_open = (not self.stats_open) if open_it is None \
+            else bool(open_it)
+        self._show_stats()
+        self._remember()
 
     def closeEvent(self, event) -> None:  # noqa: N802 -- Qt naming
         self._flush_draft()

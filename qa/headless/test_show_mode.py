@@ -429,3 +429,22 @@ def test_a_render_goes_through_the_gaps(quick_look, tick):
     assert written["frames"] == round(60 / 60.0 * rate), written
     temp = HOME / "temp"
     assert not list(temp.glob("show_mix_*.wav")), "the show's mix was left"
+
+
+def test_the_counts_under_the_picture_fold_away(quick_look, tick):
+    """The line about the card stays; the file by file counts go."""
+    window = quick_look
+    window._fold_stats(True)
+    tick(0.3)
+    assert window.stats.isVisible() and "qa_top.mov" in window.stats.text()
+    assert window.stats_head.text().startswith("\u25be")
+    window.stats_head.click()
+    tick(0.3)
+    assert not window.stats.isVisible(), "the counts stayed up"
+    assert window.stats_head.isVisible()
+    assert window.stats_head.text().startswith("\u25b8")
+    assert "3 файлов" in window.stats_head.text()
+    assert window._settings_now()["stats_open"] is False
+    window._fold_stats(True)
+    tick(0.2)
+    assert window.stats.isVisible()
