@@ -719,3 +719,216 @@ class Painter:
             readback.unmap()
         return raw[:stride * height].reshape(height, stride)[:, :row] \
                                     .reshape(height, width, 4)
+
+
+COMPOSE_SHADER = """
+struct VOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> VOut {
+    var corners = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+    let corner = corners[index];
+    var out: VOut;
+    out.pos = vec4<f32>(corner, 0.0, 1.0);
+    out.uv = vec2<f32>((corner.x + 1.0) * 0.5, 1.0 - (corner.y + 1.0) * 0.5);
+    return out;
+}
+
+@group(0) @binding(0) var colour_plane: texture_2d<f32>;
+@group(0) @binding(1) var alpha_plane: texture_2d<f32>;
+@group(0) @binding(2) var plane_sampler: sampler;
+// [0] x: 1 when YCoCg, y: where the alpha is, zw: how much of the texture
+//     the picture occupies -- the same four numbers the scene is given.
+// [1] x: this layer's opacity, its fade; y: 1 to read the colour as
+//     premultiplied rather than straight.
+@group(0) @binding(3) var<uniform> layer: array<vec4<f32>, 2>;
+
+// Letter for letter the scene's own, so a layer composed here is the colour
+// the scene would have made of it.
+fn from_ycocg(raw: vec4<f32>) -> vec3<f32> {
+    let shifted = raw + vec4<f32>(-0.50196078431373, -0.50196078431373, 0.0, 0.0);
+    let scale = (shifted.z * (255.0 / 8.0)) + 1.0;
+    let co = shifted.x / scale;
+    let cg = shifted.y / scale;
+    let y = shifted.w;
+    return vec3<f32>(y + co - cg, y + cg, y - co - cg);
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    let about = layer[0];
+    let uv = in.uv * about.zw;
+    let raw = textureSample(colour_plane, plane_sampler, uv);
+    var video = raw.rgb;
+    if (about.x > 0.0) {
+        video = from_ycocg(raw);
+    }
+    var alpha = 1.0;
+    if (about.y > 1.5) {
+        alpha = raw.a;
+    } else if (about.y > 0.5) {
+        alpha = textureSample(alpha_plane, plane_sampler, uv).r;
+    }
+    let opacity = layer[1].x;
+    // What the layer covers of the backing, and the light it gives out --
+    // the two things the scene makes of a screen, here made per layer so
+    // that they can be added. Straight multiplies the colour by its alpha,
+    // premultiplied takes the colour as it is.
+    let cover = alpha * opacity;
+    var light = video * cover;
+    if (layer[1].y > 0.0) {
+        light = video * opacity;
+    }
+    return vec4<f32>(light, cover);
+}
+"""
+
+
+class Compositor:
+    """One screen made out of its layers, before it goes onto the building.
+
+    A show puts two movies on one screen at once -- the section leaving still
+    fading out, the next already begun -- and the scene binds one texture per
+    screen. So the layers are drawn here first, into a texture of the
+    screen's own, and that is what the scene is given.
+
+    They are ADDED. That was measured in the show editor rather than assumed:
+    at frame 11742 of the RusDay show an opaque black clip on level 0 does not
+    hide the level 1 clip fading out over it, and the black still looped
+    behind every show would black out the whole show if it covered anything.
+    The only rule that fits both is that light adds, and the shows are made
+    for it -- every incoming clip opens on black, so two bright layers never
+    meet.
+
+    What each layer writes is what the scene would have made of it on its
+    own: the light it gives out, fade and alpha reading applied, and how much
+    of the backing it covers. Summed, those are handed to the scene as
+    `alpha_from = 3`, "already light", so nothing is applied twice.
+
+    Half floats, not bytes: two layers can sum past one, and YCoCg decodes to
+    values that eight bits would round before the scene ever filtered them.
+    """
+
+    FORMAT = "rgba16float"
+
+    def __init__(self, device, width: int, height: int) -> None:
+        self.device = device
+        self.width, self.height = int(width), int(height)
+        self.texture = device.create_texture(
+            size=(self.width, self.height, 1), format=self.FORMAT,
+            usage=wgpu.TextureUsage.RENDER_ATTACHMENT
+                  | wgpu.TextureUsage.TEXTURE_BINDING
+                  | wgpu.TextureUsage.COPY_SRC)
+        self.view = self.texture.create_view()
+        shader = device.create_shader_module(code=COMPOSE_SHADER)
+        self.layout = device.create_bind_group_layout(entries=[
+            {"binding": 0, "visibility": wgpu.ShaderStage.FRAGMENT,
+             "texture": {"sample_type": wgpu.TextureSampleType.float}},
+            {"binding": 1, "visibility": wgpu.ShaderStage.FRAGMENT,
+             "texture": {"sample_type": wgpu.TextureSampleType.float}},
+            {"binding": 2, "visibility": wgpu.ShaderStage.FRAGMENT,
+             "sampler": {"type": wgpu.SamplerBindingType.filtering}},
+            {"binding": 3, "visibility": wgpu.ShaderStage.FRAGMENT,
+             "buffer": {"type": wgpu.BufferBindingType.uniform}},
+        ])
+        self.pipeline = device.create_render_pipeline(
+            layout=device.create_pipeline_layout(bind_group_layouts=[self.layout]),
+            vertex={"module": shader, "entry_point": "vs_main"},
+            fragment={"module": shader, "entry_point": "fs_main",
+                      "targets": [{
+                          "format": self.FORMAT,
+                          "blend": {
+                              "color": {"src_factor": "one", "dst_factor": "one",
+                                        "operation": "add"},
+                              "alpha": {"src_factor": "one", "dst_factor": "one",
+                                        "operation": "add"}}}]},
+            primitive={"topology": "triangle-list"})
+        self.sampler = device.create_sampler(
+            mag_filter="linear", min_filter="linear",
+            address_mode_u="clamp-to-edge", address_mode_v="clamp-to-edge")
+        # One uniform buffer per layer, not one written per layer: every draw
+        # of a pass is recorded before any of it runs, and a buffer rewritten
+        # between two recorded draws is read by both as its last value.
+        self._uniforms: list = []
+        self._groups: dict = {}
+
+    def _uniform(self, index: int):
+        while len(self._uniforms) <= index:
+            self._uniforms.append(self.device.create_buffer(
+                size=32, usage=wgpu.BufferUsage.UNIFORM
+                               | wgpu.BufferUsage.COPY_DST))
+        return self._uniforms[index]
+
+    def _group(self, screen: Screen, index: int):
+        # Keyed on the planes: a chain reaching a block of another shape
+        # replaces them under a screen that is otherwise the same object.
+        key = (id(screen.planes[0]), id(screen.planes[1]), index)
+        group = self._groups.get(key)
+        if group is None:
+            group = self.device.create_bind_group(
+                layout=self.layout,
+                entries=[
+                    {"binding": 0, "resource": screen.planes[0].view},
+                    {"binding": 1, "resource": screen.planes[1].view},
+                    {"binding": 2, "resource": self.sampler},
+                    {"binding": 3, "resource": {"buffer": self._uniform(index),
+                                                "offset": 0, "size": 32}},
+                ])
+            self._groups[key] = group
+        return group
+
+    def compose(self, layers, premultiplied: bool = True,
+                encoder=None) -> None:
+        """Draw `layers` -- (Screen, opacity) pairs -- into this screen.
+
+        With nothing to draw it is cleared, which is a screen showing only
+        its backing: the same as a gap on every one of its tracks.
+        """
+        own = encoder is None
+        if own:
+            encoder = self.device.create_command_encoder()
+        for index, (screen, opacity) in enumerate(layers):
+            values = np.array(
+                [1.0 if screen.ycocg else 0.0, float(screen.alpha_from),
+                 screen.uv_scale[0], screen.uv_scale[1],
+                 float(max(0.0, min(1.0, opacity))),
+                 1.0 if premultiplied else 0.0, 0.0, 0.0], dtype=np.float32)
+            self.device.queue.write_buffer(self._uniform(index), 0,
+                                           values.tobytes())
+        pass_ = encoder.begin_render_pass(color_attachments=[{
+            "view": self.view, "load_op": "clear", "store_op": "store",
+            "clear_value": (0.0, 0.0, 0.0, 0.0)}])
+        pass_.set_pipeline(self.pipeline)
+        for index, (screen, _opacity) in enumerate(layers):
+            pass_.set_bind_group(0, self._group(screen, index))
+            pass_.draw(3)
+        pass_.end()
+        if own:
+            self.device.queue.submit([encoder.finish()])
+
+    def to_array(self):
+        """The composed screen as (height, width, 4) floats. For the tests."""
+        row = self.width * 8
+        stride = -(-row // 256) * 256
+        readback = self.device.create_buffer(
+            size=stride * self.height,
+            usage=wgpu.BufferUsage.COPY_DST | wgpu.BufferUsage.MAP_READ)
+        encoder = self.device.create_command_encoder()
+        encoder.copy_texture_to_buffer(
+            {"texture": self.texture},
+            {"buffer": readback, "bytes_per_row": stride,
+             "rows_per_image": self.height},
+            (self.width, self.height, 1))
+        self.device.queue.submit([encoder.finish()])
+        readback.map_sync("read")
+        try:
+            raw = np.frombuffer(bytes(readback.read_mapped()), dtype=np.uint8)
+        finally:
+            readback.unmap()
+        rows = raw[:stride * self.height].reshape(self.height, stride)[:, :row]
+        return rows.copy().view(np.float16).reshape(
+            self.height, self.width, 4).astype(np.float32)

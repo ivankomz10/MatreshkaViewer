@@ -231,6 +231,12 @@ fn screen_colour(which: i32, baked_uv: vec2<f32>) -> vec3<f32> {
     var opacity = frame.backing.y;
     if (about.y < -0.5) {
         opacity = 0.0;
+    } else if (about.y > 2.5) {
+        // 3: composed out of its layers first. The alpha is how much of the
+        // backing they cover between them -- which can add past one, so it
+        // is held there -- and the colour is already the light they give
+        // out, each layer's fade and alpha reading applied.
+        opacity = opacity * min(carried, 1.0);
     } else if (about.y > 1.5) {
         opacity = opacity * carried;
     } else if (about.y > 0.5) {
@@ -246,6 +252,11 @@ fn screen_colour(which: i32, baked_uv: vec2<f32>) -> vec3<f32> {
     // on whole and that rubbish shows, which is the only way to see it.
     var over = video * opacity;
     if (frame.backing.z > 0.0) {
+        over = video * frame.backing.y;
+    }
+    if (about.y > 2.5) {
+        // Already light. Reading it again as straight or premultiplied would
+        // apply the alpha a second time.
         over = video * frame.backing.y;
     }
     if (about.y < -0.5) {
