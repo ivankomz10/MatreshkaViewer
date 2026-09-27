@@ -292,9 +292,15 @@ class Viewer:
         winput.click(*node.middle, count=count, settle=settle)
         return node
 
-    def click_at(self, x: int, y: int, count: int = 1) -> None:
+    def click_at(self, x: int, y: int, count: int = 1,
+                 button: str = "left") -> None:
         self.front()
-        winput.click(x, y, count=count)
+        winput.click(x, y, button=button, count=count)
+
+    def drag(self, x1: int, y1: int, x2: int, y2: int,
+             button: str = "left") -> None:
+        self.front()
+        winput.drag(x1, y1, x2, y2, button=button)
 
     def type_into(self, qa: str, text: str, enter: bool = True) -> None:
         """Click into a field, clear it, and type -- with the keyboard."""

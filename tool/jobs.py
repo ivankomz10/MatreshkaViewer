@@ -161,7 +161,7 @@ class ExportJob(QThread):
 
     def __init__(self, streams, screens, renderer, output: export.Output,
                  first: int, count: int, rate: float, move=None,
-                 parent=None) -> None:
+                 compose=None, before=None, parent=None) -> None:
         super().__init__(parent)
         self.streams = streams
         self.screens = screens
@@ -175,6 +175,12 @@ class ExportJob(QThread):
         # own. It has to be called for every frame, and once was not: the
         # honeycomb moved on screen and came out of the file standing still.
         self.move = move
+        # A show's screens are each made out of their layers before the scene
+        # sees them: handed the instant and what every track is holding.
+        self.compose = compose
+        # Anything slow to do before the first frame, off the window's thread:
+        # a show's sound is written out here for ffmpeg to read.
+        self.before = before
         self._stop = False
         self.held = [None] * len(streams)
 
@@ -188,6 +194,13 @@ class ExportJob(QThread):
             if stream.duration and seconds > stream.duration:
                 continue                      # this one has ended; it goes dark
             wanted = stream.index_at(seconds)
+            # A track of a show between two of its clips has nothing to give,
+            # and that is not a failure: the screen shows its other tracks,
+            # or its backing. Asked for a frame there it would say None, and
+            # None with nothing held used to stop the whole render.
+            showing = getattr(stream, "showing", None)
+            if showing is not None and showing(wanted) is None:
+                continue
             frame = stream.exact(wanted, self.held[index],
                                  should_stop=lambda: self._stop)
             if frame is None:
@@ -199,6 +212,8 @@ class ExportJob(QThread):
             self.held[index] = frame
             self.screens[index].upload([memoryview(b) for b in frame.buffers])
 
+        if self.compose is not None:
+            self.compose(seconds, self.held)
         # The geometry is part of the frame, not a thing the window does to
         # what it happens to be showing.
         if self.move is not None:
@@ -208,6 +223,8 @@ class ExportJob(QThread):
 
     def run(self) -> None:  # noqa: D102 -- QThread entry point
         try:
+            if self.before is not None:
+                self.before()
             for stream in self.streams:
                 stream.seek(stream.index_at(self.first / self.rate))
             result = export.write(
@@ -408,3 +425,38 @@ class NoiseJob(QThread):
             if (width, height) not in made:
                 made[(width, height)] = rebake.blue_noise(height, width)
         self.ready.emit(made)
+
+
+class MotorsJob(QThread):
+    """Every motor file of a show, built off the window's thread.
+
+    A show has a handful and each is sampled over every frame of every motor:
+    the RusDay show's four came to 332 MB and three and a half seconds, which
+    is not a thing to hold the window still for. Until they land the cells
+    stand at rest.
+    """
+
+    finished_ok = Signal(object, float)     # (kinetic.Placed, notes), seconds
+
+    def __init__(self, clips, parent=None) -> None:
+        super().__init__(parent)
+        self.clips = [(one.tx, one.path, one.tail) for one in clips]
+        self._stop = False
+
+    def cancel(self) -> None:
+        self._stop = True
+
+    def run(self) -> None:  # noqa: D102 -- QThread entry point
+        import kinetic
+        started = time.perf_counter()
+        placed, notes = [], []
+        for tx, path, tail in self.clips:
+            if self._stop:
+                return
+            try:
+                placed.append((tx, kinetic.Motors([path], reach=tail)))
+            except Exception as error:  # noqa: BLE001 -- said in the log
+                notes.append(f"{Path(path).name}: {error}")
+        if not self._stop:
+            self.finished_ok.emit((kinetic.Placed(placed), notes),
+                                  time.perf_counter() - started)

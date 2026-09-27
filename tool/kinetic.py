@@ -254,7 +254,8 @@ class Motors:
     next part says nothing about keeps the value it had.
     """
 
-    def __init__(self, paths: str | Path | list, repeats=None) -> None:
+    def __init__(self, paths: str | Path | list, repeats=None,
+                 reach: int = 0) -> None:
         if isinstance(paths, (str, Path)):
             paths = [paths]
         self.paths = [Path(one) for one in paths]
@@ -287,7 +288,10 @@ class Motors:
             part.first = at
             at += part.length * part.repeats
         # The last frame counts as a whole frame, the same as for one file.
-        self.frames = at + 1
+        # `reach` samples on past it, for the frames the last commands take
+        # to carry out: a show plays a file at its own place and the motors
+        # finish what they were told after the file has run out.
+        self.frames = at + 1 + max(0, int(reach))
         self.path = self.parts[0].path
 
         # Row and id are numbers, not names: everything downstream indexes.
@@ -506,3 +510,42 @@ def cell_addresses(points: np.ndarray) -> np.ndarray:
                       ID_ORIGIN_DEGREES[0], ID_ORIGIN_DEGREES[1])
     which = np.round(((angle - origin) % 360.0) / ID_STEP_DEGREES).astype(np.int32)
     return np.stack([row, which % PER_ROW], axis=1)
+
+
+class Placed:
+    """Motor files placed at frames of a show, as the show editor plays them.
+
+    Each file starts at its own frame and is in charge until the next one
+    starts; before the first the cells are at rest, and after the last they
+    stay where it left them. A file is sampled on past its own end for as
+    long as its last commands take to carry out -- that is the part of the
+    clip on the timeline that is hatched -- and holds from there.
+
+    `placed` is a list of (frame, Motors).
+    """
+
+    def __init__(self, placed) -> None:
+        self.placed = sorted(placed, key=lambda one: one[0])
+        self._starts = [frame for frame, _ in self.placed]
+
+    def at(self, frame: float):
+        """(motors, their own frame) in charge at a show frame, or None."""
+        from bisect import bisect_right
+        spot = bisect_right(self._starts, frame) - 1
+        if spot < 0:
+            return None
+        start, motors = self.placed[spot]
+        # A hair over, so a frame worked out from seconds as 1339.9999 is
+        # still frame 1340.
+        here = int(frame + 1e-6)
+        return motors, max(0, min(motors.frames - 1, here - start))
+
+    @property
+    def size(self) -> int:
+        """Bytes held, all files together. For the log."""
+        return sum(one.tilt.nbytes + one.pusher.nbytes + one.jack.nbytes
+                   for _, one in self.placed)
+
+    def describe(self) -> str:
+        return (f"{len(self.placed)} motor files placed  "
+                f"{self.size / 2 ** 20:.0f} MB")

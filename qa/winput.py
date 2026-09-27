@@ -36,6 +36,7 @@ INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
 MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK = 0x1, 0x8000, 0x4000
 MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP = 0x2, 0x4
 MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP = 0x8, 0x10
+MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP = 0x20, 0x40
 MOUSEEVENTF_WHEEL = 0x800
 KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP = 0x1, 0x2
 KEYEVENTF_UNICODE, KEYEVENTF_SCANCODE = 0x4, 0x8
@@ -102,8 +103,9 @@ def move(x: int, y: int) -> None:
 def click(x: int, y: int, button: str = "left", count: int = 1,
           settle: float = 0.12) -> None:
     """Move there first, as a hand would: hovers and enter events are real."""
-    down, up = ((MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP) if button == "left"
-                else (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP))
+    down, up = {"left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+                "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+                "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP)}[button]
     move(x, y)
     time.sleep(0.05)
     for _ in range(count):
@@ -112,14 +114,17 @@ def click(x: int, y: int, button: str = "left", count: int = 1,
     time.sleep(settle)
 
 
-def drag(x1: int, y1: int, x2: int, y2: int, steps: int = 12) -> None:
+def drag(x1: int, y1: int, x2: int, y2: int, steps: int = 12,
+         button: str = "left") -> None:
+    down, up = ((MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP) if button == "right"
+                else (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP))
     move(x1, y1)
     time.sleep(0.05)
-    _send(_mouse(MOUSEEVENTF_LEFTDOWN))
+    _send(_mouse(down))
     for step in range(1, steps + 1):
         move(x1 + (x2 - x1) * step // steps, y1 + (y2 - y1) * step // steps)
         time.sleep(0.02)
-    _send(_mouse(MOUSEEVENTF_LEFTUP))
+    _send(_mouse(up))
     time.sleep(0.15)
 
 
@@ -140,6 +145,7 @@ SCAN = {
     "home": 0x47, "end": 0x4F, "delete": 0x53,
     "ctrl": 0x1D, "shift": 0x2A, "alt": 0x38,
     "f4": 0x3E, "f11": 0x57, "a": 0x1E, "s": 0x1F,
+    "i": 0x17, "o": 0x18, "l": 0x26, "f": 0x21, "slash": 0x35,
 }
 EXTENDED = {"left", "right", "up", "down", "home", "end", "delete"}
 

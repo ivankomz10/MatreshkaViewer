@@ -17,10 +17,11 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, QTimer
 from PySide6.QtGui import (QColor, QFont, QIcon, QImage, QKeySequence,
                            QPainter, QPen, QPixmap, QShortcut)
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
-                               QFileDialog, QFrame, QGridLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QMainWindow, QProgressBar,
-                               QListView, QPushButton, QSlider, QSpinBox,
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox,
+                               QComboBox, QDialog, QFileDialog, QFrame,
+                               QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+                               QMainWindow, QProgressBar, QListView,
+                               QPushButton, QSlider, QSpinBox, QSplitter,
                                QStyleFactory, QToolTip, QVBoxLayout, QWidget)
 from rendercanvas.pyside6 import RenderCanvas
 
@@ -39,6 +40,7 @@ import kinetic
 import show as showfile
 import screen_gpu
 import sound
+import timeline
 
 BAKED = "baked"
 SNAPSHOTS = "snapshots"   # single frames go beside the videos, not among them
@@ -54,6 +56,16 @@ WAS_CALLED = {"Geometry": PREVIEW}
 # belongs to the name itself: a piece called "Velofest.2026.09.03" has no
 # extension, whatever the last four characters look like to `Path.suffix`.
 SUFFIXES = {".mp4", ".mov", ".png", ".mkv", ".avi", ".mxf"}
+
+# Where the show files live on the machines this was made for. Only where
+# the dialog opens the first time; nothing is ever written there.
+SHOW_FOLDER = Path(r"D:\Content\_SHOW")
+# The show's screens, as the rows call them and as the scene does.
+SHOW_SCREENS = (("Top", "Screen_Top"), ("Bottom", "Screen_Bottom"),
+                ("Lamels", "Lamel_screen"))
+# What a show draws the building with. Flat and ReBake are about files laid
+# out one by one; a show is several at once on each screen.
+SHOW_MODES = (PREVIEW, "Inspection")
 
 APP_NAME = "Matreshka Viewer"
 APP_VERSION = "0.3"
@@ -575,6 +587,9 @@ class Row(QWidget):
 
 FOLD_HEADER = ("QPushButton { text-align:left; padding:2px 6px; border:none; "
                "color:#9a9a9a; } QPushButton:hover { color:#dcdcdc; }")
+LEVEL_BUTTON = ("QPushButton { padding:3px 14px; } "
+                "QPushButton:checked { background:#3d5a72; "
+                "border-color:#4a7ea8; color:#f0f0f0; }")
 
 
 class Viewer(QMainWindow):
@@ -614,6 +629,23 @@ class Viewer(QMainWindow):
         self.link_ratio: float | None = None
         self._linking = False        # so the two do not push each other about
 
+        # What the window is being used for: the quick look, or a show on a
+        # timeline. A different question from `mode`, which is how the
+        # building is drawn -- both are asked in the same window.
+        self.level = "view"
+        self.trix_path = ""
+        self.show_open = None          # the show on the timeline, in Шоу
+        self.show_view = timeline.ShowView()
+        self.composers: dict = {}      # screen -> (Compositor, its tracks)
+        self.show_motors = None        # kinetic.Placed, once built
+        self.motors_job = None
+        self._motors_for = 0           # which opening a motor job is for
+        self.mix = None                # the show's sounds, added
+        self._mix_file = None          # that mix, written out for a render
+        self._show_was = 0.0           # where the playhead was, for the loops
+        self._split_sizes: list = []
+        self._keys_open = False
+
         try:
             self.adapter, self.device = screen_gpu.make_device()
         except Exception as error:  # noqa: BLE001 -- the whole point is to say so
@@ -637,6 +669,7 @@ class Viewer(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
+        layout.addLayout(self._level_bar())
 
         # Named, not ordered: the fields can be rearranged without the videos
         # quietly going to the wrong screens.
@@ -754,7 +787,22 @@ class Viewer(QMainWindow):
         # On demand rather than always: a still picture redrawn sixty times a
         # second costs a laptop its battery and tells nobody anything. A frame
         # is asked for when something changes, and while a clip is playing.
-        self.canvas = RenderCanvas(parent=central, update_mode="ondemand",
+        # The picture, with the show's column beside it, over the show's
+        # strips, with a boundary between them that is dragged. Built once and
+        # around the canvas, before the canvas is handed to the card: a
+        # surface belongs to the window it was made for, and moving the canvas
+        # into another one afterwards is not a thing to find out about on
+        # somebody else's machine. In Просмотр the column and the strips are
+        # simply not on show.
+        self.split = QSplitter(Qt.Orientation.Vertical)
+        self.split.setObjectName("qa_split")
+        self.split.setChildrenCollapsible(False)
+        upper = QWidget()
+        upper.setObjectName("qa_upper")
+        beside = QHBoxLayout(upper)
+        beside.setContentsMargins(0, 0, 0, 0)
+        beside.setSpacing(4)
+        self.canvas = RenderCanvas(parent=upper, update_mode="ondemand",
                                    max_fps=60, vsync=True)
         self.canvas.setObjectName("qa_canvas")
         self.canvas.setMinimumHeight(420)
@@ -765,6 +813,7 @@ class Viewer(QMainWindow):
         self._rebake_overlays()
         self._full_screen_button()
         self._frame_line()
+        self._keys_card()
         # How far into the flat layout somebody is looking. One is the whole
         # of it, and the focus is which point of it sits in the middle.
         #
@@ -793,7 +842,21 @@ class Viewer(QMainWindow):
         self.canvas.add_event_handler(
             self._canvas_event, "wheel", "pointer_down", "pointer_move",
             "pointer_up", "double_click")
-        layout.addWidget(self.canvas, 1)
+        beside.addWidget(self.canvas, 1)
+        self.show_side = timeline.SidePane(self.show_view)
+        beside.addWidget(self.show_side)
+        self.split.addWidget(upper)
+        self.show_pane = timeline.TimelinePane(self.show_view)
+        self.split.addWidget(self.show_pane)
+        self.split.setStretchFactor(0, 1)
+        self.split.setStretchFactor(1, 0)
+        self.show_side.setVisible(False)
+        self.show_pane.setVisible(False)
+        self.split.splitterMoved.connect(self._split_moved)
+        self.show_view.jumped.connect(
+            lambda frame: self._move(frame / showfile.FPS))
+        self.show_view.looping_changed.connect(self._say_loop)
+        layout.addWidget(self.split, 1)
 
         layout.addLayout(self._transport())
 
@@ -884,6 +947,415 @@ class Viewer(QMainWindow):
         beat.timeout.connect(self._beat)
         beat.start(16)
         self._beat_timer = beat
+
+    def _level_bar(self) -> QHBoxLayout:
+        """Просмотр or Шоу, and the show that is open."""
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+        self.levels = QButtonGroup(self)
+        self.levels.setExclusive(True)
+        self.level_buttons = {}
+        for key, text, story in (
+                ("view", "Просмотр",
+                 "Быстрый просмотр: по файлу на строку, все с нулевого кадра. "
+                 "Положил, посмотрел на здании, отрендерил."),
+                ("show", "Шоу",
+                 "Шоу на таймлайне: клипы на своих кадрах, слои, фейды, лупы, "
+                 "кью. Открыто на чтение — ничего не сдвинуть. Без открытого "
+                 ".trix показывает строки Просмотра как шоу, цепочки из 0.3 "
+                 "— друг за другом.")):
+            button = QPushButton(text)
+            button.setObjectName(f"qa_level_{key}")
+            button.setCheckable(True)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setStyleSheet(LEVEL_BUTTON)
+            button.setToolTip(story)
+            button.clicked.connect(lambda _=False, k=key: self._set_level(k))
+            self.levels.addButton(button)
+            self.level_buttons[key] = button
+            bar.addWidget(button)
+        self.level_buttons["view"].setChecked(True)
+        opener = QPushButton("Открыть шоу…")
+        opener.setObjectName("qa_open_show")
+        opener.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        opener.setToolTip("Открыть .trix из редактора шоу и перейти в Шоу. "
+                          "Файл только читается; ничего в него не пишется.")
+        opener.clicked.connect(self._open_show)
+        bar.addWidget(opener)
+        bar.addWidget(_divider())
+        self.project = QLabel()
+        self.project.setObjectName("qa_project")
+        self.project.setFont(QFont(MONO, 9))
+        self.project.setTextFormat(Qt.TextFormat.PlainText)
+        self.project.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.project.setVisible(False)
+        bar.addWidget(self.project, 1)
+        return bar
+
+    def _set_level(self, level: str) -> None:
+        """Into the quick look or into the show, each with its own content.
+
+        Each keeps what it had. The rows are the quick look's and the show
+        is the show's: going into Шоу and back leaves the rows as they were,
+        whatever the show had on it, so nothing is lost either way round.
+        """
+        level = "show" if level == "show" else "view"
+        if level == self.level:
+            self.level_buttons[level].setChecked(True)
+            return
+        if self.job is not None:
+            # Not while a render has the card: the screens it is writing
+            # from would be taken away underneath it.
+            self.level_buttons[self.level].setChecked(True)
+            return
+        if self.clock.playing:
+            self._toggle()
+        self.level = level
+        self.level_buttons[level].setChecked(True)
+        showing = level == "show"
+        self.sources.setVisible(not showing)
+        self.slider.setVisible(not showing)     # the ruler is the timeline
+        self.show_side.setVisible(showing)
+        self.show_pane.setVisible(showing)
+        self.project.setVisible(showing)
+        # The strips need their three hundred pixels, and the picture can
+        # spare them: the boundary gives them back.
+        self.canvas.setMinimumHeight(240 if showing else 420)
+        model = self.mode.model()
+        for index in range(self.mode.count()):
+            if self.mode.itemText(index) not in SHOW_MODES:
+                model.item(index).setEnabled(not showing)
+        if (showing and self.mode.isEnabled()
+                and self.mode.currentText() not in SHOW_MODES):
+            self.mode.setCurrentText(PREVIEW)
+        logfile.write(f"level: {'show' if showing else 'quick look'}")
+        if showing:
+            self._load_show()
+            self._lay_split()
+        else:
+            self._load()
+        self._lay_overlays()
+        self._remember()
+
+    def _lay_split(self) -> None:
+        """The strips at their height, or where somebody last dragged them."""
+        if len(self._split_sizes) == 2 and min(self._split_sizes) > 0:
+            self.split.setSizes(self._split_sizes)
+            return
+        whole = max(self.split.height(), 700)
+        wanted = self.show_pane.wanted_height()
+        self.split.setSizes([max(240, whole - wanted), wanted])
+
+    def _split_moved(self, *_) -> None:
+        if self.show_pane.isVisible():
+            self._split_sizes = list(self.split.sizes())
+            self._remember()
+
+    def _open_show(self) -> None:
+        start = (str(Path(self.trix_path).parent) if self.trix_path
+                 else str(SHOW_FOLDER) if SHOW_FOLDER.exists() else "")
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "Открыть шоу", start, "Шоу (*.trix);;Все файлы (*)")
+        if chosen:
+            self.open_show_file(chosen)
+
+    def open_show_file(self, path: str) -> None:
+        """Open a show and go to it. Opening one is asking for the show mode."""
+        self.trix_path = str(path)
+        if self.level == "show":
+            self._load_show()
+            self._remember()
+        else:
+            self._set_level("show")
+
+    def _rows_as_show(self):
+        """The rows, as a show: a 0.3 chain laid out where there is one.
+
+        A row's chain is used while the row still starts with the chain's
+        first file -- that is what the quick look has been playing out of it.
+        A row since given another file has left its chain behind.
+        """
+        aside = logfile.load_settings().get("chains_0_3") or {}
+        rows = {}
+        for row in self.rows:
+            if row.overlay:
+                continue              # a frame is not a thing a show has
+            text = row.field.text().strip()
+            if not text:
+                continue
+            chain = aside.get(row.title) or {}
+            files = [str(one) for one in (chain.get("files") or [])
+                     if str(one).strip()]
+            if files and Path(files[0]) == Path(text):
+                times = [int(one) for one in (chain.get("repeats") or [])]
+                times += [1] * (len(files) - len(times))
+                rows[row.title] = list(zip(files, times))
+                over = sum(1 for one in times if one > 1)
+                logfile.write(
+                    f"show: {row.title} is the 0.3 chain of {len(files)}"
+                    + (f", {over} of them played over and laid out as copies"
+                       if over else ""))
+            elif row.motors and len(kinetic.parts_beside(text)) > 1:
+                rows[row.title] = [(str(one), 1)
+                                   for one in kinetic.parts_beside(text)]
+            else:
+                rows[row.title] = [(text, 1)]
+        return showfile.chained(rows)
+
+    def _let_go_of_screens(self) -> None:
+        """Everything that was playing, stopped and handed back."""
+        for stream in self.streams:
+            stream.stop()
+        self.streams, self.screens, self.held = [], [], []
+        self._on_card: dict = {}     # which frame each screen's texture holds
+        self.feeding = []            # which baked screen each stream feeds
+        self.frame_at = None         # which of them is the overlay, if any
+        self.frame_on = ""
+        self.frame_covers = (1.0, 1.0)
+        self.composers = {}
+        self._motors_for += 1        # a motor job still running is for nothing
+        if self.motors_job is not None:
+            self.motors_job.cancel()
+            self.motors_job = None
+        self.show_motors = None
+        self.mix = None
+        if self.solid is not None:
+            self.solid.set_frame(None)
+            # Everything off first, then back on for whatever loads below. A
+            # row that has just been emptied has nothing left to say, so if
+            # this is not done its last frame stays on the screen for good.
+            self.solid.clear_all_videos()
+
+    def _load_show(self) -> None:
+        """The show on the timeline: the .trix that is open, or the rows.
+
+        Each screen is its tracks -- a Track a level -- composed into one
+        texture of the screen's own size, added, and that texture is what
+        the scene is given, as already light. The sounds are added into one
+        mix, which keeps the time as a WAV does in the quick look. The motor
+        files are sampled on a thread of their own and arrive when they are
+        ready; until then the cells stand at rest.
+        """
+        started = time.perf_counter()
+        self._let_go_of_screens()
+        self.motors = None
+        if self.player is not None:
+            self.player.stop()
+        self.player, self.track = None, None
+        self.clock.source = None
+        if self.device is None:
+            return
+
+        show, trouble = None, ""
+        if self.trix_path:
+            try:
+                show = showfile.read(self.trix_path)
+            except showfile.ShowError as error:
+                trouble = str(error)
+                logfile.write(f"show: {error}")
+        if show is None:
+            show = self._rows_as_show()
+        self.show_open = show
+        self.show_view.open(show)
+        self._say_project(show, trouble)
+
+        for title, name in SHOW_SCREENS:
+            across, down = self._pixels(name)
+            members = []
+            for level in show.levels(title):
+                try:
+                    track = player.Track(show.on(title, level),
+                                         screen=(across, down))
+                    if not track.clips:
+                        continue
+                    surface = screen_gpu.Screen(self.device, track.movie)
+                except Exception as error:  # noqa: BLE001 -- said in the log
+                    logfile.write(f"show: {title} L{level}: {error}")
+                    continue
+                self.streams.append(track)
+                self.screens.append(surface)
+                self.held.append(None)
+                self.feeding.append(name)
+                at = len(self.streams) - 1
+                track.on_change = lambda _track, at=at: self._reshape_layer(at)
+                members.append(at)
+            if not members or min(across, down) < 2:
+                continue
+            composer = screen_gpu.Compositor(self.device, across, down)
+            self.composers[name] = (composer, members)
+            if self.solid is not None and name in self.solid.calibration:
+                self.solid.set_video(name, composer.texture, composer.texture,
+                                     False, 3, (1.0, 1.0))
+                self.solid.set_video_opacity(1.0)
+
+        sounds = [one for one in show.clips
+                  if one.kind == "audio" and not one.missing]
+        if sounds:
+            try:
+                self.mix = sound.mix_show(show)
+                self.player = sound.Player(self.mix)
+            except Exception as error:  # noqa: BLE001 -- said in the log
+                logfile.write(f"show: no sound: {error}")
+                self.mix, self.player = None, None
+        if self.player is not None:
+            self._volume_changed()
+            self.clock.source = lambda: (self.player.played
+                                         if self.player is not None
+                                         and self.player.playing else None)
+            logfile.write(f"show: {self.mix.describe()}")
+            for note in self.mix.notes:
+                logfile.write(f"show: sound: {note}")
+
+        if self.solid is not None:
+            self.solid.rest_cells()
+        self._moved_to = None
+        self._pick_top()
+        moving = [one for one in show.clips
+                  if one.kind == "kinetic" and not one.missing]
+        if moving and self.solid is not None and self.mesh is not None:
+            ticket = self._motors_for
+            self.motors_job = jobs.MotorsJob(moving, parent=self)
+            self.motors_job.finished_ok.connect(
+                lambda got, took, ticket=ticket: self._motors_ready(
+                    ticket, got, took))
+            self.motors_job.start()
+
+        self._gains_changed()
+        self.clock.duration = show.length / showfile.FPS
+        self.clock.move_to(0.0)
+        self._show_was = 0.0
+        self.show_view.set_frame(0.0)
+        self._reset_range()
+        self._name_from_show(show)
+        self._show_stats()
+        self.touch()
+        logfile.write(f"show: {show.describe()}  {len(self.streams)} tracks on "
+                      f"{len(self.composers)} screens, opened in "
+                      f"{time.perf_counter() - started:.2f} s")
+        for clip in show.missing():
+            logfile.write(f"show: not on this machine: {clip.row} L{clip.level} "
+                          f"at {clip.tx}: {clip.path}")
+
+    def _say_project(self, show, trouble: str = "") -> None:
+        if trouble:
+            said = f"{trouble}  —  показаны строки Просмотра"
+            self.project.setStyleSheet("color:#e06c6c;")
+        else:
+            said = (f"{show.name}   {show.describe()[len(show.name):].strip()}"
+                    if show.name else "строки Просмотра как шоу   "
+                    + show.describe().strip())
+            self.project.setStyleSheet(
+                "color:#d9a441;" if show.missing() else "color:#9a9a9a;")
+        self.project.setText(said)
+        self.project.setToolTip(self.trix_path or "строки Просмотра")
+
+    def _name_from_show(self, show) -> None:
+        """The render is called after the show, while the name is still ours."""
+        if self.out_name.text().strip() != (self._auto_name or ""):
+            return
+        stem = show.name or (Path(self.trix_path).stem if self.trix_path else "")
+        stem = "".join(one if one.isalnum() or one in "-_." else "_"
+                       for one in stem).strip("._")
+        if not stem:
+            return
+        _, suffix = self.format_choice.currentData()
+        self._auto_name = f"{stem}_v1{suffix}"
+        self.out_name.setText(self._auto_name)
+
+    def _motors_ready(self, ticket: int, got, took: float) -> None:
+        if ticket != self._motors_for or self.level != "show":
+            return                        # built for a show no longer open
+        placed, notes = got
+        self.motors_job = None
+        for note in notes:
+            logfile.write(f"show: kinetic: {note}")
+        if not placed.placed:
+            return
+        if self.cell_at is None:
+            self.cell_at = self.mesh.cell_middles(scene3d.KINETIC_SCREEN)
+            self.cell_is = kinetic.cell_addresses(self.cell_at)
+        self.show_motors = placed
+        self._moved_to = -1               # nothing is where it should be yet
+        self._pick_top()
+        logfile.write(f"show: {placed.describe()} in {took:.2f} s")
+        self.touch()
+
+    def _reshape_layer(self, at: int) -> None:
+        """A track of a show has reached a clip of another shape or codec.
+
+        Only the surface: the scene is bound to the screen's composed texture,
+        which does not change, and the composer finds the new planes itself.
+        """
+        if at >= len(self.screens) or at >= len(self.streams):
+            return
+        movie = self.streams[at].movie
+        screen = self.screens[at]
+        if movie is None or screen.fits(movie):
+            return
+        screen.adopt(movie)
+        self._on_card.pop(at, None)
+        logfile.write(f"show: a track reached {movie.width}x{movie.height} "
+                      f"{movie.kind}; its surface was remade")
+
+    def _compose(self, encoder, seconds: float, held,
+                 premultiplied: bool | None = None) -> None:
+        """Every screen of a show made out of the layers on show this instant.
+
+        A layer is on show where its track has a clip, faded as far as the
+        clip says, and only once something of that clip has reached the card.
+        """
+        if not self.composers:
+            return
+        if premultiplied is None:
+            premultiplied = self.alpha_mode() == "premultiplied"
+        frame = seconds * showfile.FPS
+        for composer, members in self.composers.values():
+            layers = []
+            for index in members:
+                if index >= len(self.streams) or held[index] is None:
+                    continue
+                clip = self.streams[index].showing(frame)
+                if clip is None:
+                    continue
+                level = clip.opacity_at(frame)
+                if level > 0.0:
+                    layers.append((self.screens[index], level))
+            composer.compose(layers, premultiplied=premultiplied,
+                             encoder=encoder)
+
+    def _keys_card(self) -> None:
+        """The keys of the show mode, over the picture, when asked for."""
+        self.keys_button = QPushButton("?", self.canvas)
+        self.keys_button.setObjectName("qa_keys_button")
+        self.keys_button.setFixedSize(28, 28)
+        self.keys_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # No padding: the window's own twelve pixels a side leave a button
+        # 28 wide four pixels for its one character, and it came out as ";".
+        self.keys_button.setStyleSheet(
+            self.OVERLAY_BUTTON
+            + " QPushButton { padding:0px; font-weight:bold; }")
+        self.keys_button.setToolTip("Клавиши и мышь в Шоу (?)")
+        self.keys_button.clicked.connect(self._toggle_keys)
+        self.keys_button.setVisible(False)
+        self.keys_card = QLabel(timeline.keys_text(), self.canvas)
+        self.keys_card.setObjectName("qa_keys")
+        self.keys_card.setFont(QFont(MONO, 9))
+        self.keys_card.setTextFormat(Qt.TextFormat.PlainText)
+        self.keys_card.setStyleSheet(
+            "QLabel { background:rgba(20,20,20,205); color:#c8c8c8; "
+            "border:1px solid #3a3a3a; border-radius:4px; padding:8px 10px; }")
+        self.keys_card.setVisible(False)
+
+    def _say_loop(self, on: bool) -> None:
+        view = self.show_view
+        here = view.loop_here() or (view.caught if on else view.let_go)
+        where = f" {here[0]}..{here[1]}" if here else ""
+        logfile.write(f"show: loop{where} {'holds' if on else 'let go'}")
+
+    def _toggle_keys(self) -> None:
+        self._keys_open = not self._keys_open
+        self._lay_overlays()
 
     def check_machine(self) -> None:
         """The list on the first run, and after that only if something is gone.
@@ -1052,7 +1524,8 @@ class Viewer(QMainWindow):
             return
         box = self.toggles.get(scene3d.DEFAULT_TOP)
         wanted = box.isChecked() if box is not None else True
-        moving = self.motors is not None
+        moving = (self.motors is not None
+                  or (self.level == "show" and self.show_motors is not None))
         self.solid.show(scene3d.DEFAULT_TOP, wanted and not moving)
         self.solid.show(scene3d.KINETIC_SCREEN, wanted and moving)
 
@@ -1186,9 +1659,19 @@ class Viewer(QMainWindow):
         finally:
             self._restoring = False
 
+        if saved.get("trix"):
+            self.trix_path = str(saved["trix"])
+            if not Path(self.trix_path).exists():
+                logfile.write(f"show: {self.trix_path} is no longer there")
+        split = saved.get("split") or []
+        if len(split) == 2:
+            self._split_sizes = [int(one) for one in split]
+        if saved.get("level") == "show":
+            logfile.write("carried over from the last session: the show mode")
+            self._set_level("show")
         # Only if there is something to open. `_load` on six empty fields is
         # harmless but it clears and rebuilds every screen for nothing.
-        if files:
+        elif files:
             logfile.write(f"carried over from the last session: {files} files")
             self._load()
         # The line the folded panel shows has to agree with whether the rows
@@ -1235,6 +1718,11 @@ class Viewer(QMainWindow):
             # Whether the rows are on show. Remembered because on a small
             # screen the picture wants that room and the rows are set once.
             "sources_open": self.sources_open,
+            # The show mode, the show that was open in it and how much of the
+            # window its strips were given.
+            "level": self.level,
+            "trix": self.trix_path,
+            "split": list(self._split_sizes),
         }
 
     def _remember(self, now: bool = False) -> None:
@@ -1419,6 +1907,9 @@ class Viewer(QMainWindow):
         self.slider.setRange(0, 1000)
         self.slider.sliderMoved.connect(self._scrub)
         bar.addWidget(self.slider, 1)
+        # Where the slider's room goes while it is hidden, in Шоу: without
+        # it the buttons spread themselves across the whole width.
+        bar.addStretch(0)
 
         self.frame_label = QLabel("frame 0")
         self.frame_label.setObjectName("qa_frame_label")
@@ -2524,12 +3015,26 @@ class Viewer(QMainWindow):
         """
         found: list = []
 
+        def take(widget) -> None:
+            if widget is self.canvas:
+                return
+            # What holds the picture is gone into, not hidden: hiding the
+            # boundary between the picture and the show's strips would take
+            # the picture away with them.
+            if widget.isAncestorOf(self.canvas):
+                if isinstance(widget, QSplitter):
+                    for index in range(widget.count()):
+                        take(widget.widget(index))
+                elif widget.layout() is not None:
+                    walk(widget.layout())
+                return
+            found.append(widget)
+
         def walk(layout) -> None:
             for index in range(layout.count()):
                 item = layout.itemAt(index)
                 if item.widget() is not None:
-                    if item.widget() is not self.canvas:
-                        found.append(item.widget())
+                    take(item.widget())
                 elif item.layout() is not None:
                     walk(item.layout())
 
@@ -2567,6 +3072,11 @@ class Viewer(QMainWindow):
     # What the transport keeps for itself, wherever the keyboard happens to
     # be pointing.
     TRANSPORT_KEYS = (Qt.Key.Key_Space, Qt.Key.Key_Left, Qt.Key.Key_Right)
+    # And in Шоу, these as well. Letters by the key rather than the character,
+    # so they work on a Russian layout the same.
+    SHOW_KEYS = (Qt.Key.Key_I, Qt.Key.Key_O, Qt.Key.Key_L, Qt.Key.Key_F,
+                 Qt.Key.Key_Home, Qt.Key.Key_End, Qt.Key.Key_Question,
+                 Qt.Key.Key_Slash)
 
     def eventFilter(self, watched, event):  # noqa: N802 -- Qt naming
         if watched is self.canvas and event.type() == QEvent.Type.Resize:
@@ -2578,7 +3088,10 @@ class Viewer(QMainWindow):
                                   QEvent.Type.MouseButtonPress):
                 self._hint(None)
         if (event.type() == QEvent.Type.KeyPress
-                and event.key() in self.TRANSPORT_KEYS
+                and (event.key() in self.TRANSPORT_KEYS
+                     or (self.level == "show"
+                         and (event.key() in self.SHOW_KEYS
+                              or event.text() == "?")))
                 and self._transport_key(event)):
             return True
         return super().eventFilter(watched, event)
@@ -2629,6 +3142,8 @@ class Viewer(QMainWindow):
             return False
         keys = event.modifiers()
         control = bool(keys & Qt.KeyboardModifier.ControlModifier)
+        if self.level == "show" and self._show_key(event, control):
+            return True
         others = keys & ~(Qt.KeyboardModifier.ControlModifier
                           | Qt.KeyboardModifier.KeypadModifier)
         if others:                        # Shift, Alt: somebody else's
@@ -2642,6 +3157,41 @@ class Viewer(QMainWindow):
             self._move(0.0) if control else self._step(-1)
         elif key == Qt.Key.Key_Right:
             self._move(self.clock.duration) if control else self._step(1)
+        else:
+            return False
+        return True
+
+    def _show_key(self, event, control: bool) -> bool:
+        """The show mode's own keys. True when the key was one of them."""
+        keys = event.modifiers()
+        shift = bool(keys & Qt.KeyboardModifier.ShiftModifier)
+        if keys & Qt.KeyboardModifier.AltModifier:
+            return False
+        key = event.key()
+        if event.text() == "?" or key == Qt.Key.Key_Question \
+                or (key == Qt.Key.Key_Slash and shift):
+            self._toggle_keys()
+            return True
+        if shift and not control and key in (Qt.Key.Key_Left,
+                                             Qt.Key.Key_Right):
+            self._jump_by(-1.0 if key == Qt.Key.Key_Left else 1.0)
+            return True
+        if shift or control:
+            return False
+        view = self.show_view
+        if key == Qt.Key.Key_I:
+            view.to_edge(False)
+        elif key == Qt.Key.Key_O:
+            view.to_edge(True)
+        elif key == Qt.Key.Key_L:
+            view.set_looping(not view.looping)
+        elif key == Qt.Key.Key_F:
+            view.axis.fit()
+            view.changed.emit()
+        elif key == Qt.Key.Key_Home:
+            self._move(0.0)
+        elif key == Qt.Key.Key_End:
+            self._move(self.clock.duration)
         else:
             return False
         return True
@@ -2705,6 +3255,20 @@ class Viewer(QMainWindow):
             tag.adjustSize()
             tag.move(int(middle - tag.width() / 2),
                      max(edge, tall - tag.height() - edge - foot))
+        if hasattr(self, "keys_button"):
+            # Bottom left of the picture, in Шоу only, and the card above the
+            # button that raises it.
+            showing = self.level == "show"
+            button, card = self.keys_button, self.keys_card
+            button.setVisible(showing)
+            card.setVisible(showing and self._keys_open)
+            button.setChecked(False)
+            button.move(edge, max(edge, tall - button.height() - edge - foot))
+            button.raise_()
+            if card.isVisible():
+                card.adjustSize()
+                card.move(edge, max(edge, button.y() - card.height() - 6))
+                card.raise_()
 
     def _lay_frame_edge(self) -> None:
         """Where the render's rectangle lands on the canvas, as a line.
@@ -3295,7 +3859,9 @@ class Viewer(QMainWindow):
         if self.flat_mode():
             self._start_flat_export()
             return
-        if not self.streams:
+        in_show = self.level == "show"
+        if not self.streams and not (in_show and (self.mix is not None
+                                                  or self.show_motors)):
             self.eta.setText("nothing loaded to write")
             return
         # Written back into the box as well, so that what is about to be
@@ -3341,9 +3907,19 @@ class Viewer(QMainWindow):
         first = int(round(begins / grid * rate))
         count = max(1, int(round((ends + 1 - begins) / grid * rate)))
 
+        # The sound from where the range begins, not from its own start: a
+        # range halfway into the piece had the first seconds of the WAV laid
+        # under it. A show's sounds are one mix, written out for ffmpeg to
+        # read -- on the render's thread, before its first frame.
+        heard, before = (self.track.path if self.track else None), None
+        if in_show and self.mix is not None:
+            folder = logfile.app_dir() / "temp"
+            folder.mkdir(parents=True, exist_ok=True)
+            heard = self._mix_file = folder / f"show_mix_{int(time.time())}.wav"
+            before = lambda mix=self.mix, where=heard: mix.write(where)
         output = export.Output(kind=kind, path=target, fps=int(rate),
-                               width=width, height=height,
-                               sound=self.track.path if self.track else None)
+                               width=width, height=height, sound=heard,
+                               sound_from=first / rate)
         self._log_render(output, count, rate, begins, ends)
 
         # The device belongs to the render while it runs; the canvas stops
@@ -3354,9 +3930,15 @@ class Viewer(QMainWindow):
         self.progress.setRange(0, count)
         self.progress.setValue(0)
 
+        premultiplied = self.alpha_mode() == "premultiplied"
+        compose = None
+        if self.composers:
+            compose = (lambda seconds, held, p=premultiplied:
+                       self._compose(None, seconds, held, p))
         self.job = jobs.ExportJob(self.streams, self.screens, self.solid,
                                   output, first, count, rate,
-                                  move=self._move_screens, parent=self)
+                                  move=self._move_screens, compose=compose,
+                                  before=before, parent=self)
         self.job.progress.connect(self._export_progress)
         self.job.failed.connect(self._export_failed)
         self.job.finished_ok.connect(self._export_done)
@@ -3373,12 +3955,19 @@ class Viewer(QMainWindow):
                       f"{output.width}x{output.height}, "
                       f"{self.format_choice.currentText()} "
                       f"[{output.chosen_encoder}] -> {output.path}")
+        if self.level == "show" and self.show_open is not None:
+            logfile.write(f"   show: {self.show_open.describe()}; every loop "
+                          f"played once")
         for stream in self.streams:
-            logfile.write(f"   {stream.movie.path.name}: {stream.movie.kind} "
-                          f"{stream.movie.frames} frames {stream.duration:.2f} s")
-        if output.takes_sound:
-            logfile.write(f"   {output.sound.name}: {self.track.describe()}")
-        elif self.track is not None:
+            movie = stream.movie
+            if movie is None:
+                continue
+            logfile.write(f"   {movie.path.name}: {movie.kind} "
+                          f"{movie.frames} frames {stream.duration:.2f} s")
+        heard = self.mix if self.level == "show" else self.track
+        if output.takes_sound and heard is not None:
+            logfile.write(f"   {output.sound.name}: {heard.describe()}")
+        elif heard is not None:
             logfile.write("   sound is loaded but this format has nowhere "
                           "to put it")
 
@@ -3399,6 +3988,12 @@ class Viewer(QMainWindow):
     def _export_finished(self) -> None:
         self.job = None
         self._backing_back()
+        if self._mix_file is not None:
+            try:
+                Path(self._mix_file).unlink(missing_ok=True)
+            except OSError as trouble:  # noqa: BLE001 -- said in the log
+                logfile.write(f"could not remove {self._mix_file}: {trouble}")
+            self._mix_file = None
         self.render_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.canvas.set_update_mode("continuous")
@@ -3511,20 +4106,11 @@ class Viewer(QMainWindow):
             "моторы. Свёрнутые — картинке достаётся вся высота окна.")
 
     def _load(self) -> None:
-        for stream in self.streams:
-            stream.stop()
-        self.streams, self.screens, self.held = [], [], []
-        self._on_card: dict = {}     # which frame each screen's texture holds
-        self.feeding = []            # which baked screen each stream feeds
-        self.frame_at = None         # which of them is the overlay, if any
-        self.frame_on = ""
-        self.frame_covers = (1.0, 1.0)
-        if self.solid is not None:
-            self.solid.set_frame(None)
-            # Everything off first, then back on for whatever loads below. A
-            # row that has just been emptied has nothing left to say, so if
-            # this is not done its last frame stays on the screen for good.
-            self.solid.clear_all_videos()
+        if self.level == "show":
+            self._load_show()
+            return
+        self._let_go_of_screens()
+        self.show_open = None
         if self.device is None:
             return
 
@@ -3758,14 +4344,37 @@ class Viewer(QMainWindow):
             stream.seek(stream.index_at(self.clock.seconds))
             stream.give_back(self.held[index])
             self.held[index] = None
+        if self.level == "show":
+            # Somewhere new is not arriving anywhere: a loop is armed by the
+            # playhead crossing its start while playing, not by a jump.
+            self._show_was = self.clock.raw * showfile.FPS
+            self.show_view.set_frame(self.clock.seconds * showfile.FPS)
         self._show_stats()
         self.touch()
+
+    def _jump_by(self, seconds: float) -> None:
+        """A second back or on, stopped -- the way a frame step is."""
+        self.clock.playing = False
+        self._playing_says(False)
+        if self.player is not None:
+            self.player.pause()
+        self._move(self.clock.seconds + seconds)
 
     # -- drawing -------------------------------------------------------------
 
     def _draw(self) -> None:
         started = time.perf_counter()
         seconds = self.clock.tick()
+        if self.level == "show" and self.show_open is not None:
+            now = self.clock.raw * showfile.FPS
+            if self.clock.playing:
+                jump = self.show_view.step(self._show_was, now)
+                if jump is not None:
+                    self._move(jump / showfile.FPS)
+                    seconds = self.clock.seconds
+                    now = self.clock.raw * showfile.FPS
+            self._show_was = now
+            self.show_view.set_frame(seconds * showfile.FPS)
         self._move_screens(seconds)
         if self.player is not None and self.player.playing and not self.clock.playing:
             self.player.pause()            # the timeline reached its end
@@ -3813,7 +4422,12 @@ class Viewer(QMainWindow):
                 self.screens[index].upload(
                     [memoryview(b) for b in standing.buffers])
                 self._on_card[index] = standing.index
-            if not stream.at_end and (standing is None or standing.index < wanted):
+            # A track of a show between two clips is not waiting for
+            # anything; asking again would only spin the window.
+            between = (getattr(stream, "showing", None) is not None
+                       and stream.showing(wanted) is None)
+            if (not between and not stream.at_end
+                    and (standing is None or standing.index < wanted)):
                 starved = True
 
         # The size comes off the texture being drawn into, not off the canvas.
@@ -3825,6 +4439,9 @@ class Viewer(QMainWindow):
         view = surface.create_view()
         width, height = surface.size[0], surface.size[1]
         encoder = self.device.create_command_encoder()
+        # A show's screens first, each out of its layers, in the same
+        # encoder: they are what the scene below is about to sample.
+        self._compose(encoder, seconds, self.held)
         self.painter.clear(encoder, view)
         chosen = self.mode.currentText()
         if chosen == "ReBake":
@@ -4267,7 +4884,7 @@ class Viewer(QMainWindow):
         is undone by rebuilding 1500 matrices for a picture that is standing
         still.
         """
-        if self.motors is None or self.solid is None or self.cell_at is None:
+        if self.solid is None or self.cell_at is None:
             return
         # And only where they are ever seen. The cells belong to the building;
         # Flat and ReBake draw the strips instead, so putting fifteen hundred
@@ -4277,6 +4894,22 @@ class Viewer(QMainWindow):
         # draws them again simply builds them for wherever the timeline has
         # got to, and the frame remembered below still says what is in place.
         if self.mode.currentText() not in (PREVIEW, "Inspection"):
+            return
+        if self.show_motors is not None:
+            # A show's files each at their own frame: the last one to have
+            # started is in charge. Before the first, the cells are at rest.
+            got = self.show_motors.at(seconds * showfile.FPS)
+            key = None if got is None else (id(got[0]), got[1])
+            if key == self._moved_to:
+                return
+            self._moved_to = key
+            if got is None:
+                self.solid.rest_cells()
+            else:
+                self.solid.set_cells(kinetic.transforms(
+                    self.cell_at, self.cell_is, got[0], got[1]))
+            return
+        if self.motors is None:
             return
         frame = self.motors.index_at(seconds)
         if frame == self._moved_to:
@@ -4426,6 +5059,8 @@ class Viewer(QMainWindow):
                  f"({self.adapter.info.get('backend_type', '?')})   {pace}"]
         for stream in self.streams:
             counts = stream.counts
+            if stream.movie is None:
+                continue          # a show's track between two clips
             lines.append(
                 f"  {stream.movie.path.name[:26]:26s} "
                 f"{stream.movie.width:5d}x{stream.movie.height:<5d} "
@@ -4438,6 +5073,9 @@ class Viewer(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802 -- Qt naming
         self._remember(now=True)
+        if self.motors_job is not None:
+            self.motors_job.cancel()
+            self.motors_job.wait(10000)
         for stream in self.streams:
             stream.stop()
         if self.player is not None:

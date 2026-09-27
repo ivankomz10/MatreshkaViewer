@@ -57,6 +57,16 @@ class ShowError(Exception):
     """The file is not a show this can read."""
 
 
+def timecode(frame: float, fps: float = FPS) -> str:
+    """hh:mm:ss:ff on the show's grid -- the way the show editor counts."""
+    frame = max(0, int(frame))
+    whole = int(fps) or 60
+    seconds, part = divmod(frame, whole)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}:{part:02d}"
+
+
 @dataclass
 class Clip:
     """One thing on one track, at one place in time."""
@@ -410,4 +420,52 @@ def single(files: dict, length: int = 0, strict: bool = False) -> Show:
     for clip in show.clips:
         if clip.still:
             clip.until = FOREVER
+    return show
+
+
+def chained(rows: dict) -> Show:
+    """The rows as a show, a chain of 0.3 laid end to end where there is one.
+
+    `rows` maps a row to a list of (path, repeats). A movie played over is
+    that many copies of it, one after another -- the same length the chain
+    had. A picture has nothing to play twice, so its count was read as
+    seconds, and still is. Motor files follow each other where the one
+    before ends, not where its motors stop: the chain was laid out that way,
+    and the next part picks the movement up from where it was cut.
+
+    A picture alone on its row, as dropped on the quick look, stands for the
+    whole show, the same as it did there.
+    """
+    show = Show(name="", length=0)
+    ident = 0
+    for row, entries in rows.items():
+        at = 0
+        entries = [one for one in entries if str(one[0]).strip()]
+        for path, repeats in entries:
+            times = max(1, int(repeats or 1))
+            if row == "Sound":
+                got, kind, tail = sound_frames(path), "audio", 0
+            elif row == "Kinetic":
+                got, tail = motor_frames(path)
+                kind = "kinetic"
+            else:
+                got, kind, tail = media_frames(path), "video", 0
+            still = kind == "video" and got == 0
+            for _ in range(1 if still else times):
+                ident += 1
+                clip = Clip(kind=kind, row=row, level=0, path=str(path),
+                            tx=at, frames=got or 0, tail=tail, ident=ident,
+                            missing=got is None)
+                show.clips.append(clip)
+                if still:
+                    clip.until = (FOREVER if len(entries) == 1
+                                  else at + max(1, int(round(times * FPS))))
+                    at = clip.until
+                elif kind == "kinetic":
+                    at += max(1, (got or 1) - 1)
+                else:
+                    at += max(1, got or 0)
+    show.length = max([one.last for one in show.clips
+                       if one.frames or (one.still and one.until < FOREVER)]
+                      or [1])
     return show
