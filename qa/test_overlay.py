@@ -138,13 +138,13 @@ def test_the_link_says_whether_it_is_on(app):
 
 
 def test_the_link_covers_nothing_and_nothing_covers_it(app):
-    """It shares the Bottom heading with the button that folds the group."""
+    """It shares the panel heading with the button that folds the rows."""
     link = app.at("qa_link")
     landed = app.desk.under(*link.middle)
     assert landed is not None and landed.qa == "qa_link", (
         f"a click on the link would land on {landed}")
     for qa in ("qa_clear_top", "qa_gain_top", "qa_clear_bottom", "qa_gain_bottom",
-               "qa_path_top", "qa_path_bottom", "qa_grouphead_bottom"):
+               "qa_path_top", "qa_path_bottom", "qa_sources_header"):
         assert not link.overlaps(app.at(qa)), f"the link covers {qa}"
 
 
@@ -160,8 +160,8 @@ def test_the_link_moves_with_the_window(app):
     landed = app.desk.under(*link.middle)
     assert landed is not None and landed.qa == "qa_link", (
         f"after the resize a click on the link lands on {landed}")
-    assert not link.overlaps(app.at("qa_grouphead_bottom")), (
-        "after the resize the link sits on the heading that folds the group")
+    assert not link.overlaps(app.at("qa_sources_header")), (
+        "after the resize the link sits on the heading that folds the rows")
     left, top, right, _ = winput.rect_of(app.hwnd)
     winput.click(min(left + 200, right - 20), top + 8, count=2)   # and back
     time.sleep(1.0)

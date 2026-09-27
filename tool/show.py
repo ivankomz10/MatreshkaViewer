@@ -34,6 +34,9 @@ from pathlib import Path
 
 FPS = 60.0
 LENGTH = 79200                  # every show file here: exactly 22 minutes
+# How long a still stands in the quick look: for as long as it is loaded,
+# which is what dropping a picture on a screen has always meant.
+FOREVER = 1 << 40
 
 # The show file's canvases, and what the viewer calls the same screens.
 CANVASES = {"Tiles-pixels": "Top", "Scene-pixels": "Bottom",
@@ -63,7 +66,10 @@ class Clip:
     level: int
     path: str
     tx: int
-    frames: int = 0             # its own length; 0 for a still or unknown
+    # Its length in frames of the show's own grid -- not of its file. The
+    # same number for everything in the show files, which are all 60 fps;
+    # not for a 30 fps movie dropped on the quick look.
+    frames: int = 0             # 0 for a still, or when it is not here
     crop_start: int = 0
     crop_end: int = 0           # negative: frames taken off the tail
     fade_start: int = 0
@@ -198,15 +204,20 @@ class Show:
 
 # -- how long things are -----------------------------------------------------
 
-def media_frames(path: str) -> int | None:
-    """Frames a movie holds, 0 for a still, None when it is not here to ask.
+def media_frames(path: str, strict: bool = False) -> int | None:
+    """How long a movie is on the show's grid, 0 for a still, None when it
+    is not here to ask.
 
     The show file does not say how long anything is -- the editor asks the
-    media -- so neither can this.
+    media -- so neither can this. Strict, a file that is missing or will not
+    open says why instead of answering None: somebody who dropped it on a
+    row wants the reason, where a show with a clip on another drive does not.
     """
     import videofile
     where = Path(path)
     if not where.exists():
+        if strict:
+            raise ShowError(f"{where.name} is not there")
         return None
     if videofile.is_still(path):
         return 0
@@ -217,9 +228,12 @@ def media_frames(path: str) -> int | None:
         except Exception:  # noqa: BLE001 -- not HAP is not an error
             movie, container = videofile.open_movie(path)
         container.close()
-        return int(movie.frames)
-    except Exception:  # noqa: BLE001 -- unreadable is as good as missing here
+    except Exception as error:  # noqa: BLE001 -- as good as missing here
+        if strict:
+            raise ShowError(f"{where.name}: {error}") from error
         return None
+    rate = float(getattr(movie, "rate", 0.0) or FPS)
+    return max(1, int(round(movie.frames * FPS / rate)))
 
 
 def sound_frames(path: str) -> int | None:
@@ -367,12 +381,14 @@ def read(path: str | Path) -> Show:
     return show
 
 
-def single(files: dict, length: int = 0) -> Show:
+def single(files: dict, length: int = 0, strict: bool = False) -> Show:
     """The quick look as a show: one file per screen, all from frame zero.
 
-    `files` maps a row -- Top, Bottom, Lamels, Sound, Kinetic -- to a path.
-    Nothing loops. The show is as long as the longest thing in it, unless a
-    length is given.
+    `files` maps a row -- Top, Bottom, Lamels, Frame, Sound, Kinetic -- to a
+    path. Nothing loops. A still stands for as long as it is loaded, as a
+    picture dropped on a screen always has. The show is as long as the
+    longest thing in it that has a length, unless one is given. Strict, a
+    screen file that will not open raises with the reason.
     """
     show = Show(name="", length=length or 0)
     for ident, (row, path) in enumerate(files.items(), start=1):
@@ -384,12 +400,14 @@ def single(files: dict, length: int = 0) -> Show:
             got, tail = motor_frames(path)
             kind = "kinetic"
         else:
-            got, kind, tail = media_frames(path), "video", 0
+            got, kind, tail = media_frames(path, strict), "video", 0
         show.clips.append(Clip(kind=kind, row=row, level=0, path=str(path),
                                tx=0, frames=got or 0, tail=tail, ident=ident,
                                missing=got is None))
     if not length:
         show.length = max([one.last for one in show.clips
                            if one.frames] or [1])
-    _stills_until_next(show)
+    for clip in show.clips:
+        if clip.still:
+            clip.until = FOREVER
     return show

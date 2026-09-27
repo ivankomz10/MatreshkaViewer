@@ -7,6 +7,10 @@ other one when nobody is.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 import media
 from conftest import PREVIEW, render_and_wait, wait_for
 
@@ -266,74 +270,129 @@ def logfile_text() -> str:
     return where.read_text(encoding="utf-8", errors="replace") if where else ""
 
 
-# -- the chain of motor files ------------------------------------------------
+# -- the quick look: six rows, one fold, played through Track ----------------
 
-BLOCKS = r"D:\Content\Dostizhenia\JSON"
 PARTS = r"D:\Content\2026-dates\BrendMT\BrendMT_1_of_2.json"
 
 
-def test_a_chain_of_blocks_plays_end_to_end(window, tick):
-    """Seven blocks of a programme are one timeline, marked at every join."""
-    from pathlib import Path
-    import pytest
-    blocks = sorted(Path(BLOCKS).glob("*.json"))
-    if len(blocks) < 3:
-        pytest.skip("the programme's blocks are not on this machine")
-
-    window.mode.setCurrentText(PREVIEW)
-    window._fill_chain("Kinetic", [(str(one), 1) for one in blocks])
+def put_back(window, clips, tick) -> None:
+    """The three clips on the three screens, as every other test expects."""
+    for title, which in (("Top", "top"), ("Bottom", "bottom"),
+                         ("Lamels", "lamels")):
+        window.row_for(title).field.setText(str(clips[which]))
+    for title in ("Frame", "Kinetic"):
+        window.row_for(title).field.setText("")
     window._load()
-    wait_for(tick, lambda: window.motors is not None,
-             "the chain never loaded", within=60)
-
-    assert len(window.kinetic_rows()) == len(blocks), (
-        f"{len(window.kinetic_rows())} rows for {len(blocks)} files")
-    assert len(window.motors.parts) == len(blocks)
-    # Every join lands where the part before it ends, and the clock is the sum.
-    at = 0
-    for part in window.motors.parts:
-        assert part.first == at, f"{part.name} starts at {part.first}, not {at}"
-        at += part.length
-    assert window.motors.frames == at + 1
-    assert abs(window.clock.duration - at / window.motors.fps) < 0.05
-    assert len(window.slider._marks) == len(blocks) - 1, "marks missing"
+    tick(0.4)
 
 
-def test_nothing_jumps_where_two_files_meet(window, tick):
-    """The exporter cuts a movement in half; the chain has to finish it."""
-    import numpy as np
-    from pathlib import Path
-    import pytest
-    if not Path(PARTS).exists():
-        pytest.skip("the two-part show is not on this machine")
-    window._fill_chain("Kinetic", [(PARTS, 1)])
+def test_there_are_six_rows_and_no_chains(window):
+    from PySide6.QtWidgets import QWidget
+    assert [row.title for row in window.rows] == [
+        "Top", "Bottom", "Lamels", "Frame", "Sound", "Kinetic"]
+    names = [one.objectName() for one in window.findChildren(QWidget)]
+    for gone in ("qa_add_", "qa_less_", "qa_repeat_", "qa_spread_",
+                 "qa_group", "qa_loops"):
+        assert not [n for n in names if n.startswith(gone)], (
+            f"something of the chains is still in the window: {gone}")
+
+
+def test_every_screen_plays_through_a_track(window, clips, tick):
+    """One way of playing things: the quick look is a show of one clip each."""
+    import player
+    put_back(window, clips, tick)
+    assert window.streams, "nothing is loaded"
+    assert all(isinstance(one, player.Track) for one in window.streams)
+    shown = window.show_now
+    assert sorted(clip.row for clip in shown.clips) == ["Bottom", "Lamels", "Top"]
+    assert all(clip.tx == 0 for clip in shown.clips)
+    # And the picture moves as it always did.
+    window._move(0.2)
+    tick(0.4)
+    early = [held.index for held in window.held if held is not None]
+    window._move(0.8)
+    tick(0.4)
+    late = [held.index for held in window.held if held is not None]
+    assert early and late and min(late) > max(early), (early, late)
+
+
+def test_a_still_stays_up_for_as_long_as_it_is_loaded(window, clips, tick,
+                                                      tmp_path):
+    """A picture has no length of its own, so it neither sets the timeline
+    nor goes dark at the end of it."""
+    from PIL import Image
+    picture = tmp_path / "still.png"
+    Image.new("RGBA", (64, 32), (200, 40, 40, 255)).save(picture)
+    put_back(window, clips, tick)
+    window.row_for("Top").field.setText(str(picture))
     window._load()
-    wait_for(tick, lambda: window.motors is not None and
-             len(window.motors.parts) == 2,
-             "the second part did not come with the first", within=60)
-    motors = window.motors
-    join = motors.parts[1].first
-    for name, array in (("tilt", motors.tilt), ("pusher", motors.pusher),
-                        ("jack", motors.jack)):
-        step = float(np.abs(array[..., join] - array[..., join - 1]).max())
-        # A frame of ordinary movement, not a jump: the fastest thing in
-        # these files crosses its whole range in about a second.
-        assert step < 0.02, (
-            f"{name} jumps {step:.4f} at the join -- the movement the "
-            "exporter cut in half was not carried across")
+    tick(0.4)
+    track = next(one for one, feeds in zip(window.streams, window.feeding)
+                 if feeds == "Screen_Top")
+    assert track.duration == 0.0, "a still gave the timeline a length"
+    assert abs(window.clock.duration - 1.0) < 0.05, window.clock.duration
+    assert track.showing(10_000_000) is not None, "the still went away"
+    assert "fitted into" in window.row_for("Top").note.text() \
+        or "64x32" in window.row_for("Top").note.text()
+    put_back(window, clips, tick)
 
 
-def test_a_lone_part_brings_its_siblings(window, tick):
-    from pathlib import Path
-    import pytest
-    if not Path(PARTS).exists():
-        pytest.skip("the two-part show is not on this machine")
-    window._fill_chain("Kinetic", [(PARTS, 1)])
+def test_a_file_that_will_not_open_says_why(window, clips, tick):
+    put_back(window, clips, tick)
+    window.row_for("Top").field.setText(r"E:\nowhere\at_all.mov")
     window._load()
-    wait_for(tick, lambda: window.motors is not None, "nothing loaded", within=60)
-    names = [Path(r.field.text()).name for r in window.kinetic_rows()
-             if r.field.text().strip()]
-    assert names == ["BrendMT_1_of_2.json", "BrendMT_2_of_2.json"], names
+    tick(0.3)
+    said = window.row_for("Top").note.text()
+    assert "at_all.mov" in said and "not there" in said, said
+    assert "Screen_Top" not in window.feeding
+    put_back(window, clips, tick)
+
+
+def test_a_chain_from_0_3_is_kept_aside_not_lost(window, clips, tick):
+    """The quick look plays one file a row. A settings file from 0.3 with a
+    chain in it must not lose the chain the first time it is saved again."""
+    import json
+
+    import logfile
+    from conftest import HOME, settings, write_settings
+    chain = [str(clips["top"]), str(clips["bottom"]), str(clips["lamels"])]
+    old = settings(clips)
+    old["rows"]["Top"] = {"file": chain[0], "files": chain,
+                          "repeats": [1, 6, 1], "gain": 100}
+    write_settings(old)
+    try:
+        window._start_from_settings()
+        tick(0.5)
+        assert window.row_for("Top").field.text() == chain[0]
+        window._remember(now=True)
+        kept = json.loads((HOME / "settings.json").read_text("utf-8"))
+        aside = kept.get("chains_0_3", {}).get("Top")
+        assert aside == {"files": chain, "repeats": [1, 6, 1]}, aside
+        # And it stays put across another save: nothing writes over it.
+        window._remember(now=True)
+        again = json.loads((HOME / "settings.json").read_text("utf-8"))
+        assert again["chains_0_3"]["Top"]["files"] == chain
+        assert "kept aside" in logfile.path().read_text("utf-8")
+    finally:
+        write_settings(settings(clips))
+        window._start_from_settings()
+        tick(0.5)
+
+
+@pytest.mark.skipif(not Path(PARTS).exists(),
+                    reason="the two-part show is not on this machine")
+def test_a_lone_part_brings_its_siblings(window, clips, tick):
+    """One row, and a show the exporter cut in two is still one show."""
+    put_back(window, clips, tick)
+    window.row_for("Kinetic").field.setText(PARTS)
+    window._load()
+    wait_for(tick, lambda: window.motors is not None, "nothing loaded",
+             within=60)
+    assert [part.name for part in window.motors.parts] == [
+        "BrendMT_1_of_2.json", "BrendMT_2_of_2.json"]
+    assert "части 1, 2 из 2" in window.row_for("Kinetic").note.text()
+    assert "+1" in window.sources_head.text()
+    put_back(window, clips, tick)
 
 
 def test_clicking_the_header_folds_and_unfolds(window, tick):
@@ -355,7 +414,6 @@ def test_clicking_the_header_folds_and_unfolds(window, tick):
     window.sources_head.click()
     tick(0.2)
     assert window.sources_open, "the second click did not unfold it"
-    assert window.linked.isVisible(), "the link did not come back with the rows"
 
     window.sources_head.click()
     window.sources_head.click()
@@ -363,23 +421,19 @@ def test_clicking_the_header_folds_and_unfolds(window, tick):
     assert window.sources_open, "two more clicks left it somewhere else"
 
 
-def test_the_rows_fold_away(window, tick):
-    """The panel is why a chain of seven does not cost the picture its height."""
+def test_the_rows_fold_away(window, clips, tick):
+    """One block, as before the timeline, and its line says what is in it."""
+    put_back(window, clips, tick)
     window._fold_sources(True)
     tick(0.2)
-    assert window.sources_open and window.linked.isVisible()
     tall = window.sources_body.sizeHint().height()
     window._fold_sources(False)
     tick(0.2)
     assert not window.sources_open
-    assert not window.linked.isVisible(), "the link stayed over a folded panel"
-    # The folded line has to say what is loaded -- that is the whole reason
-    # it is allowed to hide the rows. Asked of whatever the rows hold at this
-    # point rather than of one name, so the test does not depend on which
-    # test ran before it.
+    assert not window.sources_body.isVisible()
     line = window.sources_head.text()
     for row in window.rows:
-        if row.field.text().strip() and not row.motors:
+        if row.field.text().strip():
             assert row.title in line, (
                 f"the folded line does not name {row.title}: {line!r}")
     assert tall > 100, f"the rows are only {tall} px; folding buys nothing"
@@ -387,53 +441,33 @@ def test_the_rows_fold_away(window, tick):
     tick(0.2)
 
 
-def test_the_link_stands_in_the_bottom_heading(window, tick):
-    """It is a widget in a layout now, and that is the whole point.
+def test_the_link_stands_in_the_panel_heading(window, tick):
+    """A widget in a layout, beside the fold and not inside it.
 
-    It used to be placed by hand over the panel, and that cost three bugs in
-    a row: it moved when the rows changed parent, it had to be put back after
-    every resize, and it went on hanging over a screen whose rows had been
-    folded away. Nothing here measures a position -- what is asked is that the
-    layout owns it.
+    It used to float over the rows, placed by hand, and that cost three bugs.
+    Now the layout owns it: it is in the heading's strip, beside the button
+    that folds the panel -- a button within that button would be a click
+    landing on the wrong one -- and it stays on show while the rows are
+    folded, because it goes on tying the sliders whether or not anybody can
+    see them.
     """
     window._fold_sources(True)
-    window.groups["Bottom"].fold(True)
-    tick(0.3)
+    tick(0.2)
+    strip = window.sources_head.parentWidget()
+    assert strip.objectName() == "qa_sources_strip"
+    assert strip.isAncestorOf(window.linked), "the link is not in the heading"
+    assert not window.sources_body.isAncestorOf(window.linked)
+    assert not window.sources_head.isAncestorOf(window.linked)
 
-    group = window.groups["Bottom"]
-    assert window.linked.parentWidget() is not None
-    assert group.isAncestorOf(window.linked), (
-        "the link is not inside the Bottom group at all")
-    assert not group.body.isAncestorOf(window.linked), (
-        "the link is among the rows, so folding them would take it away")
-    # Beside the heading, not inside it: a button within the button that folds
-    # the group is a click that lands on the wrong one every so often.
-    assert not window.groups["Bottom"].head.isAncestorOf(window.linked)
-    assert window.linked.isVisible()
-
-    # Folding the rows it ties leaves it: the two sliders go on being tied
-    # whether or not anybody can see them.
-    window.groups["Bottom"].head.click()
-    tick(0.3)
-    assert not group.open and not group.body.isVisible()
-    assert window.linked.isVisible(), "the link went away with the rows"
-    was = window.linked.geometry()
-
-    # And the whole panel takes it with it, because the panel holds it.
     window._fold_sources(False)
-    tick(0.3)
-    assert not window.linked.isVisible(), "the link hung over a folded panel"
-
+    tick(0.2)
+    assert window.linked.isVisible(), "the link went away with the rows"
     window._fold_sources(True)
-    window.groups["Bottom"].fold(True)
-    tick(0.3)
-    assert window.linked.isVisible()
-    assert window.linked.geometry() == was or window.linked.geometry().isValid()
+    tick(0.2)
 
 
 def test_the_link_still_ties_the_two_sliders(window, tick):
-    """Moving house must not have unwired it."""
-    top, bottom = window.head_row("Top"), window.head_row("Bottom")
+    top, bottom = window.row_for("Top"), window.row_for("Bottom")
     top.gain.setValue(120)
     bottom.gain.setValue(100)
     window.linked.setChecked(True)
@@ -446,318 +480,3 @@ def test_the_link_still_ties_the_two_sliders(window, tick):
     top.gain.setValue(129)
     bottom.gain.setValue(129)
     tick(0.2)
-
-
-# -- chains on the screens, and loops ----------------------------------------
-
-def one_clip(window, group: str, clips, which: str, times: int = 1) -> None:
-    """Put a single file in a chain, with nothing after it."""
-    window._fill_chain(group, [(str(clips[which]), times)])
-
-
-def no_motors(window) -> None:
-    """Empty the kinetic chain, so the clock is the screens' own length.
-
-    These tests share one window with every other test in the file, and a
-    programme left loaded by one of them is longer than anything made here.
-    """
-    window._fill_chain("Kinetic", [("", 1)])
-
-
-def stream_of(window, group: str):
-    """The stream feeding one screen, whatever it is made of."""
-    row = window.head_row(group)
-    for index, feeds in enumerate(window.feeding):
-        if feeds == row.screen and index < len(window.streams):
-            return window.streams[index]
-    return None
-
-
-def test_two_files_on_one_screen_play_one_after_another(window, clips, tick):
-    """A screen is a run of files now, and the clock is the sum of them."""
-    window.mode.setCurrentText(PREVIEW)
-    no_motors(window)
-    window._fill_chain("Top", [(str(clips["top"]), 1),
-                               (str(clips["top"]), 1)])
-    window._load()
-    tick(0.5)
-
-    chained = stream_of(window, "Top")
-    assert hasattr(chained, "links"), "two files did not make a chain"
-    assert len(chained.links) == 2
-    # Each clip is a second long, so the pair is two -- and the timeline runs
-    # to the longest thing loaded, which is now this rather than the others.
-    assert abs(chained.duration - 2.0) < 0.05, chained.describe()
-    assert abs(window.clock.duration - 2.0) < 0.05
-    assert any(abs(at - 1.0) < 0.05 for at, _ in window.slider._marks), (
-        f"no mark where the two files meet: {window.slider._marks}")
-
-    # And the pictures actually cross the join: the frame handed out at two
-    # thirds of the way through is past the first file's last one.
-    window._move(0.2)
-    tick(0.4)
-    early = window.held[window.streams.index(chained)]
-    window._move(1.5)
-    tick(0.4)
-    late = window.held[window.streams.index(chained)]
-    assert early is not None and late is not None, "no frames came out"
-    assert late.index > early.index, (
-        f"the chain went backwards at the join: {early.index} then {late.index}")
-
-    one_clip(window, "Top", clips, "top")
-    window._load()
-    tick(0.4)
-
-
-def test_a_loop_plays_the_same_file_that_many_times(window, clips, tick):
-    """Thirty seconds and a five second loop is the whole point of the count."""
-    window.mode.setCurrentText(PREVIEW)
-    window.looping.setChecked(True)
-    no_motors(window)
-    one_clip(window, "Top", clips, "top", times=3)
-    window._load()
-    tick(0.5)
-
-    chained = stream_of(window, "Top")
-    assert abs(chained.duration - 3.0) < 0.05, chained.describe()
-    assert abs(window.clock.duration - 3.0) < 0.05
-    # A mark at the top of every pass but the first.
-    passes = [at for at, _ in window.slider._marks if at < 3.0]
-    assert len(passes) >= 2, f"the repeats are not marked: {window.slider._marks}"
-
-    # The same frame of the file comes back round on the second pass.
-    window._move(0.5)
-    tick(0.4)
-    first = window.held[window.streams.index(chained)]
-    window._move(1.5)
-    tick(0.4)
-    second = window.held[window.streams.index(chained)]
-    assert first is not None and second is not None
-    assert second.index > first.index, "the second pass did not move the clock on"
-
-    one_clip(window, "Top", clips, "top")
-    window.looping.setChecked(False)
-    window._load()
-    tick(0.4)
-
-
-def test_the_surface_is_remade_when_the_blocks_differ(window, clips, tick):
-    """Blocks of a show need not agree on size or codec; the screen follows."""
-    window.mode.setCurrentText(PREVIEW)
-    window._fill_chain("Top", [(str(clips["top"]), 1),
-                               (str(clips["bottom"]), 1)])
-    window._load()
-    tick(0.5)
-
-    chained = stream_of(window, "Top")
-    at = window.streams.index(chained)
-    assert (window.screens[at].width, window.screens[at].height) == (256, 120)
-
-    window._move(1.5)
-    tick(0.6)
-    assert (window.screens[at].width, window.screens[at].height) == (464, 160), (
-        "the surface kept the first block's size after the join")
-    assert "the surface was remade" in logfile_text()
-
-    one_clip(window, "Top", clips, "top")
-    window._load()
-    tick(0.4)
-
-
-def test_a_chain_renders_across_its_join(window, clips, tick):
-    """The writer asks for exact frames, and a join is where it would miss."""
-    window.mode.setCurrentText(PREVIEW)
-    window._fill_chain("Top", [(str(clips["top"]), 1),
-                               (str(clips["top"]), 1)])
-    window._load()
-    tick(0.5)
-    window.size_choice.setCurrentText("1080x1920")
-    window.format_choice.setCurrentText("H.264 mp4")
-    window.fps_choice.setCurrentText("60 fps")
-    window.first_frame.setValue(55)
-    window.last_frame.setValue(66)
-    window.out_name.setText("quiet_chain.mp4")
-    (out(window) / "quiet_chain.mp4").unlink(missing_ok=True)
-    tick(0.3)
-
-    said = render_and_wait(window, tick)
-    assert "frames in" in said, said
-    facts = look.probe(out(window) / "quiet_chain.mp4")
-    assert facts["frames"] == 12, facts
-
-    one_clip(window, "Top", clips, "top")
-    window._load()
-    tick(0.4)
-
-
-def test_the_count_spreads_down_the_column(window, clips, tick):
-    """A five second insert is the same insert on every screen and the motors."""
-    window.looping.setChecked(True)
-    for group in ("Top", "Bottom", "Lamels"):
-        which = {"Top": "top", "Bottom": "bottom", "Lamels": "lamels"}[group]
-        window._fill_chain(group, [(str(clips[which]), 1),
-                                   (str(clips[which]), 1)])
-    tick(0.2)
-    was = {group: len(window.chain_rows(group)) for group in window.CHAINS}
-
-    second = window.chain_rows("Top")[1]
-    second.repeat.setValue(4)
-    window._spread(second)
-    tick(0.2)
-    for group in ("Bottom", "Lamels"):
-        assert window.chain_rows(group)[1].times == 4, (
-            f"{group} did not take the count")
-    # Never up the column it came from, and never off the end of a shorter
-    # one: a chain with no row in that place is left the length it was.
-    assert window.chain_rows("Top")[0].times == 1
-    assert {group: len(window.chain_rows(group)) for group in window.CHAINS} \
-        == was, "spreading a count made rows"
-
-    window.looping.setChecked(False)
-    for group in ("Top", "Bottom", "Lamels"):
-        which = {"Top": "top", "Bottom": "bottom", "Lamels": "lamels"}[group]
-        window._fill_chain(group, [(str(clips[which]), 1)])
-    window._load()
-    tick(0.4)
-
-
-def test_each_heading_folds_on_its_own(window, tick):
-    """Twenty-one fields is the picture's whole height; one screen at a time."""
-    window._fold_sources(True)
-    for group in window.groups.values():
-        group.fold(True)
-    tick(0.3)
-
-    window.groups["Top"].head.click()
-    tick(0.3)
-    assert not window.groups["Top"].open, "one click did not fold the heading"
-    assert not window.groups["Top"].body.isVisible()
-    for other in ("Bottom", "Lamels", "Sound", "Kinetic"):
-        assert window.groups[other].open, f"{other} folded with Top"
-        assert window.groups[other].body.isVisible()
-    # The heading has to say what it is hiding -- that is what earns the fold.
-    assert "Top" in window.groups["Top"].head.text()
-    assert window.sources_open, "the whole panel went with one heading"
-
-    window.groups["Top"].head.click()
-    tick(0.3)
-    assert window.groups["Top"].open, "the second click did not unfold it"
-
-
-def test_a_chain_and_its_counts_are_written_down(window, clips, tick):
-    """What is opened next time: every file of every chain, and every count."""
-    window.looping.setChecked(True)
-    window._fill_chain("Top", [(str(clips["top"]), 1),
-                               (str(clips["top"]), 5)])
-    window.groups["Lamels"].fold(False)
-    tick(0.2)
-
-    kept = window._settings_now()["rows"]["Top"]
-    assert kept["files"] == [str(clips["top"]), str(clips["top"])], kept
-    assert kept["repeats"] == [1, 5], kept
-    # And the first of them under the old key, so a settings file written here
-    # still opens in a version that knew one row per screen.
-    assert kept["file"] == str(clips["top"])
-    folds = window._settings_now()["groups_open"]
-    assert folds["Lamels"] is False and folds["Top"] is True, folds
-    assert window._settings_now()["loops"] is True
-
-    window.groups["Lamels"].fold(True)
-    window.looping.setChecked(False)
-    one_clip(window, "Top", clips, "top")
-    window._load()
-    tick(0.4)
-
-
-def test_the_motors_loop_with_the_picture(window, tick):
-    """A looped block moves the screens the same way on every pass."""
-    import numpy as np
-    from pathlib import Path
-    import pytest
-    if not Path(PARTS).exists():
-        pytest.skip("the two-part show is not on this machine")
-
-    window.looping.setChecked(True)
-    window._fill_chain("Kinetic", [(PARTS, 1)])
-    window._load()
-    wait_for(tick, lambda: window.motors is not None and
-             len(window.motors.parts) == 2, "the parts did not load", within=60)
-    plain = window.motors.frames
-
-    window.chain_rows("Kinetic")[0].repeat.setValue(2)
-    window._load()
-    wait_for(tick, lambda: window.motors is not None and
-             window.motors.parts[0].repeats == 2, "the loop did not take",
-             within=60)
-    motors = window.motors
-    over = motors.parts[0].length
-    assert motors.frames == plain + over, (
-        f"{motors.frames} frames for a part played twice, not {plain + over}")
-    assert np.allclose(motors.tilt[..., :over], motors.tilt[..., over:2 * over]), (
-        "the second pass is not the first one again")
-
-    window.chain_rows("Kinetic")[0].repeat.setValue(1)
-    window.looping.setChecked(False)
-    window._fill_chain("Kinetic", [("", 1)])
-    window._load()
-    tick(0.4)
-
-
-def test_the_counters_are_not_there_until_they_are_asked_for(window, clips, tick):
-    """A column of boxes reading "× 1" is four more things to wonder about."""
-    window.looping.setChecked(False)
-    no_motors(window)
-    window._fill_chain("Top", [(str(clips["top"]), 1),
-                               (str(clips["top"]), 1)])
-    window._load()
-    tick(0.4)
-    for row in window.chain_rows("Top"):
-        assert row.repeat is not None, "the counter was never built"
-        assert not row.repeat.isVisible(), "the counter is on show with loops off"
-        assert not row.spread_button.isVisible()
-
-    # And a number left behind in a hidden box does not lengthen the piece.
-    window.chain_rows("Top")[1].repeat.setValue(4)
-    window._load()
-    tick(0.4)
-    assert abs(window.clock.duration - 2.0) < 0.05, (
-        f"a hidden count made the timeline {window.clock.duration:.2f} s")
-
-    window.looping.setChecked(True)
-    tick(0.4)
-    for row in window.chain_rows("Top"):
-        assert row.repeat.isVisible(), "the counter did not come back"
-    # The number was kept while it was away, and now it counts.
-    assert window.chain_rows("Top")[1].times == 4
-    assert abs(window.clock.duration - 5.0) < 0.05, (
-        f"the kept count is not being played: {window.clock.duration:.2f} s")
-
-    window.chain_rows("Top")[1].repeat.setValue(1)
-    window.looping.setChecked(False)
-    window._fill_chain("Top", [(str(clips["top"]), 1)])
-    window._load()
-    tick(0.4)
-
-
-def test_the_first_row_of_a_chain_offers_no_way_to_remove_itself(window, clips, tick):
-    """It is where the chain starts, so there is nothing to remove it from."""
-    window._fill_chain("Top", [(str(clips["top"]), 1),
-                               (str(clips["top"]), 1)])
-    tick(0.2)
-    for group in window.CHAINS:
-        rows = window.chain_rows(group)
-        assert rows[0].less_button is None, (
-            f"the first {group} row has a remove button that does nothing")
-        assert rows[0].add_button is not None, (
-            f"the first {group} row cannot start a chain")
-    assert window.chain_rows("Top")[1].less_button is not None, (
-        "a row of the chain cannot be taken out")
-
-    # And the one that does have it takes itself away when it is pressed.
-    window.chain_rows("Top")[1].less_button.click()
-    tick(0.4)
-    assert len(window.chain_rows("Top")) == 1, "the row stayed"
-
-    window._fill_chain("Top", [(str(clips["top"]), 1)])
-    window._load()
-    tick(0.4)
