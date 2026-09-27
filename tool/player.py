@@ -470,6 +470,324 @@ class Chain:
         self._owner.clear()
 
 
+class Track:
+    """One track of one screen: clips placed at frames, with gaps between.
+
+    What `Chain` does for files laid end to end, done for files placed where
+    a show puts them. The difference is the whole point of a timeline: a clip
+    starts at its own frame rather than where the one before it ended, and
+    between two clips there may be nothing at all -- where the track gives no
+    picture and the screen shows whatever else is on it.
+
+    The rest is Chain's, and for the same reasons. Only a couple of clips are
+    open at once, because every open movie is a reader thread and a pool of
+    full-size buffers; the next one is opened a second before it is due, so
+    the join is not where the opening happens. Every frame handed out is
+    labelled with its place on the show's own grid, because the window
+    compares those numbers -- how late a frame is, whether the card already
+    holds it -- and a clip's own frame numbers start again at zero. And a clip
+    of another shape asks the screen to re-shape itself through `on_change`.
+
+    `clips` are `show.Clip`s of one row and one level. Missing ones are left
+    out: a file that is not here is a gap, not a failure.
+    """
+
+    LIVE = 2            # clips kept open: the one playing, and the next
+
+    def __init__(self, clips, rate: float = 60.0, screen=None) -> None:
+        self.clips = sorted((one for one in clips
+                             if not one.missing and one.kind == "video"),
+                            key=lambda one: (one.first, one.ident))
+        self.rate = float(rate) or 60.0
+        self.screen = screen
+        self.error = ""
+        self.on_change = None           # told when the clip playing changes
+        self._live: dict[int, object] = {}
+        self._used: dict[int, int] = {}
+        self._clock = 0
+        self._reading: int | None = None     # the clip the reader is aimed at
+        self._out = None                     # the frame the caller holds
+        self._out_at: tuple | None = None    # (clip, its own frame) of that
+        self._owner: dict[int, object] = {}
+        self._starts = [one.first for one in self.clips]
+        # Whether the reader has been put where it was asked to be. Opening a
+        # clip leaves it on its own frame zero, and a show opened in the
+        # middle asks for the middle: without this the reader went on from
+        # zero until the wait ran out, and handed back frame 7243 for 10642.
+        self._placed = False
+        # The first clip is opened now: what is above needs a movie to build
+        # a surface from before anything is drawn.
+        if self.clips:
+            self._stream_for(0)
+            self._reading = 0
+
+    # -- what the clock and the window need to know -------------------------
+
+    @property
+    def duration(self) -> float:
+        last = max((one.last for one in self.clips), default=0)
+        return last / self.rate
+
+    @property
+    def at(self) -> int:
+        return self._reading if self._reading is not None else 0
+
+    @property
+    def movie(self):
+        live = self._live.get(self.at)
+        return live.movie if live is not None else None
+
+    @property
+    def decodes(self) -> bool:
+        return bool(getattr(self._live.get(self.at), "decodes", True))
+
+    @property
+    def counts(self) -> Counts:
+        live = self._live.get(self.at)
+        return live.counts if live is not None else Counts()
+
+    @property
+    def at_end(self) -> bool:
+        if not self.clips or self._reading != len(self.clips) - 1:
+            return False
+        live = self._live.get(self._reading)
+        return bool(live is not None and live.at_end)
+
+    @property
+    def open_now(self) -> int:
+        """How many clips are open at this moment. For the tests, and the log."""
+        return len(self._live)
+
+    def index_at(self, seconds: float) -> int:
+        return max(0, int(round(seconds * self.rate)))
+
+    def which(self, frame: float) -> int | None:
+        """The clip showing at a show frame, by its place in `clips`."""
+        from bisect import bisect_right
+        spot = bisect_right(self._starts, frame) - 1
+        # Clips on one track do not overlap in any show here, but nothing in
+        # the format forbids it: look back far enough to be sure.
+        for index in range(spot, -1, -1):
+            if self.clips[index].covers(frame):
+                return index
+            if self.clips[index].last <= frame and index < spot - 2:
+                break
+        return None
+
+    def showing(self, frame: float):
+        """The clip on show at that frame, or None in a gap."""
+        index = self.which(frame)
+        return None if index is None else self.clips[index]
+
+    def opacity_at(self, frame: float) -> float:
+        clip = self.showing(frame)
+        return clip.opacity_at(frame) if clip is not None else 0.0
+
+    # -- which clips are open -----------------------------------------------
+
+    def _stream_for(self, which: int):
+        live = self._live.get(which)
+        if live is None:
+            clip = self.clips[which]
+            try:
+                live = open_source(clip.path, self.screen)
+            except Exception as error:  # noqa: BLE001 -- shown beside it
+                self.error = f"{clip.name}: {error}"
+                raise
+            live.start()
+            self._live[which] = live
+        self._used[which] = self._clock
+        self._clock += 1
+        while len(self._live) > self.LIVE:
+            oldest = min(self._live, key=lambda key: self._used[key])
+            if oldest == which:
+                break
+            self._used.pop(oldest, None)
+            self._live.pop(oldest).stop()
+        return live
+
+    def _arm(self, frame: float) -> None:
+        """Open the next clip a second before it is due, not on its frame.
+
+        The next clip after this frame, whether or not anything is playing
+        now: in a gap nothing is, and a clip coming in after a pause is
+        exactly the one that would otherwise be opened on its own first frame.
+        """
+        from bisect import bisect_right
+        after = bisect_right(self._starts, frame)
+        if after >= len(self.clips) or after in self._live:
+            return
+        if self.clips[after].first - frame > self.rate:
+            return
+        playing = self.which(frame)
+        try:
+            self._stream_for(after)
+        except Exception:  # noqa: BLE001 -- said again when it is due
+            return
+        if playing is not None and playing in self._used:
+            self._used[playing] = self._clock    # the one playing stays newest
+            self._clock += 1
+
+    def _aim(self, which: int, local: int):
+        stream = self._stream_for(which)
+        turned = self._reading != which
+        if turned or not self._placed:
+            stream.seek(local)
+            self._reading = which
+            self._placed = True
+            self._out_at = None
+            if turned and self.on_change is not None:
+                self.on_change(self)
+        return stream
+
+    def _local(self, clip, stream, frame: float) -> int:
+        """Which frame of the clip's own file stands at this show frame."""
+        rate = getattr(stream, "rate", 0.0) or 0.0
+        if not rate or not clip.frames:
+            return 0
+        into = (int(frame) - clip.tx) * rate / self.rate
+        return max(0, min(clip.frames - 1, int(round(into))))
+
+    def _label(self, clip, stream, local: int) -> int:
+        rate = getattr(stream, "rate", 0.0) or 0.0
+        if not rate:
+            # A still is current for the whole of its span. Labelled with its
+            # first frame, the window would call it a second late a second in
+            # and seek -- and then re-send the same picture every frame.
+            return clip.last - 1
+        return clip.tx + int(round(local * self.rate / rate))
+
+    # -- what the drawing side asks for -------------------------------------
+
+    def take(self, wanted: int, holding: Frame | None) -> Frame | None:
+        """The newest frame no later than `wanted`, or None if nothing new.
+
+        None as well in a gap -- `showing` is how the caller tells the two
+        apart, and a screen whose track is in a gap shows nothing of it.
+        """
+        if holding is not self._out:
+            self._out, self._out_at = holding, None
+        which = self.which(wanted)
+        if which is None:
+            self._arm(wanted)
+            return None
+        clip = self.clips[which]
+        stream = self._stream_for(which)
+        local = self._local(clip, stream, wanted)
+        stream = self._aim(which, local)
+        self._arm(wanted)
+        if self._out_at is not None and self._out_at[0] == which \
+                and self._out_at[1] >= local:
+            return None                      # what is up is new enough
+        # Never the caller's own frame: its index is on the show's grid now,
+        # and the stream would read it as a frame of its own.
+        got = stream.take(local, None)
+        if got is None:
+            return None
+        if self._out_at is not None and self._out_at[0] == which \
+                and got.index <= self._out_at[1]:
+            stream.give_back(got)            # older than what is already up
+            return None
+        self._out, self._out_at = got, (which, got.index)
+        self._owner[id(got)] = stream
+        got.index = self._label(clip, stream, got.index)
+        return got
+
+    def exact(self, wanted: int, holding: Frame | None,
+              should_stop=None, timeout: float = 30.0) -> Frame | None:
+        """Exactly this frame, however long it takes. None in a gap."""
+        if holding is not self._out:
+            self._out, self._out_at = holding, None
+        which = self.which(wanted)
+        if which is None:
+            self._arm(wanted)
+            return None
+        clip = self.clips[which]
+        stream = self._stream_for(which)
+        local = self._local(clip, stream, wanted)
+        stream = self._aim(which, local)
+        self._arm(wanted)
+        if self._out_at == (which, local):
+            return self._out
+        got = stream.exact(local, None, should_stop, timeout)
+        if got is None:
+            return None
+        self._out, self._out_at = got, (which, got.index)
+        self._owner[id(got)] = stream
+        got.index = self._label(clip, stream, got.index)
+        return got
+
+    def give_back(self, frame: Frame | None) -> None:
+        if frame is None:
+            return
+        owner = self._owner.pop(id(frame), None)
+        if owner is not None:
+            owner.give_back(frame)
+        if frame is self._out:
+            self._out, self._out_at = None, None
+
+    def seek(self, index: int) -> None:
+        which = self.which(index)
+        if which is None:
+            self._out, self._out_at = None, None
+            return
+        try:
+            stream = self._stream_for(which)
+            local = self._local(self.clips[which], stream, index)
+            self._placed = False          # a seek always moves the reader
+            self._aim(which, local)
+        except Exception:  # noqa: BLE001 -- said when a frame is asked for
+            return
+        self._out, self._out_at = None, None
+
+    def start(self) -> None:
+        pass              # each clip's reader is started when it is opened
+
+    def stop(self) -> None:
+        for live in list(self._live.values()):
+            live.stop()
+        self._live.clear()
+        self._used.clear()
+        self._owner.clear()
+
+
+class Stack:
+    """The tracks of one screen, and which of them are on show at a frame.
+
+    Nothing here decides which is in front. The layers of a screen add -- the
+    show editor was checked for it: an opaque black clip on level 0 does not
+    hide the level 1 clip fading out over it -- so a stack is only a list, and
+    the level is only which row of the timeline a track is drawn on.
+    """
+
+    def __init__(self, tracks) -> None:
+        self.tracks = [one for one in tracks if one.clips]
+
+    @classmethod
+    def of(cls, show, row: str, rate: float = 60.0, screen=None) -> "Stack":
+        return cls([Track(show.on(row, level), rate, screen)
+                    for level in show.levels(row)])
+
+    def layers_at(self, frame: float) -> list:
+        """(track, clip, opacity) for every track showing something here."""
+        found = []
+        for track in self.tracks:
+            clip = track.showing(frame)
+            if clip is not None:
+                level = clip.opacity_at(frame)
+                if level > 0.0:
+                    found.append((track, clip, level))
+        return found
+
+    @property
+    def duration(self) -> float:
+        return max((one.duration for one in self.tracks), default=0.0)
+
+    def stop(self) -> None:
+        for track in self.tracks:
+            track.stop()
+
+
 class Stream:
     """One movie, read ahead of where the clock is."""
 
