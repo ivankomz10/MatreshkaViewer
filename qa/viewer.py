@@ -293,6 +293,7 @@ class Viewer:
     def checks_up(self) -> bool:
         """Whether the machine-checks window is in front of everything."""
         return any("machine" in title.lower() or "проверк" in title.lower()
+                   or "что есть" in title.lower()
                    for _, title in self.other_windows())
 
     def click(self, qa: str, count: int = 1, settle: float = 0.35) -> uia.Node:

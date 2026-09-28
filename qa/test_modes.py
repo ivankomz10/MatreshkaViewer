@@ -66,9 +66,9 @@ def test_rebake_draws_the_result_at_once(app):
                                     f"(spread {look.spread(right):.1f})")
     # A setting away and back changes nothing -- unless the picture on entry
     # was not the picture the settings describe, which is the bug this is for.
-    app.choose("qa_rebake_colour", "Keep")
+    app.choose("qa_rebake_colour", "Оставить")
     time.sleep(0.8)
-    app.choose("qa_rebake_colour", "Multiply")
+    app.choose("qa_rebake_colour", "Умножить")
     time.sleep(1.5)
     settled = app.picture_of("qa_canvas")
     apart = look.difference(on_entry, settled)

@@ -543,6 +543,47 @@ def test_one_reading_of_time_and_it_counts_frames_of_the_whole(window, tick):
     assert window.time_label.text().count(":") == 3
 
 
+def test_a_press_anywhere_on_the_slider_puts_the_playhead_there(window, tick):
+    """The handle is a line two pixels wide: the press is what moves it."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    window._move(0.0)
+    tick(0.2)
+    slider = window.slider
+    middle = QPoint(slider.width() // 2, slider.height() // 2)
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton,
+                     Qt.KeyboardModifier.NoModifier, middle)
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton,
+                       Qt.KeyboardModifier.NoModifier, middle)
+    tick(0.3)
+    at, last = window._frame_now()
+    assert 0.4 * last < at < 0.6 * last, f"a press in the middle landed on {at} of {last}"
+    assert not slider.isSliderDown()
+    window._move(0.0)
+    tick(0.2)
+
+
+def test_the_keys_are_the_keyboard_s_not_the_layout_s():
+    """On a Russian layout I is Ш and Shift with / is a comma; the viewer
+    answers the key, which Windows names the same on every layout."""
+    import sys
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    import main
+    if sys.platform != "win32":
+        pytest.skip("the key's own code is read on Windows only")
+    press = QEvent.Type.KeyPress
+    sha = QKeyEvent(press, 0x428, Qt.KeyboardModifier.NoModifier, 0x17, 0x49,
+                    0, "ш")
+    assert main.layout_key(sha) == Qt.Key.Key_I
+    comma = QKeyEvent(press, Qt.Key.Key_Comma, Qt.KeyboardModifier.ShiftModifier,
+                      0x35, 0xBF, 0, ",")
+    assert main.layout_key(comma) == Qt.Key.Key_Slash
+    space = QKeyEvent(press, Qt.Key.Key_Space, Qt.KeyboardModifier.NoModifier,
+                      0x39, 0x20, 0, " ")
+    assert main.layout_key(space) == Qt.Key.Key_Space
+
+
 def test_shift_i_and_o_set_the_range_from_the_playhead(window, tick):
     window._move(10 / 60.0)
     window._range_here(False)

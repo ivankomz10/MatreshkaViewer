@@ -48,7 +48,7 @@ def test_a_quarter_is_a_quarter_of_the_screen(app):
     app.type_into("qa_frame_last", "3")
     clear_out(app, ".mp4")
 
-    assert "frames in" in render(app)
+    assert "Записано" in render(app)
 
     for row in media.CLIPS:
         made = app.out / flat_name(row, ".mp4")
@@ -67,7 +67,7 @@ def test_native_is_the_screen_itself(app):
     app.type_into("qa_frame_first", "0")
     app.type_into("qa_frame_last", "1")
     clear_out(app, ".mp4")
-    assert "frames in" in render(app)
+    assert "Записано" in render(app)
     for row, (source, source_wide, _) in media.CLIPS.items():
         facts = look.probe(app.out / flat_name(row, ".mp4"))
         assert (facts["width"], facts["height"]) == expected(row, 1.0), (
@@ -83,7 +83,7 @@ def test_it_refuses_when_the_files_are_already_there(app):
     assert made.exists(), "the test before this one should have written it"
     stamp = made.stat().st_mtime
     said = render(app, within=30)
-    assert "exists" in said, f"it did not refuse; it said {said!r}"
+    assert "уже есть" in said, f"it did not refuse; it said {said!r}"
     assert made.stat().st_mtime == stamp, "it wrote over the file anyway"
 
 
@@ -95,7 +95,7 @@ def test_an_alpha_format_carries_the_alpha(app):
     app.type_into("qa_frame_first", "0")
     app.type_into("qa_frame_last", "1")
     clear_out(app, ".mov")
-    assert "frames in" in render(app)
+    assert "Записано" in render(app)
 
     made = app.out / flat_name("top", ".mov")
     facts = look.probe(made)
@@ -118,7 +118,7 @@ def test_png_alpha_writes_a_folder_of_stills(app):
     app.choose("qa_size", "Четверть")
     app.choose("qa_format", "PNG alpha")
     # At the grid's own rate, so that three frames of range are three stills.
-    app.choose("qa_fps", "60 fps")
+    app.choose("qa_fps", "60 к/с")
     app.type_into("qa_frame_first", "0")
     app.type_into("qa_frame_last", "2")
     for row in media.CLIPS:
@@ -127,7 +127,7 @@ def test_png_alpha_writes_a_folder_of_stills(app):
             for old in folder.glob("*.png"):
                 old.unlink()
             folder.rmdir()
-    assert "frames in" in render(app)
+    assert "Записано" in render(app)
 
     folder = app.out / flat_name("top", "")
     assert folder.is_dir(), f"{folder} is not a folder of stills"
@@ -152,6 +152,6 @@ def test_geometry_still_writes_the_whole_frame(app):
     app.type_into("qa_frame_last", "1")
     app.type_into("qa_out_name", "qa_after_flat.mp4")
     (app.out / "qa_after_flat.mp4").unlink(missing_ok=True)
-    assert "frames in" in render(app)
+    assert "Записано" in render(app)
     facts = look.probe(app.out / "qa_after_flat.mp4")
     assert (facts["width"], facts["height"]) == (1080, 1920), facts

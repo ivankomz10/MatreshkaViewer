@@ -54,9 +54,9 @@ def baker(ready, copies, request):
 def wait_for_the_bake(app, within: float = 300.0) -> str:
     def done(one):
         said = one.says("qa_rebake_note")
-        return said if ("in place" in said or "wrote" in said
-                        or "exists" in said or "no " in said
-                        or "missing" in said or "failed" in said) else ""
+        return said if any(word in said for word in (
+            "на месте", "записано", "уже есть", "нет ", "не найден",
+            "не удалась", "не встало", "остановлено")) else ""
     return app.wait_until(done, "the re-bake never finished", within=within)
 
 
@@ -94,7 +94,7 @@ def test_hap_rebake_takes_the_source_place(baker, copies):
 
     baker.click("qa_rebake")
     said = wait_for_the_bake(baker)
-    assert "in place" in said, f"the re-bake said {said!r}"
+    assert "на месте" in said, f"the re-bake said {said!r}"
 
     assert copies["top"].exists(), "the source's name is gone"
     aside = Path(str(copies["top"]).replace(".mov", "_old.mov"))
@@ -112,8 +112,8 @@ def test_it_refuses_to_bake_over_what_it_already_baked(baker):
     said = None
     baker.click("qa_rebake")
     said = wait_for_the_bake(baker, within=120)
-    assert "exists" in said or "in place" in said, said
-    if "in place" in said:
+    assert "уже есть" in said or "на месте" in said, said
+    if "на месте" in said:
         # A second re-bake is allowed -- the old one steps aside again -- but
         # then there must be a second kept file, not a lost one.
         kept = list(WORK.glob("*_old*.mov"))

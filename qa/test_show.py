@@ -27,7 +27,7 @@ def shown(app, qa: str) -> bool:
 def into_show(app) -> None:
     if not shown(app, "qa_show_tracks"):
         app.click("qa_level_show", settle=0.8)
-    app.wait_until(lambda: shown(app, "qa_show_tracks"),
+    app.wait_until(lambda _now: shown(app, "qa_show_tracks"),
                    "the strips never came up", within=15)
 
 
@@ -98,9 +98,9 @@ def test_the_keys_card_comes_and_goes_with_the_question_mark(app):
     at_start(app)
     assert not shown(app, "qa_keys")
     app.key("slash", "shift")
-    app.wait_until(lambda: shown(app, "qa_keys"), "? raised nothing", 5)
+    app.wait_until(lambda _now: shown(app, "qa_keys"), "? raised nothing", 5)
     app.key("slash", "shift")
-    app.wait_until(lambda: not shown(app, "qa_keys"), "? did not put it away", 5)
+    app.wait_until(lambda _now: not shown(app, "qa_keys"), "? did not put it away", 5)
 
 
 def test_shift_and_an_arrow_go_a_second(app):
@@ -119,12 +119,12 @@ def test_full_screen_from_the_show_keeps_the_picture(app):
     into_show(app)
     app.key("f11")
     try:
-        app.wait_until(lambda: not shown(app, "qa_show_tracks"),
+        app.wait_until(lambda _now: not shown(app, "qa_show_tracks"),
                        "full screen left the strips up", 10)
         assert shown(app, "qa_canvas"), "full screen hid the picture as well"
     finally:
         app.key("f11")
-    app.wait_until(lambda: shown(app, "qa_show_tracks"),
+    app.wait_until(lambda _now: shown(app, "qa_show_tracks"),
                    "the strips did not come back", 10)
 
 
@@ -165,7 +165,7 @@ def test_the_editor_moves_a_clip_and_ctrl_z_puts_it_back(app):
 def test_back_to_the_quick_look(app):
     into_show(app)
     app.click("qa_level_view", settle=0.8)
-    app.wait_until(lambda: shown(app, "qa_sources"),
+    app.wait_until(lambda _now: shown(app, "qa_sources"),
                    "the rows did not come back", 10)
     assert not shown(app, "qa_show_tracks")
     assert shown(app, "qa_timeline")
@@ -177,7 +177,7 @@ def test_a_session_left_in_the_show_opens_in_it(fresh):
         extra["trix"] = str(RUSDAY)
     running = fresh(**extra)
     running.log_has("log:", within=30)
-    running.wait_until(lambda: shown(running, "qa_show_tracks"),
+    running.wait_until(lambda _now: shown(running, "qa_show_tracks"),
                        "it opened in the quick look", 30)
     if RUSDAY.exists():
         said = running.says("qa_project_name")

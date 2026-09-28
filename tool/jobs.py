@@ -384,7 +384,8 @@ class RebakeJob(QThread):
                             other.writer = None
                         self.failed.emit("cancelled")
                         return
-                    if piece.at >= piece.stream.movie.frames                             or not self._turn(piece):
+                    if (piece.at >= piece.stream.movie.frames
+                            or not self._turn(piece)):
                         piece.going = False
                         continue
                     done += 1
@@ -401,13 +402,19 @@ class RebakeJob(QThread):
             for piece in pieces:
                 piece.writer.finish()
                 piece.writer = None
-            self.finished_ok.emit({"files": [str(t) for _, t in self.work],
-                                   "frames": done})
+            result = {"files": [str(t) for _, t in self.work], "frames": done}
         except Exception as error:  # noqa: BLE001 -- surfaced in the window
             self.failed.emit(str(error))
+            return
         finally:
             for piece in pieces:
                 piece.close()
+        # Said only once this job's own copies of the sources are shut. The
+        # window renames the sources the moment it hears, and Windows will
+        # not rename a file something still has open: said from inside the
+        # `try`, it was a race the window won often enough to leave the
+        # re-bake written and not put in place.
+        self.finished_ok.emit(result)
 
 
 class NoiseJob(QThread):

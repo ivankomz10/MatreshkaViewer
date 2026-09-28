@@ -27,7 +27,8 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox,
                                QPushButton, QSizePolicy, QSlider, QSpinBox,
                                QScrollArea, QSplitter, QToolButton,
                                QWidgetAction,
-                               QStyleFactory, QToolTip, QVBoxLayout, QWidget)
+                               QStyle, QStyleFactory, QToolTip, QVBoxLayout,
+                               QWidget)
 from rendercanvas.pyside6 import RenderCanvas
 
 import numpy as np
@@ -339,6 +340,29 @@ def _small(button: QPushButton, width: int) -> QPushButton:
     return button
 
 
+# Windows' own codes for the few keys the viewer answers that are not letters.
+# A letter's code is its capital, A to Z, which is also Qt's own number for it.
+_WIN_KEYS = {0xBF: Qt.Key.Key_Slash, 0xDB: Qt.Key.Key_BracketLeft,
+             0xDD: Qt.Key.Key_BracketRight}
+
+
+def layout_key(event):
+    """The key as it stands on the keyboard, whatever layout is switched on.
+
+    Qt's `key()` is what the layout makes of a key: on a Russian one, I is
+    Ш and Shift with / is a comma, so the show's letters and the card of
+    keys did nothing there. Windows says which key it was as well, and that
+    is the same on every layout. Elsewhere the key is taken as Qt gives it.
+    """
+    key = event.key()
+    if sys.platform != "win32":
+        return key
+    code = event.nativeVirtualKey()
+    if 0x41 <= code <= 0x5A:
+        return Qt.Key(code)
+    return _WIN_KEYS.get(code, key)
+
+
 def _tag(title: str) -> str:
     """A row's title as the test driver spells it: `Top 2` is `top2`."""
     return title.lower().replace(" ", "")
@@ -584,6 +608,39 @@ class Timeline(QSlider):
         self._marks: list = []          # (seconds, name)
         self._span = 0.0
         self._range = None              # (from, to) as parts of the whole
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    # The handle is a line two pixels wide, as the redesign draws the
+    # playhead, and a slider that moves only when its handle is caught is a
+    # slider that mostly does not move. So the press is where the playhead
+    # goes, and the drag carries it from there -- the way the show's ruler
+    # has always worked.
+    def _value_at(self, x: float) -> int:
+        return QStyle.sliderValueFromPosition(
+            self.minimum(), self.maximum(), int(round(x)) - 1,
+            max(1, self.width() - 2))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self.setSliderDown(True)
+        self.setSliderPosition(self._value_at(event.position().x()))
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self.isSliderDown():
+            self.setSliderPosition(self._value_at(event.position().x()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self.isSliderDown():
+            self.setSliderDown(False)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def set_range(self, part) -> None:
         """The part the render will write, when it is not the whole."""
@@ -4410,7 +4467,7 @@ class Viewer(QMainWindow):
     # be pointing.
     TRANSPORT_KEYS = (Qt.Key.Key_Space, Qt.Key.Key_Left, Qt.Key.Key_Right)
     # And in Шоу, these as well. Letters by the key rather than the character,
-    # so they work on a Russian layout the same.
+    # so they work on a Russian layout the same: see `layout_key`.
     # And in both: ? for the card of keys, Shift+I and Shift+O for the range.
     ALWAYS_KEYS = (Qt.Key.Key_Question, Qt.Key.Key_Slash, Qt.Key.Key_I,
                    Qt.Key.Key_O)
@@ -4433,11 +4490,11 @@ class Viewer(QMainWindow):
                                   QEvent.Type.MouseButtonPress):
                 self._hint(None)
         if (event.type() == QEvent.Type.KeyPress
-                and (event.key() in self.TRANSPORT_KEYS
-                     or event.key() in self.ALWAYS_KEYS
+                and (layout_key(event) in self.TRANSPORT_KEYS
+                     or layout_key(event) in self.ALWAYS_KEYS
                      or event.text() == "?"
                      or (self.level == "show"
-                         and event.key() in self.SHOW_KEYS))
+                         and layout_key(event) in self.SHOW_KEYS))
                 and self._transport_key(event)):
             return True
         return super().eventFilter(watched, event)
@@ -4489,7 +4546,7 @@ class Viewer(QMainWindow):
         keys = event.modifiers()
         control = bool(keys & Qt.KeyboardModifier.ControlModifier)
         shift = bool(keys & Qt.KeyboardModifier.ShiftModifier)
-        key = event.key()
+        key = layout_key(event)
         if event.text() == "?" or key == Qt.Key.Key_Question \
                 or (key == Qt.Key.Key_Slash and shift):
             self._toggle_keys()
@@ -4503,7 +4560,7 @@ class Viewer(QMainWindow):
                           | Qt.KeyboardModifier.KeypadModifier)
         if others:                        # Shift, Alt: somebody else's
             return False
-        key = event.key()
+        key = layout_key(event)
         if key == Qt.Key.Key_Space:
             if control:
                 return False
@@ -4522,7 +4579,7 @@ class Viewer(QMainWindow):
         shift = bool(keys & Qt.KeyboardModifier.ShiftModifier)
         if keys & Qt.KeyboardModifier.AltModifier:
             return False
-        key = event.key()
+        key = layout_key(event)
         if shift and not control and key in (Qt.Key.Key_Left,
                                              Qt.Key.Key_Right):
             self._jump_by(-1.0 if key == Qt.Key.Key_Left else 1.0)
@@ -4740,8 +4797,8 @@ class Viewer(QMainWindow):
     def _ffmpeg_progress(self, done: int, total: int) -> None:
         self.rebake_progress.setValue(int(100 * done / total) if total else 0)
         self.rebake_note.setText(
-            f"fetching ffmpeg: {done / 1e6:.0f} of {total / 1e6:.0f} MB"
-            if total else f"fetching ffmpeg: {done / 1e6:.0f} MB")
+            f"качаю ffmpeg: {done / 1e6:.0f} из {total / 1e6:.0f} МБ"
+            if total else f"качаю ffmpeg: {done / 1e6:.0f} МБ")
 
     def _ffmpeg_failed(self, why: str) -> None:
         self.job = None
@@ -4994,7 +5051,7 @@ class Viewer(QMainWindow):
             return
         if moved:
             self.rebake_note.setText(
-                f"{len(moved)} in place; the old kept as "
+                f"на месте: {len(moved)}; прежние оставлены как "
                 + ", ".join(aside.name for _, aside in moved))
         else:
             self.rebake_note.setText("записано: " + ", ".join(names))

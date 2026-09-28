@@ -33,8 +33,9 @@ def test_clearing_a_row_takes_it_off_the_screen(app):
     app.click("qa_clear_lamels")
     time.sleep(0.6)
     assert app.holds("lamels") == ""
-    assert app.says("qa_note_lamels") == "", (
-        f"the row still says {app.says('qa_note_lamels')!r}")
+    assert app.maybe("qa_note_lamels") is None, (
+        f"the card still says {app.says('qa_note_lamels')!r}")
+    assert app.at("qa_drop_lamels").showing, "no place to drop a file"
     assert app.maybe("qa_clear_lamels") is None, (
         "an empty card still offers to be cleared")
     # Put it back for whatever runs next.

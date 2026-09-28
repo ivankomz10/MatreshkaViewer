@@ -1429,8 +1429,11 @@ class TimelinePane(QWidget):
         at = int(view.frame)
         live = view.show.live_at(at)
         here = view.loop_here()
-        clock = showfile.timecode(at)
-        frames = f"кадр {at} из {view.show.length}"
+        # The last frame there is, not one past it, as the quick look counts:
+        # the end of the show is where its last frame stops, not a frame.
+        shown = max(0, min(at, view.show.length - 1))
+        clock = showfile.timecode(shown)
+        frames = f"кадр {shown} из {view.show.length}"
         said = (("В ЛУПЕ   " if here is not None and view.looping else "")
                 + "на экранах: "
                 + ("  ·  ".join(f"{one.row} L{one.level} {one.name[:24]}"
