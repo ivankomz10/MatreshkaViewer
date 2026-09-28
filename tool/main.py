@@ -3442,19 +3442,31 @@ class Viewer(QMainWindow):
         inside = QHBoxLayout(where)
         inside.setContentsMargins(9, 0, 4, 0)
         inside.setSpacing(0)
-        self.out_folder = QLabel()
+        # Both halves are typed into: the folder, quiet until it is being
+        # edited, and the name. It looks like one path and is written like
+        # one -- a whole path pasted into the name goes to both.
+        self.out_folder = QLineEdit()
         self.out_folder.setObjectName("qa_out_folder")
-        self.out_folder.setFont(theme.mono(9))
-        self.out_folder.setStyleSheet(f"color:{theme.QUIET};")
-        # The folder gives way first: the name is what gets typed.
+        self.out_folder.setFrame(False)
+        self.out_folder.setStyleSheet(
+            f"QLineEdit {{ background:transparent; border:none; padding:4px 0px;"
+            f" color:{theme.QUIET}; }}"
+            f" QLineEdit:focus {{ color:{theme.TEXT}; }}")
+        self.out_folder.setToolTip(
+            "Папка, в которую писать: впишите путь или выберите «Куда…». "
+            "Папки, которой ещё нет, при записи будет создана.")
+        # The folder gives way first: the name is what gets typed most.
         self.out_folder.setSizePolicy(QSizePolicy.Policy.Ignored,
-                                      QSizePolicy.Policy.Preferred)
+                                      QSizePolicy.Policy.Fixed)
+        self.out_folder.setMinimumWidth(60)
+        self.out_folder.editingFinished.connect(self._folder_typed)
         inside.addWidget(self.out_folder, 2)
         self.out_name = QLineEdit("preview_v1.mp4")
         self.out_name.setObjectName("qa_out_name")
         self.out_name.setFrame(False)
         self.out_name.setStyleSheet("QLineEdit { background:transparent; "
                                     "border:none; padding:4px 0px; }")
+        self.out_name.editingFinished.connect(self._name_typed)
         # The name this worked out for itself. While the box still holds it,
         # the sources may rename the render; the moment it holds something
         # else, somebody has decided and nothing here touches it again.
@@ -4480,9 +4492,6 @@ class Viewer(QMainWindow):
     def eventFilter(self, watched, event):  # noqa: N802 -- Qt naming
         if watched is self.canvas and event.type() == QEvent.Type.Resize:
             self._lay_overlays()
-        if (watched is getattr(self, "out_folder", None)
-                and event.type() == QEvent.Type.Resize):
-            self._elide_folder()
         if watched in HINTS:
             if event.type() == QEvent.Type.Enter:
                 self._hint(watched)
@@ -5232,15 +5241,42 @@ class Viewer(QMainWindow):
         part that tells one folder from the next."""
         folder = str(self.out_dir).rstrip("\\/") + ("\\" if sys.platform == "win32"
                                                      else "/")
-        self.out_folder.setToolTip(folder)
-        self._elide_folder()
+        self.out_folder.setText(folder)
+        # Shown from its end, where one folder differs from the next.
+        self.out_folder.setCursorPosition(len(folder))
 
-    def _elide_folder(self) -> None:
-        """As much of the folder as the field has room for, from its end."""
-        folder = self.out_folder.toolTip()
-        room = max(40, self.out_folder.width())
-        self.out_folder.setText(self.out_folder.fontMetrics().elidedText(
-            folder, Qt.TextElideMode.ElideLeft, room))
+    def _folder_typed(self) -> None:
+        """A folder typed by hand: taken when it is a whole path.
+
+        Anything else -- a bare name, half a path -- is put back as it was,
+        and the status line says why: a render written into wherever the
+        program happened to be started from is not a render anybody finds.
+        """
+        typed = self.out_folder.text().strip().strip('"')
+        if typed and typed.rstrip("\\/") != str(self.out_dir).rstrip("\\/"):
+            where = Path(typed).expanduser()
+            if where.is_absolute() and not where.is_file():
+                self.out_dir = where
+                logfile.write(f"output folder typed: {where}")
+                self._remember()
+            else:
+                self.eta.setText("Папка — это полный путь, например "
+                                 "D:\\Renders; осталась прежняя")
+        self._note_output()
+
+    def _name_typed(self) -> None:
+        """A whole path typed or pasted into the name: its folder and its name."""
+        typed = self.out_name.text().strip().strip('"')
+        if not ("\\" in typed or "/" in typed):
+            return
+        where = Path(typed).expanduser()
+        if not where.is_absolute() or not where.name:
+            return
+        self.out_dir = where.parent
+        self.out_name.setText(where.name)
+        logfile.write(f"output typed whole: {where}")
+        self._note_output()
+        self._remember()
 
     # -- rendering it out ------------------------------------------------------
 

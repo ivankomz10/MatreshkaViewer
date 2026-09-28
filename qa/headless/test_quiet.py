@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 import media
-from conftest import PREVIEW, render_and_wait, wait_for
+from conftest import HOME, PREVIEW, render_and_wait, wait_for
 
 import look
 
@@ -187,6 +187,44 @@ def test_the_snapshot_is_the_frame_the_render_writes(window, tick):
     assert apart < 2.0, (
         f"the snapshot and the render differ by {apart:.1f} per pixel -- the "
         "snapshot is not the frame the render writes")
+
+
+def test_the_folder_and_the_name_are_both_typed_into(window, tick):
+    """The output field looks like one path and is typed like one."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    was_dir, was_name = window.out_dir, window.out_name.text()
+    typed = HOME / "OUT" / "typed_here"
+    try:
+        folder = window.out_folder
+        assert not folder.isReadOnly()
+        folder.setFocus()
+        folder.selectAll()
+        QTest.keyClicks(folder, str(typed))
+        QTest.keyClick(folder, Qt.Key.Key_Return)
+        tick(0.1)
+        assert window.out_dir == typed, window.out_dir
+        assert folder.text().rstrip("\\/") == str(typed)
+
+        # Half a path is not a folder: it is put back, and said.
+        folder.setText("just_a_name")
+        folder.editingFinished.emit()
+        assert window.out_dir == typed
+        assert "полный путь" in window.eta.text(), window.eta.text()
+
+        # A whole path pasted into the name goes to both.
+        whole = HOME / "OUT" / "pasted" / "piece_v3.mp4"
+        window.out_name.setText(str(whole))
+        window.out_name.editingFinished.emit()
+        assert window.out_dir == whole.parent
+        assert window.out_name.text() == "piece_v3.mp4"
+    finally:
+        window.out_dir = was_dir
+        window.out_name.setText(was_name)
+        window._note_output()
+        window._remember(now=True)
+        window.canvas.setFocus()
+        tick(0.2)
 
 
 def test_the_snapshot_leaves_the_window_as_it_was(window, tick):
