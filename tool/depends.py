@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import logfile
+from lang import tr
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -216,7 +217,8 @@ def gpu() -> tuple[str, bool, str]:
         if adapter is None:
             return "", False, "no GPU adapter at all"
         info = adapter.info
-        name = f"{info.get('device', 'unknown')} "                f"({info.get('backend_type', '')})".strip()
+        name = (f"{info.get('device', 'unknown')} "
+                f"({info.get('backend_type', '')})").strip()
         if "texture-compression-bc" not in [str(f) for f in adapter.features]:
             return name, False, "cannot read compressed textures"
         if os.environ.get("MATRESHKA_NO_BC"):
@@ -251,23 +253,23 @@ def check() -> list[Requirement]:
     # about half a millisecond a frame. Apple silicon is the case in practice.
     found.append(Requirement(
         "Compressed textures", True,
-        "texture-compression-bc — блоки идут прямо в сэмплер" if blocks
-        else f"этой видеокарте недоступно ({why or 'нет такой возможности'}), "
-             f"поэтому блоки распаковывает вычислительный проход — меньше "
-             f"миллисекунды на кадр",
+        tr("texture-compression-bc — блоки идут прямо в сэмплер") if blocks
+        else tr("этой видеокарте недоступно ({0}), поэтому блоки "
+                "распаковывает вычислительный проход — меньше миллисекунды на "
+                "кадр", why or tr('нет такой возможности')),
         required=False))
 
     command = ffmpeg_command()
     version = ffmpeg_version(command)
     if version:
         if command == bundled_ffmpeg():
-            where = "в комплекте"
+            where = tr("в комплекте")
         elif command != "ffmpeg" and str(tools_dir()) in command:
-            where = "рядом с программой"
+            where = tr("рядом с программой")
         else:
             where = command
         found.append(Requirement("ffmpeg", True, f"{version[:70]}   [{where}]",
-                                 when_absent="ничего нельзя записать"))
+                                 when_absent=tr("ничего нельзя записать")))
         # Whether it can write Hap is a second question, and the answer is no
         # more than half the time: hap needs snappy, and the usual Homebrew
         # build is made without it. Its own line, because "ffmpeg is here" and
@@ -275,16 +277,16 @@ def check() -> list[Requirement]:
         if not can_encode("hap"):
             found.append(Requirement(
                 "ffmpeg with hap", False,
-                "в этом нет кодировщика hap — ему нужна сборка со snappy. "
-                "Смотреть и рендерить это не мешает, а перепечке в Hap Q Alpha "
-                "он нужен. «Скачать» принесёт сборку, в которой он есть.",
+                tr("в этом нет кодировщика hap — ему нужна сборка со snappy. "
+                   "Смотреть и рендерить это не мешает, а перепечке в Hap Q Alpha "
+                   "он нужен. «Скачать» принесёт сборку, в которой он есть."),
                 required=False, fixable=can_download(),
-                when_absent="перепечка сможет писать только ProRes"))
+                when_absent=tr("перепечка сможет писать только ProRes")))
     else:
         found.append(Requirement(
             "ffmpeg", False,
-            ADVICE.get(sys.platform, "он нужен только чтобы записывать "
-                                     "видео; смотреть можно и без него"),
+            tr(ADVICE.get(sys.platform, "") or tr("он нужен только чтобы записывать "
+                                        "видео; смотреть можно и без него")),
             required=False, fixable=can_download()))
 
     return found

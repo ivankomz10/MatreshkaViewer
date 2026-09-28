@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QPushButton,
 
 import show as showfile
 import theme
+from lang import tr
 
 MONO = "IBM Plex Mono, Cascadia Mono, Consolas, DejaVu Sans Mono, monospace"
 
@@ -118,14 +119,17 @@ VIEW_KEYS = [
 def keys_text(level: str = "show", editing: bool = False) -> str:
     """The card of keys: the quick look's, or the show's, and the editor's."""
     if level != "show":
-        width = max(len(key) for key, _ in VIEW_KEYS) + 2
-        return "\n".join(f"{key:<{width}}{what}" for key, what in VIEW_KEYS)
-    listed = KEYS + (EDIT_KEYS if editing else [])
+        listed = [(tr(key), tr(what)) for key, what in VIEW_KEYS]
+        width = max(len(key) for key, _ in listed) + 2
+        return "\n".join(f"{key:<{width}}{what}" for key, what in listed)
+    keys = [(tr(key), tr(what)) for key, what in KEYS]
+    edits = [(tr(key), tr(what)) for key, what in EDIT_KEYS]
+    listed = keys + (edits if editing else [])
     width = max(len(key) for key, _ in listed) + 2
-    said = "\n".join(f"{key:<{width}}{what}" for key, what in KEYS)
+    said = "\n".join(f"{key:<{width}}{what}" for key, what in keys)
     if editing:
-        said += "\n\nредактор\n" + "\n".join(
-            f"{key:<{width}}{what}" for key, what in EDIT_KEYS)
+        said += tr("\n\nредактор\n") + "\n".join(
+            f"{key:<{width}}{what}" for key, what in edits)
     return said
 
 
@@ -423,7 +427,7 @@ class ShowView(QObject):
         """A number typed into the inspector, into the clip."""
         if clip is None or int(getattr(clip, key, 0) or 0) == int(value):
             return
-        if not self.begin(f"поле {key}", key=(clip.ident, key)):
+        if not self.begin(tr("поле {0}", key), key=(clip.ident, key)):
             return
         was_row = clip.row
         setattr(clip, key, int(value))
@@ -432,7 +436,7 @@ class ShowView(QObject):
     def put_clip(self, right: bool) -> None:
         """The chosen clip's start to the playhead ([...]), or its end."""
         clip = self.chosen
-        if clip is None or not self.begin("клип к плейхеду"):
+        if clip is None or not self.begin(tr("клип к плейхеду")):
             return
         at = int(self.frame)
         if right or clip.kind == "cue":
@@ -443,7 +447,7 @@ class ShowView(QObject):
 
     def delete_chosen(self) -> None:
         clip = self.chosen
-        if clip is None or not self.begin("удалить клип"):
+        if clip is None or not self.begin(tr("удалить клип")):
             return
         self.show.clips.remove(clip)
         self.chosen = None
@@ -452,7 +456,7 @@ class ShowView(QObject):
     def add_cue(self) -> None:
         """A cue at the playhead, saying what the one before it said: shows
         send the same few addresses over and over."""
-        if not self.begin("кью"):
+        if not self.begin(tr("кью")):
             return
         earlier = [one for one in self.show.clips
                    if one.kind == "cue" and one.tx <= self.frame]
@@ -489,13 +493,13 @@ class ShowView(QObject):
         picked = self.loop_region()
         if picked is None or (int(low), int(high)) == picked:
             return
-        if not self.begin("луп числами", key=("loop", self.loop_at)):
+        if not self.begin(tr("луп числами"), key=("loop", self.loop_at)):
             return
         self.put_loop(low, high)
         self.done({"loops"})
 
     def add_loop(self, low: int | None = None, high: int | None = None) -> None:
-        if not self.begin("новый луп"):
+        if not self.begin(tr("новый луп")):
             return
         low = int(self.frame) if low is None else int(low)
         high = min(self.show.length, low + int(showfile.FPS) * 5) \
@@ -506,7 +510,7 @@ class ShowView(QObject):
         self.done({"loops"})
 
     def drop_loop(self) -> None:
-        if not self.loops or not self.begin("убрать луп"):
+        if not self.loops or not self.begin(tr("убрать луп")):
             return
         self.loops.pop(self.loop_at)
         self.loop_at = max(0, min(self.loop_at, len(self.loops) - 1))
@@ -515,7 +519,7 @@ class ShowView(QObject):
     def loop_the_clip(self) -> None:
         """A loop over the whole of the chosen clip, and holding."""
         clip = self.chosen
-        if clip is None or clip.kind == "cue" or not self.begin("луп по клипу"):
+        if clip is None or clip.kind == "cue" or not self.begin(tr("луп по клипу")):
             return
         wanted = (clip.first, max(clip.first + 1, clip.last - clip.tail))
         if self.loops:
@@ -530,7 +534,7 @@ class ShowView(QObject):
 
     def loop_from_file(self) -> None:
         if list(self.loops) == list(self.file_loops) \
-                or not self.begin("лупы из файла"):
+                or not self.begin(tr("лупы из файла")):
             return
         self.loops[:] = [tuple(one) for one in self.file_loops]
         self.loop_at = 0
@@ -669,9 +673,9 @@ class Ruler(_Strip):
         self.switch.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.switch.setCursor(Qt.CursorShape.ArrowCursor)
         self.switch.setToolTip(
-            "Загорается сам, когда плейхед въезжает в луп слева: с этого "
-            "момента луп держит. Нажми, чтобы отпустить — плейхед поедет "
-            "дальше, до следующего лупа (L).")
+            tr("Загорается сам, когда плейхед въезжает в луп слева: с этого "
+               "момента луп держит. Нажми, чтобы отпустить — плейхед поедет "
+               "дальше, до следующего лупа (L)."))
         self.switch.setStyleSheet(
             f"QPushButton {{ font-family:{MONO}; font-size:10.5px; padding:0px;"
             f" border:1px solid {theme.GOLD_EDGE}; border-radius:3px;"
@@ -745,7 +749,7 @@ class Ruler(_Strip):
         brush.setFont(QFont(MONO, 8, QFont.Weight.Medium))
         if _frames_fit(self.axis):
             brush.fillRect(QRectF(x, 0, self.axis.scale, self.height()), white)
-            said = f"{showfile.timecode(frame)} · кадр {frame}"
+            said = tr("{0} · кадр {1}", showfile.timecode(frame), frame)
             start = x + self.axis.scale + 6
         else:
             said = _clock(frame)
@@ -803,14 +807,14 @@ class LoopBar(_Strip):
         self.grabbed = 0
         self.moved_any = False
 
-        self.lock = QPushButton("замок", self)
+        self.lock = QPushButton(tr("замок"), self)
         self.lock.setObjectName("qa_show_lock")
         self.lock.setCheckable(True)
         self.lock.setChecked(True)
         self.lock.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.lock.setToolTip(
-            "Запретить рисовать лупы мышью (K). Числами справа их всё равно "
-            "можно поправить — на 22 минутах один пиксель это 56 кадров.")
+            tr("Запретить рисовать лупы мышью (K). Числами справа их всё равно "
+               "можно поправить — на 22 минутах один пиксель это 56 кадров."))
         self.lock.setStyleSheet(
             f"QPushButton {{ font-size:11px; padding:0px 6px; border:none;"
             f" color:{theme.QUIET}; background:transparent; }}"
@@ -824,7 +828,7 @@ class LoopBar(_Strip):
         self.lock.blockSignals(True)
         self.lock.setChecked(bool(on))
         self.lock.blockSignals(False)
-        self.lock.setText("замок" if on else "открыто")
+        self.lock.setText(tr("замок") if on else tr("открыто"))
 
     def resizeEvent(self, event) -> None:      # noqa: N802
         self.lock.setGeometry(self.width() - 64, 0, 60, self.height())
@@ -839,7 +843,7 @@ class LoopBar(_Strip):
         brush.fillRect(self.rect(), QColor(theme.GOLD_BG))
         brush.setFont(QFont(MONO, 8))
         brush.setPen(QPen(QColor(theme.QUIET)))
-        brush.drawText(12, 13, "лупы")
+        brush.drawText(12, 13, tr("лупы"))
         brush.setPen(QPen(QColor(theme.SEAM)))
         brush.drawLine(HEAD, 0, HEAD, self.height())
         right_end = self.width() - 66
@@ -894,13 +898,13 @@ class LoopBar(_Strip):
             self.view.choose_loop(index)
         if not self.drawing:
             if self.view.editing and index is None:
-                self.view.say("лупы заперты — «замок» справа на полосе или K")
+                self.view.say(tr("лупы заперты — «замок» справа на полосе или K"))
             return
         grip = self._grip(x)
         sliding = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         if grip is None and index is not None and not sliding:
             return                          # a click on a loop chooses it
-        if not self.view.begin("луп мышью"):
+        if not self.view.begin(tr("луп мышью")):
             return
         self.moved_any = False
         if grip is not None:
@@ -1056,7 +1060,7 @@ class Tracks(_Strip):
         clip = self.clip_under(where)
         self.view.pick(clip)
         if clip is not None and self.view.editing:
-            if self.view.begin("перенос клипа"):
+            if self.view.begin(tr("перенос клипа")):
                 self.dragging = clip
                 self.grabbed = int(self.axis.frame_of(where.x())) - clip.tx
                 self.began_at = (clip.tx, clip.level)
@@ -1112,7 +1116,7 @@ class Tracks(_Strip):
         if self.view.editing and self._files(event):
             event.acceptProposedAction()
         elif self._files(event):
-            self.view.say("бросать файлы на дорожки — в редакторе")
+            self.view.say(tr("бросать файлы на дорожки — в редакторе"))
 
     def dragMoveEvent(self, event) -> None:    # noqa: N802
         self.landing = self._landing(event) if self.view.editing else None
@@ -1134,9 +1138,9 @@ class Tracks(_Strip):
             files = self._files(event)
             lane = self.lane_at(event.position().y())
             if files and lane is not None:
-                self.view.say(f"{lane[0]} не берёт {Path(files[0]).suffix} "
-                              "— ролики и картинки на экраны, .wav на Sound, "
-                              ".json на Kinetic")
+                self.view.say(tr("{0} не берёт {1} — ролики и картинки на "
+                                 "экраны, .wav на Sound, .json на Kinetic",
+                                 lane[0], Path(files[0]).suffix))
             return
         event.acceptProposedAction()
         row, level, frame = landing
@@ -1213,7 +1217,7 @@ class Tracks(_Strip):
         room = band.adjusted(8, 0, -6, 0)
         room.setLeft(max(room.left(), HEAD + 4))
         if room.width() > 16 and band.height() >= 12:
-            name = clip.name + ("  — нет файла" if clip.missing else "")
+            name = clip.name + (tr("  — нет файла") if clip.missing else "")
             brush.setFont(QFont(theme.ui_family(), 9, QFont.Weight.Medium))
             metrics = QFontMetrics(brush.font())
             brush.setPen(QPen(QColor(theme.QUIET if clip.missing
@@ -1337,20 +1341,20 @@ def _meta(clip) -> str:
     ends = clip.last - clip.tail
     said = f"{_clock(clip.first)} → {_clock(ends)} · {_span(clip.first, ends)}"
     if clip.fade_end:
-        said += f" · фейд {abs(clip.fade_end) / showfile.FPS:.1f} с"
+        said += tr(" · фейд {0:.1f} с", abs(clip.fade_end) / showfile.FPS)
     elif clip.fade_start:
-        said += f" · фейд вход {abs(clip.fade_start) / showfile.FPS:.1f} с"
+        said += tr(" · фейд вход {0:.1f} с", abs(clip.fade_start) / showfile.FPS)
     return said
 
 
 def _says(clip) -> str:
     """One line about a clip, for its tooltip."""
     if clip.kind == "cue":
-        return (f"кью  кадр {clip.tx}  universe {clip.universe}  "
-                f"channel {clip.channel}  value {clip.value}")
+        return (tr("кью  кадр {0}  universe {1}  channel {2}  value {3}",
+                   clip.tx, clip.universe, clip.channel, clip.value))
     said = f"{clip.name}\n{clip.row} L{clip.level}   {clip.first}..{clip.last}"
     if clip.missing:
-        said += "\nфайла нет на этой машине"
+        said += tr("\nфайла нет на этой машине")
     return said
 
 
@@ -1376,7 +1380,8 @@ class TimelinePane(QWidget):
         self.head.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.head.setStyleSheet(
             f"#qa_show_head {{ background:{theme.PANEL};"
-            f" border-top:1px solid {theme.SEAM}; border-bottom:1px solid {theme.SEAM}; }}")
+            f" border-top:1px solid {theme.SEAM};"
+            f" border-bottom:1px solid {theme.SEAM}; }}")
         line = QHBoxLayout(self.head)
         line.setContentsMargins(16, 0, 16, 0)
         line.setSpacing(14)
@@ -1458,11 +1463,11 @@ class TimelinePane(QWidget):
         # the end of the show is where its last frame stops, not a frame.
         shown = max(0, min(at, view.show.length - 1))
         clock = showfile.timecode(shown)
-        frames = f"кадр {shown} из {view.show.length}"
-        said = (("В ЛУПЕ   " if here is not None and view.looping else "")
-                + "на экранах: "
+        frames = tr("кадр {0} из {1}", shown, view.show.length)
+        said = ((tr("В ЛУПЕ   ") if here is not None and view.looping else "")
+                + tr("на экранах: ")
                 + ("  ·  ".join(f"{one.row} L{one.level} {one.name[:24]}"
-                                for one in live) or "ничего"))
+                                for one in live) or tr("ничего")))
         if (clock, frames, said) != self._said:
             self._said = (clock, frames, said)
             self.clock.setText(clock)
@@ -1521,7 +1526,7 @@ class LoopPanel(QWidget):
         whole.setContentsMargins(0, 10, 0, 0)
         whole.setSpacing(8)
         top = QHBoxLayout()
-        title = QLabel("Лупы")
+        title = QLabel(tr("Лупы"))
         title.setFont(theme.heading())
         top.addWidget(title)
         top.addStretch(1)
@@ -1534,10 +1539,10 @@ class LoopPanel(QWidget):
 
         frames = QHBoxLayout()
         frames.setSpacing(6)
-        frames.addWidget(QLabel("с"))
+        frames.addWidget(QLabel(tr("с")))
         self.low = _number(0, 10_000_000, "qa_show_loop_low")
         frames.addWidget(self.low, 1)
-        frames.addWidget(QLabel("по"))
+        frames.addWidget(QLabel(tr("по")))
         self.high = _number(0, 10_000_000, "qa_show_loop_high")
         frames.addWidget(self.high, 1)
         whole.addLayout(frames)
@@ -1549,15 +1554,15 @@ class LoopPanel(QWidget):
         line.setContentsMargins(0, 0, 0, 0)
         line.setSpacing(6)
         for text, what, hint, name in (
-                ("+", view.add_loop, "Ещё один луп с того кадра, где плейхед.",
+                ("+", view.add_loop, tr("Ещё один луп с того кадра, где плейхед."),
                  "qa_show_loop_add"),
-                ("−", view.drop_loop, "Убрать выбранный луп.",
+                ("−", view.drop_loop, tr("Убрать выбранный луп."),
                  "qa_show_loop_drop"),
-                ("по клипу", view.loop_the_clip,
-                 "Луп на весь выбранный клип, и держать (Shift+L).",
+                (tr("по клипу"), view.loop_the_clip,
+                 tr("Луп на весь выбранный клип, и держать (Shift+L)."),
                  "qa_show_loop_clip"),
-                ("из файла", view.loop_from_file,
-                 "Вернуть лупы, с которыми шоу открылось.",
+                (tr("из файла"), view.loop_from_file,
+                 tr("Вернуть лупы, с которыми шоу открылось."),
                  "qa_show_loop_file")):
             one = _small_button(text, name, hint)
             one.clicked.connect(lambda _=False, act=what: act())
@@ -1585,12 +1590,13 @@ class LoopPanel(QWidget):
         view = self.view
         picked = view.loop_region()
         here = view.loop_here()
-        said = "лупов нет"
+        said = tr("лупов нет")
         if picked is not None:
-            said = (f"{view.loop_at + 1} из {len(view.loops)} · "
-                    f"{(picked[1] - picked[0]) / showfile.FPS:.1f} с")
+            said = (tr("{0} из {1} · {2:.1f} с",
+                       view.loop_at + 1, len(view.loops),
+                       (picked[1] - picked[0]) / showfile.FPS))
         if here is not None:
-            said += " · держит" if view.looping else " · отпущен"
+            said += tr(" · держит") if view.looping else tr(" · отпущен")
         self.says.setText(said)
         self._saying = True
         for field, value in ((self.low, picked[0] if picked else 0),
@@ -1603,8 +1609,8 @@ class LoopPanel(QWidget):
         many = len(view.loops) > 1
         self.frames.setVisible(many)
         self.frames.setText("\n".join(
-            f"{'>' if index == view.loop_at else ' '} {index + 1}  "
-            f"с {low}  по {high}"
+            tr("{0} {1}  с {2}  по {3}",
+               '>' if index == view.loop_at else ' ', index + 1, low, high)
             for index, (low, high) in enumerate(view.loops)))
 
 
@@ -1656,7 +1662,7 @@ class Inspector(QWidget):
         self.dot = QLabel()
         self.dot.setFixedWidth(10)
         top.addWidget(self.dot)
-        heading = QLabel("Клип")
+        heading = QLabel(tr("Клип"))
         heading.setFont(theme.heading())
         top.addWidget(heading)
         self.where = QLabel()
@@ -1667,14 +1673,14 @@ class Inspector(QWidget):
         # The chosen clip as the render's range: the frames it occupies, in
         # one press rather than copied out of the fields below.
         self.to_render = _small_button(
-            "Диапазон рендера — этот клип", "qa_show_clip_range",
-            "Поставить начало и конец рендера на края выбранного клипа")
+            tr("Диапазон рендера — этот клип"), "qa_show_clip_range",
+            tr("Поставить начало и конец рендера на края выбранного клипа"))
         self.to_render.clicked.connect(self._to_render)
         self.to_render.setEnabled(False)
         top.addWidget(self.to_render)
         whole.addLayout(top)
 
-        self.title = QLabel("клип не выбран")
+        self.title = QLabel(tr("клип не выбран"))
         self.title.setObjectName("qa_show_clip")
         self.title.setFont(theme.mono(9))
         self.title.setWordWrap(True)
@@ -1708,7 +1714,7 @@ class Inspector(QWidget):
         self.shown, self.body = [], {}
         for index, (label, key, editable, lowest, highest) in enumerate(names):
             row, pair = divmod(index, 2)
-            tag = QLabel(label)
+            tag = QLabel(tr(label))
             tag.setStyleSheet(f"color:{theme.DIM}; font-size:12px;")
             tag.setWordWrap(True)
             if editable:
@@ -1756,7 +1762,7 @@ class Inspector(QWidget):
         if clip is None:
             self.dot.clear()
             self.where.setText("")
-            self.title.setText("клип не выбран")
+            self.title.setText(tr("клип не выбран"))
             self.path.setText("")
             for field in self.body.values():
                 if isinstance(field, QSpinBox):
@@ -1765,19 +1771,19 @@ class Inspector(QWidget):
                     field.setText("—")
             return
         self.dot.setPixmap(theme.cell(clip.row, 8))
-        self.where.setText("кью" if clip.kind == "cue"
+        self.where.setText(tr("кью") if clip.kind == "cue"
                            else f"{clip.row} · L{clip.level}")
         if clip.kind == "cue":
-            self.title.setText(f"кью на кадре {clip.tx}")
+            self.title.setText(tr("кью на кадре {0}", clip.tx))
             self.path.setText("")
         else:
-            self.title.setText(clip.name + ("   (нет файла)"
+            self.title.setText(clip.name + (tr("   (нет файла)")
                                             if clip.missing else ""))
             self.path.setText(str(Path(clip.path).parent) if clip.path else "")
         fps = showfile.FPS
         length = "—"
         if clip.still:
-            length = "картинка"
+            length = tr("картинка")
         elif clip.frames:
             length = f"{clip.frames}"
         said = {
@@ -1798,7 +1804,7 @@ class Inspector(QWidget):
                 if field.value() != value:
                     field.setValue(value)
                 if key in self.SECONDS:
-                    field.setToolTip(f"{abs(value) / fps:.2f} с")
+                    field.setToolTip(tr("{0:.2f} с", abs(value) / fps))
             else:
                 field.setText(said.get(key, "—"))
 
@@ -1827,7 +1833,7 @@ class SidePane(QWidget):
         stack = QVBoxLayout(column)
         stack.setContentsMargins(16, 12, 16, 12)
         stack.setSpacing(10)
-        title = QLabel("Экраны")
+        title = QLabel(tr("Экраны"))
         title.setFont(theme.heading())
         stack.addWidget(title)
         self.screens = QVBoxLayout()

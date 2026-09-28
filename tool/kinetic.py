@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from lang import tr
 
 # -- what a unit of each motor is worth --------------------------------------
 
@@ -377,12 +378,13 @@ class Motors:
         if numbered:
             want = [one.number for one in numbered]
             if want != sorted(want):
-                said.append("части не по порядку: "
+                said.append(tr("части не по порядку: ")
                             + ", ".join(f"{one.number}/{one.of}" for one in numbered))
             missing = [n for n in range(1, numbered[0].of + 1) if n not in want]
             if missing and len(numbered) < numbered[0].of:
-                said.append(f"часть {numbered[0].number} из {numbered[0].of}; "
-                            f"нет {', '.join(str(n) for n in missing)}")
+                said.append(tr("часть {0} из {1}; нет {2}",
+                               numbered[0].number, numbered[0].of,
+                               ', '.join(str(n) for n in missing)))
         return said
 
     @property
@@ -394,11 +396,11 @@ class Motors:
 
     def describe(self) -> str:
         passes = sum(one.repeats for one in self.parts)
-        many = (f"файлов {len(self.parts)}  " if len(self.parts) > 1 else "")
+        many = (tr("файлов {0}  ", len(self.parts)) if len(self.parts) > 1 else "")
         if passes > len(self.parts):
-            many += f"проходов {passes}  "
-        return (f"{many}моторов {self.motors}  кадров {self.frames - 1}  "
-                f"{self.fps:g} к/с  {self.duration:.2f} с")
+            many += tr("проходов {0}  ", passes)
+        return (tr("{0}моторов {1}  кадров {2}  {3:g} к/с  {4:.2f} с",
+                   many, self.motors, self.frames - 1, self.fps, self.duration))
 
     # -- what the drawing side asks for --------------------------------------
 

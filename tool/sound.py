@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QIODevice
 from PySide6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices
+from lang import tr
 
 
 class SoundError(Exception):
@@ -47,9 +48,9 @@ class Track:
         return self.frames / self.rate if self.rate else 0.0
 
     def describe(self) -> str:
-        kind = {1: "моно", 2: "стерео"}.get(self.channels,
-                                            f"{self.channels} кан.")
-        return f"{self.rate / 1000:g} кГц  {kind}  {self.duration:.2f} с"
+        kind = {1: tr("моно"), 2: tr("стерео")}.get(self.channels,
+                                            tr("{0} кан.", self.channels))
+        return tr("{0:g} кГц  {1}  {2:.2f} с", self.rate / 1000, kind, self.duration)
 
     @property
     def size(self) -> int:
@@ -146,10 +147,10 @@ class Mix:
         return self.total * self.block
 
     def describe(self) -> str:
-        kind = {1: "моно", 2: "стерео"}.get(self.channels,
-                                            f"{self.channels} кан.")
-        return (f"звуков в смеси {len(self._pieces)}  {self.rate / 1000:g} кГц  "
-                f"{kind}  {self.duration:.2f} с")
+        kind = {1: tr("моно"), 2: tr("стерео")}.get(self.channels,
+                                            tr("{0} кан.", self.channels))
+        return (tr("звуков в смеси {0}  {1:g} кГц  {2}  {3:.2f} с",
+                   len(self._pieces), self.rate / 1000, kind, self.duration))
 
     def samples(self, first: int, count: int) -> np.ndarray:
         """Frames `first` to `first + count` of the mix, as Int16."""
@@ -277,7 +278,8 @@ class Feed(QIODevice):
         # the timeline at the end of the sound rather than at the end of the
         # piece. There is always more here, because silence is more.
         left = self.track.size - self.at
-        return max(left, self.track.rate * self.track.block)             + super().bytesAvailable()
+        return (max(left, self.track.rate * self.track.block)
+                + super().bytesAvailable())
 
     def isSequential(self) -> bool:  # noqa: N802 -- Qt naming
         return True

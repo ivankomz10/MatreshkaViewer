@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import wgpu
+from lang import tr
 
 SAMPLES = 4          # multisampling; the lamella slats are all thin edges
 
@@ -467,9 +468,8 @@ class Orbit:
         return frustum(fov_x, fov_y, self.near, self.far)
 
     def describe(self) -> str:
-        return (f"{self.distance:.1f} м, "
-                f"{math.degrees(self.yaw) % 360:.0f}° по кругу, "
-                f"{math.degrees(self.pitch):+.0f}° вверх")
+        return (tr("{0:.1f} м, {1:.0f}° по кругу, {2:+.0f}° вверх",
+                   self.distance, math.degrees(self.yaw) % 360, math.degrees(self.pitch)))
 
 
 class Piece:
