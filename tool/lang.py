@@ -11,8 +11,11 @@ in the order the code hands them over:
 The log stays English whichever is chosen: it is for working out what went
 wrong, and it is read by the people who read the code.
 
-Switching builds the window again (see `main.rebuild`), so nothing needs to
-know it happened: every label is made again, in the new language.
+Switching is done where the window stands (see `Viewer._retranslate`):
+every word on it is looked up in the other language and put back in its
+place, and what the window works out as it goes -- the status line, what a
+card says of its file -- is worked out again. For that each English string
+answers for exactly one Russian one; the tests hold the dictionary to it.
 """
 from __future__ import annotations
 
@@ -41,6 +44,15 @@ def tr(text: str, *pieces) -> str:
     if _current == "en":
         text = EN.get(text, text)
     return text.format(*pieces) if pieces else text
+
+
+def other(text: str, to: str):
+    """`text` in language `to`, when it is words the window says in the other
+    one; None when it is not -- a name, a number, a path, a sentence with
+    something put into it."""
+    if to == "en":
+        return EN.get(text)
+    return _back.get(text)
 
 
 def either(text: str) -> set:

@@ -68,6 +68,7 @@ EN: dict = {
     'качаю с {0}…': 'downloading from {0}…',
     'Не скачалось: {0}': 'The download failed: {0}',
     'Цепочка:': 'Chain:',
+    'Секции по Bottom:': 'Sections on Bottom:',
     'Скачать {0} ({1} МБ)': 'Download {0} ({1} MB)',
     'На этой машине вьювер работать не сможет: нет {0}.':
         'The viewer cannot run on this machine: {0} is missing.',
@@ -205,19 +206,17 @@ EN: dict = {
     'Картинка на весь монитор, на котором стоит окно, всё остальное убирается. Ещё раз — обратно, или Escape. F11 делает то же с клавиатуры.':
         'The picture fills the monitor the window is on and everything else goes. Again to come back, or Escape. F11 does the same from the keyboard.',
     'Рамка': 'Frame',
-    'Линия, показывающая, что попадёт в запись. Картинка занимает всё окно и продолжается за рамкой; эта линия говорит, где рамка. В {0} и в Инспекторе, где есть что кадрировать.':
-        'A line showing what the render will get. The picture fills the window and runs past the frame; this line says where the frame is. In {0} and in Inspection, where there is something to frame.',
+    'Линия, показывающая, что попадёт в запись. Картинка занимает всё окно и продолжается за рамкой; эта линия говорит, где рамка. В Превью и в Инспекторе, где есть что кадрировать.':
+        'A line showing what the render will get. The picture fills the window and runs past the frame; this line says where the frame is. In Preview and in Inspection, where there is something to frame.',
     'Плитка': 'Tile',
     'Горизонтальный тайл: каждый экран повторяется лентой без конца, влево и вправо, как он и идёт по кругу здания. Только в Развертке.':
         'Horizontal tiling: each screen repeats as an endless band to the left and right, the way it runs round the building. In Flat only.',
     'Рамка = кадр рендера {0}×{1}': 'Frame = the render\'s {0}×{1}',
     'Рамка выключена': 'Frame off',
-    'Как читается левая половина — файл как он есть.':
-        'How the left half is read: the file as it is.',
-    'Как читается правая половина — то, что из него делает перепечка.':
-        'How the right half is read: what the rebake makes of it.',
-    ' Половины выбирают независимо, в этом и смысл: после дизера один и тот же файл, прочитанный любым способом, — одна и та же картинка, и поставить их по-разному и не увидеть разницы это и есть проверка. Переключатель Alpha наверху в этом режиме не действует.':
-        ' The halves are chosen apart, and that is the point: after a dither the same file read either way is the same picture, and setting them differently and seeing no difference is the check. The Alpha switch above does nothing in this mode.',
+    'Как читается левая половина — файл как он есть. Половины выбирают независимо, в этом и смысл: после дизера один и тот же файл, прочитанный любым способом, — одна и та же картинка, и поставить их по-разному и не увидеть разницы это и есть проверка. Переключатель Alpha наверху в этом режиме не действует.':
+        'How the left half is read: the file as it is. The halves are chosen apart, and that is the point: after a dither the same file read either way is the same picture, and setting them differently and seeing no difference is the check. The Alpha switch above does nothing in this mode.',
+    'Как читается правая половина — то, что из него делает перепечка. Половины выбирают независимо, в этом и смысл: после дизера один и тот же файл, прочитанный любым способом, — одна и та же картинка, и поставить их по-разному и не увидеть разницы это и есть проверка. Переключатель Alpha наверху в этом режиме не действует.':
+        'How the right half is read: what the rebake makes of it. The halves are chosen apart, and that is the point: after a dither the same file read either way is the same picture, and setting them differently and seeing no difference is the check. The Alpha switch above does nothing in this mode.',
     'файл': 'file',
     'перепечка': 'rebake',
 
@@ -272,11 +271,10 @@ EN: dict = {
     # -- the render line -------------------------------------------------------------------------
     'Рендер': 'Render',
     'Кадры': 'Frames',
-    'Первый записываемый кадр': 'The first frame to write',
-    'Последний записываемый кадр, он сам включительно':
-        'The last frame to write, that one included',
-    '. Считается так же, как счётчик у плейхеда, по сетке просмотра. Shift+I и Shift+O ставят начало и конец туда, где плейхед.':
-        '. Counted the way the playhead\'s counter is, on the grid it is watched at. Shift+I and Shift+O put the start and the end where the playhead is.',
+    'Первый записываемый кадр. Считается так же, как счётчик у плейхеда, по сетке просмотра. Shift+I и Shift+O ставят начало и конец туда, где плейхед.':
+        'The first frame to write. Counted the way the playhead\'s counter is, on the grid it is watched at. Shift+I and Shift+O put the start and the end where the playhead is.',
+    'Последний записываемый кадр, он сам включительно. Считается так же, как счётчик у плейхеда, по сетке просмотра. Shift+I и Shift+O ставят начало и конец туда, где плейхед.':
+        'The last frame to write, that one included. Counted the way the playhead\'s counter is, on the grid it is watched at. Shift+I and Shift+O put the start and the end where the playhead is.',
     'всё': 'all',
     'Всю вещь целиком': 'The whole piece',
     'С какой частотой писать файл': 'The frame rate to write the file at',
@@ -293,8 +291,8 @@ EN: dict = {
         'Nothing is ever written over; this finds the next free name: _v1 becomes _v2.',
     'Снимок': 'Snapshot',
     'Снимок кадра': 'Snapshot of the frame',
-    'Записать этот один кадр в PNG, рядом с тем, куда идёт видео. В {0} это та же картинка, что записал бы рендер, в выбранном размере; в Развертке — каждый экран отдельно, в его родном размере.':
-        'Write this one frame to a PNG beside where the video goes. In {0} it is the same picture a render would write, at the chosen size; in Flat, each screen on its own at its native size.',
+    'Записать этот один кадр в PNG, рядом с тем, куда идёт видео. В Превью это та же картинка, что записал бы рендер, в выбранном размере; в Развертке — каждый экран отдельно, в его родном размере.':
+        'Write this one frame to a PNG beside where the video goes. In Preview it is the same picture a render would write, at the chosen size; in Flat, each screen on its own at its native size.',
     'Снимать нечего: ничего не загружено': 'Nothing to take: nothing is loaded',
     'Снимок: {0}/{1}': 'Snapshot: {0}/{1}',
     ' и ещё {0}': ' and {0} more',
@@ -317,8 +315,6 @@ EN: dict = {
     '{0} уже есть — нажмите +1, чтобы записать следующей версией':
         '{0} is there already: press +1 to write the next version',
     'Остановлено': 'Stopped',
-    'Язык сменится, когда закончится запись':
-        'The language changes once the writing is done',
     'Не записано: ': 'Not written: ',
 
     # -- the file dialogs -----------------------------------------------------------------------------
@@ -430,7 +426,7 @@ EN: dict = {
     'Занимает': 'Occupies',
     'Команды': 'Commands',
     'Начинается': 'Begins',
-    'Кадр': 'Frame',
+    'Кадр': 'At frame',
     'Время': 'Time',
     'Диапазон рендера — этот клип': 'Render range = this clip',
     'Поставить начало и конец рендера на края выбранного клипа':

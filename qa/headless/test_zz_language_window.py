@@ -1,10 +1,11 @@
-"""The window in English, and switching: the tests that build windows.
+"""A window that opens in English: the one test here that builds a window.
 
 Last of the suite on purpose -- the name sorts it there. A second window's
 canvas takes the drawing over from the suite's window for good (rendercanvas
-draws the newest canvas it has; the application only ever has one window,
-and `rebuild` closes the old one the moment the new one is up), so any test
-after these would find the suite's window no longer drawing.
+draws the newest canvas it has; the application only ever has the one), so
+any test after this would find the suite's window no longer drawing.
+Switching the language of a window that is up is tested in test_lang.py,
+on the suite's own window, because it builds nothing.
 """
 from __future__ import annotations
 
@@ -31,16 +32,9 @@ def english(window, clips, tick):
         return one
 
     yield build
-    for one in list(viewer._alive) + made:
-        try:
-            if one is not window:
-                # Closed and let go of, as `rebuild` does: a window closed and
-                # kept stops the one the rest of the suite uses drawing.
-                one.close()
-                one.deleteLater()
-        except RuntimeError:
-            pass                          # deleted already, by a rebuild
-    viewer._alive[:] = [window]
+    for one in made:
+        one.close()
+        one.deleteLater()
     lang.set_language("ru")
     write_settings(settings(clips))
     tick(0.5)
@@ -63,24 +57,3 @@ def test_an_english_window_says_it_in_english(english):
     # The lists that a session remembers by their words.
     assert one.rebake_what.currentText() == "Clean"
     assert one.sync.currentText() == "60 fps"
-
-
-def test_switching_makes_the_window_again_where_it_was(english, tick):
-    import lang
-    import main as viewer
-    one = english()
-    one._move(0.5)
-    one.history.back.append(("перенос клипа", None, {}))
-    tick(0.3)
-    was = one._frame_now()[0]
-    one._choose_language("ru")
-    tick(2.5)
-    assert lang.language() == "ru"
-    again = viewer._alive[-1]
-    assert again is not one, "the window was not made again"
-    assert again.level_buttons["view"].text() == "Просмотр"
-    assert again.language_buttons["ru"].isChecked()
-    assert again._frame_now()[0] == was, "the playhead did not stay"
-    assert again.history.back and again.history.back[-1][0] == "перенос клипа"
-    import logfile
-    assert logfile.load_settings().get("language") == "ru"

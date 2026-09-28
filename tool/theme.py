@@ -264,11 +264,12 @@ QSlider::groove:horizontal {{ height:4px; background:{EDGE}; border-radius:2px; 
 QSlider::sub-page:horizontal {{ background:{FILL}; border-radius:2px; }}
 QSlider::handle:horizontal {{ width:14px; height:14px; background:{TEXT};
             border-radius:7px; margin:-5px 0; }}
-QSlider#qa_timeline::groove:horizontal {{ height:6px; background:{RAISED};
-            border-radius:3px; }}
-QSlider#qa_timeline::sub-page:horizontal {{ background:{FILL}; border-radius:3px; }}
-QSlider#qa_timeline::handle:horizontal {{ width:2px; background:#ffffff;
-            border-radius:0px; margin:-9px 0; }}
+QSlider#qa_timeline::groove:horizontal, QSlider#qa_full_slider::groove:horizontal {{
+            height:6px; background:{RAISED}; border-radius:3px; }}
+QSlider#qa_timeline::sub-page:horizontal, QSlider#qa_full_slider::sub-page:horizontal {{
+            background:{FILL}; border-radius:3px; }}
+QSlider#qa_timeline::handle:horizontal, QSlider#qa_full_slider::handle:horizontal {{
+            width:2px; background:#ffffff; border-radius:0px; margin:-9px 0; }}
 QProgressBar {{ background:{SUNKEN}; border:1px solid {EDGE}; border-radius:4px;
             color:{TEXT}; text-align:center; height:14px; }}
 QProgressBar::chunk {{ background:{FILL}; border-radius:3px; }}

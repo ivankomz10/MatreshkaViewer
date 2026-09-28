@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox,
                                QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMenu, QProgressBar, QListView,
                                QPushButton, QSizePolicy, QSlider, QSpinBox,
+                               QAbstractButton,
                                QScrollArea, QSplitter, QToolButton,
                                QWidgetAction,
                                QStyle, QStyleFactory, QToolTip, QVBoxLayout,
@@ -654,8 +655,11 @@ class Timeline(QSlider):
         self._range = part
         self.update()
 
-    def set_marks(self, marks, span: float = 0.0) -> None:
+    def set_marks(self, marks, span: float = 0.0, title: str = "") -> None:
+        """Where the marks go, (seconds, name) each, and what they are: a
+        chain's joins, unless `title` says otherwise."""
         self._marks = list(marks or [])
+        self._title = title
         if span:
             self._span = float(span)
         self.setToolTip(self._says())
@@ -669,7 +673,7 @@ class Timeline(QSlider):
     def _says(self) -> str:
         if not self._marks:
             return ""
-        lines = [tr("Цепочка:")]
+        lines = [getattr(self, "_title", "") or tr("Цепочка:")]
         for at, name in self._marks:
             lines.append(tr("   {0:7.1f} с   {1}", at, name))
         return "\n".join(lines)
@@ -733,6 +737,9 @@ class Row(QFrame):
         self.on_drop = on_drop
         self.on_pick = on_pick
         self.on_gain = on_gain or (lambda _row: None)
+        # What says this card's file again, in the language now chosen; set
+        # when the file is described, and None while there is none.
+        self.retell = None
         self.setAcceptDrops(True)
         # What the test driver knows this row and its widgets by. Six rows are
         # built from this one class, so every name carries the row's own.
@@ -756,6 +763,7 @@ class Row(QFrame):
         mark.setFixedWidth(10)
         head.addWidget(mark)
         self.label = QLabel(title)
+        self.label.setProperty("fixed_words", True)   # the screen's own name
         self.label.setFont(theme.ui(10, QFont.Weight.DemiBold))
         head.addWidget(self.label)
         said = QLabel(tr(self.SAID.get(title, "")))
@@ -1519,6 +1527,8 @@ class Viewer(QMainWindow):
             self.clock.duration = show.length / showfile.FPS
             self.show_view.axis.stretch(show.length)
             self._reset_range()
+        if what & {"Bottom", "all"} or show.length != length_was:
+            self._mark_full()
         self.show_view.changed.emit()
         self.touch()
 
@@ -1960,6 +1970,7 @@ class Viewer(QMainWindow):
         self._show_was = 0.0
         self.show_view.set_frame(0.0)
         self._reset_range()
+        self._mark_full()
         self._name_from_show(show)
         self._say_undo()
         self._show_stats()
@@ -2606,20 +2617,87 @@ class Viewer(QMainWindow):
             one.setChecked(code == lang.language())
 
     def _choose_language(self, code: str) -> None:
-        """Another language: the window is made again, in it."""
+        """Another language, where the window stands: nothing is built again,
+        nothing is opened again, and the picture goes on playing."""
         self._say_language()
         if code == lang.language():
             return
-        if self.job is not None:
-            # Not while something is being written: the window that would be
-            # thrown away is the one doing the writing.
-            self.eta.setText(tr("Язык сменится, когда закончится запись"))
-            return
         lang.set_language(code)
-        logfile.write(f"language: {code}")
-        # After this click has been answered, not inside it: the button being
-        # clicked belongs to the window about to go.
-        QTimer.singleShot(0, lambda: rebuild(self))
+        started = time.perf_counter()
+        self._retranslate(code)
+        logfile.write(f"language: {code}, the window's words turned in "
+                      f"{(time.perf_counter() - started) * 1000:.0f} ms")
+        self._remember()
+
+    def _retranslate(self, to: str) -> None:
+        """Every word on the window into `to`, in its place.
+
+        Every text, placeholder, list line and tooltip that is words the
+        window says is looked up in the dictionary and put back in the other
+        language; what is not -- a file's name, a path, a number, a sentence
+        with something put into it -- is left, and worked out again below.
+        A widget can say it keeps its words (`fixed_words`): a card's title is
+        the screen's name in both languages, and "Frame" and "Sound" would
+        otherwise be taken for the English of Рамка and Звук.
+        """
+        def turned(text):
+            return lang.other(text, to) if text else None
+
+        for widget in [self] + self.findChildren(QWidget):
+            if widget.property("fixed_words"):
+                continue
+            if isinstance(widget, (QAbstractButton, QLabel)):
+                said = turned(widget.text())
+                if said is not None:
+                    widget.setText(said)
+            if isinstance(widget, QLineEdit):
+                said = turned(widget.placeholderText())
+                if said is not None:
+                    widget.setPlaceholderText(said)
+            if isinstance(widget, QComboBox):
+                for index in range(widget.count()):
+                    said = turned(widget.itemText(index))
+                    if said is not None:
+                        widget.setItemText(index, said)
+            said = turned(widget.toolTip())
+            if said is not None:
+                widget.setToolTip(said)
+        for button, (says, story) in list(HINTS.items()):
+            HINTS[button] = (turned(says) or says, turned(story) or story)
+        self._retell()
+
+    def _retell(self) -> None:
+        """What the window works out as it goes, worked out again: in the
+        language now chosen, without asking any file a second time."""
+        for box in (self.sync, self.fps_choice):
+            for index in range(box.count()):
+                box.setItemText(index, tr("{0} к/с", int(box.itemData(index))))
+        self._fill_sizes()
+        self._say_language()
+        self._say_link()
+        self._say_sources()
+        # The cards only in the quick look: in a show they are away, their
+        # files let go of, and they say their files again on the way back.
+        if self.level == "view":
+            for row in self.rows:
+                if row.retell is not None:
+                    row.retell()
+        self._say_undo()
+        if self.show_open is not None:
+            self._say_project(self.show_open)
+        else:
+            # The show's line, off show, still saying the last show there
+            # was: said again the moment one is open.
+            for label in (self.project, self.draft_pill):
+                label.clear()
+                label.setToolTip("")
+        self.keys_card.setText(timeline.keys_text(self.level,
+                                                  self.show_view.editing))
+        self.full_button.setText(tr("Выйти  Esc") if self._full
+                                 else tr("Во весь экран"))
+        self._show_stats()
+        self.show_view.changed.emit()
+        self._lay_overlays()
 
     def _machine_dialog(self) -> None:
         """What this machine has of what is needed, asked for from the top line."""
@@ -2840,6 +2918,7 @@ class Viewer(QMainWindow):
             one.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             one.setCursor(Qt.CursorShape.PointingHandCursor)
             one.setToolTip(LANGUAGE_NAMES[code])
+            one.setProperty("fixed_words", True)    # "RU" is "RU" in English
             one.clicked.connect(lambda _=False, c=code: self._choose_language(c))
             line.addWidget(one)
             self.language_buttons[code] = one
@@ -3450,14 +3529,21 @@ class Viewer(QMainWindow):
         self.first_frame.setObjectName("qa_frame_first")
         self.last_frame = QSpinBox()
         self.last_frame.setObjectName("qa_frame_last")
-        for box, tip in ((self.first_frame, tr("Первый записываемый кадр")),
-                         (self.last_frame, tr("Последний записываемый кадр, он "
-                                              "сам включительно"))):
+        # Each tooltip one whole sentence, so switching the language finds it
+        # in the dictionary as it stands.
+        for box, tip in (
+                (self.first_frame,
+                 tr("Первый записываемый кадр. Считается так же, как счётчик "
+                    "у плейхеда, по сетке просмотра. Shift+I и Shift+O ставят "
+                    "начало и конец туда, где плейхед.")),
+                (self.last_frame,
+                 tr("Последний записываемый кадр, он сам включительно. "
+                    "Считается так же, как счётчик у плейхеда, по сетке "
+                    "просмотра. Shift+I и Shift+O ставят начало и конец туда, "
+                    "где плейхед."))):
             box.setFixedWidth(76)
             box.setRange(0, 0)
-            box.setToolTip(tip + tr(". Считается так же, как счётчик у плейхеда, "
-                                    "по сетке просмотра. Shift+I и Shift+O ставят "
-                                    "начало и конец туда, где плейхед."))
+            box.setToolTip(tip)
             box.setKeyboardTracking(False)
             box.valueChanged.connect(self._range_changed)
             box.valueChanged.connect(lambda _: self._say_range())
@@ -3553,9 +3639,9 @@ class Viewer(QMainWindow):
         snap = labeled(
             QPushButton(), "", tr("Снимок"), tr("Снимок кадра"),
             tr("Записать этот один кадр в PNG, рядом с тем, куда идёт видео. "
-               "В {0} это та же картинка, что записал бы рендер, в выбранном "
+               "В Превью это та же картинка, что записал бы рендер, в выбранном "
                "размере; в Развертке — каждый экран отдельно, в его родном "
-               "размере.", tr(MODE_LABEL[PREVIEW])), name="qa_snapshot")
+               "размере."), name="qa_snapshot")
         snap.clicked.connect(self._snapshot)
         bar.addWidget(snap)
 
@@ -4005,7 +4091,9 @@ class Viewer(QMainWindow):
         Kept as one list rather than two because it is the same question --
         how large to write -- and somebody looking for it looks here.
         """
-        was = self.size_choice.currentText()
+        # Put back by what it is rather than by what it says: the words
+        # change with the language, and the size does not.
+        was = self.size_choice.currentData()
         self.size_choice.blockSignals(True)
         self.size_choice.clear()
         if self.flat_mode():
@@ -4018,8 +4106,10 @@ class Viewer(QMainWindow):
                                   (tr("Четверть"), 4)):
                 wide, tall = frame[0] // divide, frame[1] // divide
                 self.size_choice.addItem(f"{label} {wide}x{tall}", (wide, tall))
-        if was:
-            self.size_choice.setCurrentText(was)   # nothing if it is not there
+        for index in range(self.size_choice.count()):
+            if was is not None and self.size_choice.itemData(index) == was:
+                self.size_choice.setCurrentIndex(index)
+                break
         self.size_choice.blockSignals(False)
 
     def _fill_formats(self) -> None:
@@ -4310,10 +4400,19 @@ class Viewer(QMainWindow):
         self.rebake_right_alpha.setObjectName("qa_rebake_right")
         for box, side, tip in (
                 (self.rebake_left_alpha, "Premultiplied",
-                 tr("Как читается левая половина — файл как он есть.")),
+                 tr("Как читается левая половина — файл как он есть. "
+                    "Половины выбирают независимо, в этом и смысл: после "
+                    "дизера один и тот же файл, прочитанный любым способом, — "
+                    "одна и та же картинка, и поставить их по-разному и не "
+                    "увидеть разницы это и есть проверка. Переключатель Alpha "
+                    "наверху в этом режиме не действует.")),
                 (self.rebake_right_alpha, "Straight",
                  tr("Как читается правая половина — то, что из него делает "
-                    "перепечка."))):
+                    "перепечка. Половины выбирают независимо, в этом и смысл: "
+                    "после дизера один и тот же файл, прочитанный любым "
+                    "способом, — одна и та же картинка, и поставить их "
+                    "по-разному и не увидеть разницы это и есть проверка. "
+                    "Переключатель Alpha наверху в этом режиме не действует."))):
             box.addItems(["Premultiplied", "Straight"])
             box.setCurrentText(side)
             box.setFixedWidth(126)
@@ -4331,12 +4430,7 @@ class Viewer(QMainWindow):
             box.setView(QListView())
             box.view().setStyle(self._plain_style)
             box.setStyleSheet(self.overlay_combo_style())
-            box.setToolTip(
-                tip + tr(" Половины выбирают независимо, в этом и смысл: после "
-                   "дизера один и тот же файл, прочитанный любым способом, — "
-                   "одна и та же картинка, и поставить их по-разному и не "
-                   "увидеть разницы это и есть проверка. Переключатель Alpha "
-                   "наверху в этом режиме не действует."))
+            box.setToolTip(tip)
             box.currentIndexChanged.connect(
                 lambda _: (self.touch(), self._remember()))
 
@@ -4402,9 +4496,13 @@ class Viewer(QMainWindow):
             if picture == "play":
                 self.full_play = button
         line.addSpacing(8)
-        self.full_slider = QSlider(Qt.Orientation.Horizontal)
+        # The same slider as the transport's: a press anywhere puts the
+        # playhead there, and it carries marks -- in a show, where the
+        # sections begin (see `_mark_full`).
+        self.full_slider = Timeline(Qt.Orientation.Horizontal)
         self.full_slider.setObjectName("qa_full_slider")
         self.full_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.full_slider.setFixedHeight(28)
         self.full_slider.setRange(0, 1000)
         self.full_slider.sliderMoved.connect(self._scrub)
         line.addWidget(self.full_slider, 1)
@@ -4444,8 +4542,7 @@ class Viewer(QMainWindow):
             tr("Рамка"), "qa_frame_edge_button",
             tr("Линия, показывающая, что попадёт в запись. Картинка занимает "
                "всё окно и продолжается за рамкой; эта линия говорит, где "
-               "рамка. В {0} и в Инспекторе, где есть что кадрировать.",
-               tr(MODE_LABEL[PREVIEW])))
+               "рамка. В Превью и в Инспекторе, где есть что кадрировать."))
         self.frame_button.setChecked(True)
         self.frame_button.toggled.connect(
             lambda _: (self._lay_overlays(), self._remember()))
@@ -5266,8 +5363,9 @@ class Viewer(QMainWindow):
         begins, ends = self.first_frame.value(), self.last_frame.value()
         whole = last <= 0 or (begins, ends) == (0, last)
         count = max(1, last + 1)
-        self.slider.set_range(None if whole
-                              else (begins / count, (ends + 1) / count))
+        part = None if whole else (begins / count, (ends + 1) / count)
+        self.slider.set_range(part)
+        self.full_slider.set_range(part)
         grid = self.clock.rate or 60.0
         self.show_view.set_render_range(
             None if whole else (begins * showfile.FPS / grid,
@@ -5769,6 +5867,7 @@ class Viewer(QMainWindow):
             text = row.field.text().strip()
             row._shown()
             row.note.setText("")
+            row.retell = None
             row.note.setStyleSheet(f"color:{theme.META};")
             if not text:
                 continue
@@ -5786,6 +5885,7 @@ class Viewer(QMainWindow):
                 screen = screen_gpu.Screen(self.device, stream.movie)
             except Exception as error:  # noqa: BLE001 -- shown beside the field
                 row.note.setText(str(error)[:60])
+                row.retell = None
                 row.note.setStyleSheet(f"color:{theme.ERROR};")
                 logfile.write(f"{text}: {error}")
                 continue
@@ -5820,6 +5920,8 @@ class Viewer(QMainWindow):
             stream.on_change = (
                 lambda _track, at=at, row=row: self._reshape(at, row))
             self._say_stream(row, stream)
+            row.retell = (lambda row=row, stream=stream:
+                          self._say_stream(row, stream))
             movie = stream.movie
             logfile.write(f"{Path(text).name}: {movie.width}x{movie.height} "
                           f"{movie.kind} {movie.frames} frames "
@@ -5869,6 +5971,8 @@ class Viewer(QMainWindow):
         sixty-a-second grid, and a thirty a second movie is still thirty.
         """
         movie = stream.movie
+        if movie is None:
+            return                   # let go of: the card keeps what it said
         rate = float(getattr(movie, "rate", 0.0) or 0.0)
         if rate:
             row.note.setText(tr("{0}x{1}  {2}  {3:g} к/с  {4:.2f} с",
@@ -6403,6 +6507,30 @@ class Viewer(QMainWindow):
         """No chain, no marks: the slider is one clip again."""
         if hasattr(self, "slider"):
             self.slider.set_marks([])
+            self._mark_full()
+
+    def _mark_full(self) -> None:
+        """The marks on the full screen's slider, the only transport a show
+        has once the ruler has gone with the rest of the window.
+
+        In the quick look, the same joins as the slider under the picture. In
+        a show, where its sections begin: every clip of the Bottom block, on
+        any of its levels -- the main screen's cuts are the show's -- with
+        its name in the hover, one mark to a tenth of a second.
+        """
+        if not hasattr(self, "full_slider"):
+            return
+        show = self.show_open
+        if self.level != "show" or show is None:
+            self.full_slider.set_marks(self.slider._marks, self.clock.duration)
+            return
+        marks: dict = {}
+        for clip in show.on("Bottom"):
+            if clip.first > 0:
+                marks.setdefault(round(clip.first / showfile.FPS, 1), clip.name)
+        self.full_slider.set_marks(sorted(marks.items()),
+                                   show.length / showfile.FPS,
+                                   tr("Секции по Bottom:"))
 
     def _mark_span(self) -> None:
         """Tell the slider how long the whole thing is, and where the joins are.
@@ -6422,6 +6550,7 @@ class Viewer(QMainWindow):
             for frame, name in self.motors.boundaries:
                 marks.setdefault(round(frame / self.motors.fps, 1), name)
         self.slider.set_marks(sorted(marks.items()))
+        self._mark_full()
 
     def _load_sound(self) -> None:
         """Open the WAV, or let go of the one that was open."""
@@ -6437,6 +6566,7 @@ class Viewer(QMainWindow):
         text = row.field.text().strip()
         if not text:
             row.note.setText("")
+            row.retell = None
             return
         try:
             self.track = sound.read_wav(text)
@@ -6444,6 +6574,7 @@ class Viewer(QMainWindow):
         except Exception as error:  # noqa: BLE001 -- shown beside the field
             self.track = None
             row.note.setText(str(error)[:60])
+            row.retell = None
             row.note.setStyleSheet(f"color:{theme.ERROR};")
             logfile.write(f"{text}: {error}")
             return
@@ -6455,6 +6586,8 @@ class Viewer(QMainWindow):
                                      and self.player.playing else None)
         row.note.setText(self.track.describe())
         row.note.setStyleSheet(f"color:{theme.META};")
+        row.retell = lambda row=row, track=self.track: row.note.setText(
+            track.describe())
         logfile.write(f"{Path(text).name}: {self.track.describe()}")
         if self.clock.playing:
             self.player.play()
@@ -6473,6 +6606,7 @@ class Viewer(QMainWindow):
             return
         row._shown()
         row.note.setText("")
+        row.retell = None
         row.note.setStyleSheet(f"color:{theme.META};")
         self.motors = None
         self._moved_to = None
@@ -6500,6 +6634,7 @@ class Viewer(QMainWindow):
             self.solid.rest_cells()
             self._pick_top()
             row.note.setText(str(error)[:60])
+            row.retell = None
             row.note.setStyleSheet(f"color:{theme.ERROR};")
             logfile.write(f"{', '.join(Path(one).name for one in chain)}: {error}")
             self._say_sources()
@@ -6507,20 +6642,27 @@ class Viewer(QMainWindow):
         # Away goes the still geometry, in comes the one the motors drive.
         self._pick_top()
 
-        said = self.motors.describe()
-        if len(self.motors.parts) > 1:
-            said = (tr("части {0} из {1}  ",
-                       ', '.join(str(part.number) for part in self.motors.parts),
-                       self.motors.parts[0].of) + said)
-        row.note.setText(said)
+        self._say_motors(row, self.motors)
+        row.retell = (lambda row=row, motors=self.motors:
+                      self._say_motors(row, motors))
         for bad in self.motors.complaints():
             row.note.setText(bad[:60])
+            row.retell = None
             row.note.setStyleSheet(f"color:{theme.WARN};")
             logfile.write(f"kinetic: {bad}")
         self._mark_span()
         logfile.write(", ".join(Path(one).name for one in chain)
                       + f": {self.motors.describe()}")
         self._say_sources()
+
+    def _say_motors(self, row, motors) -> None:
+        """What the motors' card says of its file, or of its parts."""
+        said = motors.describe()
+        if len(motors.parts) > 1:
+            said = (tr("части {0} из {1}  ",
+                       ', '.join(str(part.number) for part in motors.parts),
+                       motors.parts[0].of) + said)
+        row.note.setText(said)
 
     def _showing_now(self) -> set:
         """Which of the loaded streams the mode being drawn actually shows."""
@@ -6788,45 +6930,6 @@ class Viewer(QMainWindow):
 STYLESHEET = theme.sheet()
 
 
-# The window alive now. A window nothing holds on to is collected and closes:
-# main() holds the first, and this each one `rebuild` makes after it.
-_alive: list = []
-
-
-def rebuild(old: Viewer) -> Viewer:
-    """The window made again -- in the language just chosen.
-
-    What a session writes down comes back by itself, because the new window
-    reads what the old one has just written: the files, the show and its
-    draft, the level, the modes, the editor. What it does not write down is
-    carried across by hand: where the playhead is, the history of the
-    editor's changes, the window's place on the screen, the card of keys.
-    """
-    if old._full:
-        old._toggle_full()
-    old._flush_draft()
-    old._remember(now=True)
-    seconds = old.clock.seconds
-    history, history_for = old.history, old._history_for
-    geometry = old.saveGeometry()
-    keys_open = old._keys_open
-    quietly = old.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-    new = Viewer()
-    new.history, new._history_for = history, history_for
-    new._say_undo()
-    new._keys_open = keys_open
-    new.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, quietly)
-    new.restoreGeometry(geometry)
-    new.show()
-    new._move(seconds)
-    new._lay_overlays()
-    _alive[:] = [new]
-    old.close()
-    old.deleteLater()
-    logfile.write(f"window made again in {lang.language()}")
-    return new
-
-
 def main() -> int:
     written = logfile.start(APP_NAME, APP_VERSION)
     app = QApplication(sys.argv)
@@ -6842,7 +6945,6 @@ def main() -> int:
     # Before the window is built, because building it is what takes the time.
     logfile.raise_splash(app)
     window = Viewer()
-    _alive.append(window)
     if written is not None:
         logfile.write(f"log: {written}")
     window.show()

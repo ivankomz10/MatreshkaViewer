@@ -120,3 +120,92 @@ def test_tr_says_it_in_the_language_chosen():
         assert {"Чистка", "Clean"} <= lang.either("Чистка")
     finally:
         lang.set_language("ru")
+
+
+def test_each_english_string_answers_for_one_russian():
+    """Switching in place looks the English up to find the Russian: two
+    Russian strings with one English would come back as the wrong one."""
+    from collections import defaultdict
+    from lang_en import EN
+    back = defaultdict(list)
+    for russian, english in EN.items():
+        back[english].append(russian)
+    shared = {english: many for english, many in back.items() if len(many) > 1}
+    assert not shared, f"one English for several: {shared}"
+
+
+# -- switching where the window stands ----------------------------------------
+
+VOLATILE = {"qa_status_pace", "qa_eta", "qa_time_label", "qa_frame_label",
+            "qa_full_time", "qa_stats", "qa_status", "qa_status_files",
+            "qa_show_note"}
+
+
+def _words(window) -> list:
+    """Every piece of text on the window, in order: (where, what)."""
+    from PySide6.QtWidgets import (QAbstractButton, QComboBox, QLabel,
+                                   QLineEdit, QWidget)
+    import main
+    found = []
+    widgets = [window] + window.findChildren(QWidget)
+    for number, widget in enumerate(widgets):
+        name = widget.objectName() or f"{type(widget).__name__}#{number}"
+        if name in VOLATILE or widget.property("fixed_words"):
+            continue
+        if isinstance(widget, (QAbstractButton, QLabel)) and widget.text():
+            found.append((name + ".text", widget.text()))
+        if isinstance(widget, QLineEdit) and widget.placeholderText():
+            found.append((name + ".placeholder", widget.placeholderText()))
+        if isinstance(widget, QComboBox):
+            for index in range(widget.count()):
+                found.append((f"{name}[{index}]", widget.itemText(index)))
+        if widget.toolTip():
+            found.append((name + ".tip", widget.toolTip()))
+        if widget in main.HINTS:
+            says, story = main.HINTS[widget]
+            found.append((name + ".says", says))
+            found.append((name + ".story", story))
+    return found
+
+
+def test_switching_turns_every_word_where_it_stands(window, clips, tick):
+    """No window built again, nothing opened again: the words turn in place,
+    all of them, and come back exactly as they were."""
+    import lang
+    from test_quiet import put_back
+    put_back(window, clips, tick)
+    streams = list(window.streams)
+    canvas = window.canvas
+    # From words worked out once already: the show's clock in the pane that
+    # is not on show, Undo saying there is nothing to undo -- the switch works
+    # them out again, and a window that never had them would differ by them.
+    window._retell()
+    tick(0.2)
+    before = _words(window)
+    try:
+        window._choose_language("en")
+        tick(0.4)
+        assert lang.language() == "en"
+        english = _words(window)
+        russian_left = [(where, what[:60]) for where, what in english
+                        if CYR.search(what)]
+        assert not russian_left, "still in Russian:\n" + "\n".join(
+            f"{where}: {what}" for where, what in russian_left)
+        assert window.level_buttons["view"].text() == "Quick look"
+        assert window.sources_count.text() == "3 of 6 loaded"
+        assert window.row_for("Top").note.text().count(" fps ") == 1
+        assert window.row_for("Frame").label.text() == "Frame", \
+            "a card's title was taken for words"
+        assert window.streams == streams and window.canvas is canvas, \
+            "the window opened its files again"
+    finally:
+        window._choose_language("ru")
+        tick(0.4)
+    assert lang.language() == "ru"
+    after = _words(window)
+    changed = [(where, was, now) for (where, was), (_, now)
+               in zip(before, after) if was != now]
+    assert len(after) == len(before) and not changed, (
+        "not as they were:\n" + "\n".join(
+            f"{where}: {was[:40]!r} -> {now[:40]!r}"
+            for where, was, now in changed[:20]))

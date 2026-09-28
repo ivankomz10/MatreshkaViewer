@@ -359,6 +359,25 @@ def test_the_crossfade_is_two_layers_added(quick_look, tick):
 
 
 @needs_rusday
+def test_the_full_screen_slider_marks_where_the_sections_begin(quick_look, tick):
+    """Once the ruler has gone with the rest of the window, the full screen's
+    slider is the show's only timeline: its marks are Bottom's cuts."""
+    import show as showfile
+    window = quick_look
+    show = opened(window, tick)
+    wanted = sorted({round(clip.first / showfile.FPS, 1)
+                     for clip in show.on("Bottom") if clip.first > 0})
+    marks = [at for at, _ in window.full_slider._marks]
+    assert marks and marks == wanted, (marks[:6], wanted[:6])
+    assert window.full_slider._span == show.length / showfile.FPS
+    assert window.full_slider.toolTip().startswith("Секции по Bottom:")
+    # And back in the quick look, the quick look's own joins: none here.
+    window._set_level("view")
+    tick(0.5)
+    assert window.full_slider._marks == window.slider._marks
+
+
+@needs_rusday
 def test_the_playhead_driving_into_the_wait_lights_loop(quick_look, tick):
     window = quick_look
     opened(window, tick)
