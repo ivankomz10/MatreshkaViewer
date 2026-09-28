@@ -13,7 +13,11 @@ def frame_now(app) -> tuple[int, int]:
     The label says "кадр 3600 из 10800" -- how many frames there are, which
     is one past the last of them.
     """
-    said = app.says("qa_frame_label")
+    # Under the picture in the quick look; in Шоу the show's own line says
+    # it, the same way, and the transport's label is not on show.
+    found = app.maybe("qa_frame_label")
+    said = app.says("qa_frame_label" if found is not None and found.showing
+                    else "qa_show_frames")
     numbers = re.findall(r"-?\d+", said)
     if len(numbers) < 2:
         raise AssertionError(f"the frame label says {said!r}")

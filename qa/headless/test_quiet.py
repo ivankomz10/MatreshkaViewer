@@ -148,6 +148,12 @@ def test_the_snapshot_is_the_frame_the_render_writes(window, tick):
     window.mode.setCurrentText(PREVIEW)
     window.size_choice.setCurrentText("1080x1920")
     window.reset_view()
+    # On the frame the render writes. The tests before leave the playhead
+    # two frames in, and a snapshot is of whatever the screens hold when it
+    # is taken -- the render's last frame, or the playhead's once the readers
+    # have caught up, depending on how soon it is asked.
+    window._move(0.0)
+    tick(0.5)
     window.first_frame.setValue(0)
     window.last_frame.setValue(0)
     window.format_choice.setCurrentText("PNG sequence")
@@ -391,7 +397,7 @@ def test_a_lone_part_brings_its_siblings(window, clips, tick):
     assert [part.name for part in window.motors.parts] == [
         "BrendMT_1_of_2.json", "BrendMT_2_of_2.json"]
     assert "части 1, 2 из 2" in window.row_for("Kinetic").note.text()
-    assert "+1" in window.sources_head.text()
+    assert "+1" in window.sources_summary()
     put_back(window, clips, tick)
 
 
@@ -421,37 +427,45 @@ def test_clicking_the_header_folds_and_unfolds(window, tick):
     assert window.sources_open, "two more clicks left it somewhere else"
 
 
-def test_the_rows_fold_away(window, clips, tick):
-    """One block, as before the timeline, and its line says what is in it."""
+def test_the_cards_fold_to_a_strip_of_marks(window, clips, tick):
+    """Folded, the column gives the picture its width, and says what is
+    loaded by which of its marks are lit -- and in full, in the hover."""
     put_back(window, clips, tick)
     window._fold_sources(True)
     tick(0.2)
-    tall = window.sources_body.sizeHint().height()
+    wide = window.sources.width()
+    count = window.sources_count.text()
+    loaded = [row for row in window.rows if row.field.text().strip()]
+    assert count == f"{len(loaded)} из {len(window.rows)} загружено", count
     window._fold_sources(False)
     tick(0.2)
     assert not window.sources_open
     assert not window.sources_body.isVisible()
-    line = window.sources_head.text()
-    for row in window.rows:
-        if row.field.text().strip():
-            assert row.title in line, (
-                f"the folded line does not name {row.title}: {line!r}")
-    assert tall > 100, f"the rows are only {tall} px; folding buys nothing"
+    assert window.sources_marks.isVisible()
+    assert window.sources.width() < wide / 4, (
+        f"folded, the column is still {window.sources.width()} px")
+    said = window.sources_summary()
+    for row in loaded:
+        assert row.title in said, f"the summary does not name {row.title}"
     window._fold_sources(True)
     tick(0.2)
+    assert window.sources.width() == wide
 
 
-def test_the_link_stands_in_the_screens_panel(window, tick):
-    """With the sliders it ties, over the picture -- not in the rows."""
-    window._fold_levels(True)
-    tick(0.2)
-    assert window.levels_panel.isAncestorOf(window.linked)
-    assert not window.sources.isAncestorOf(window.linked)
-    window._fold_sources(False)
-    tick(0.2)
-    assert window.linked.isVisible(), "the link went away with the rows"
-    window._fold_sources(True)
-    tick(0.2)
+def test_the_link_stands_under_the_cards_it_ties(window, tick):
+    """At the foot of the cards in the quick look; with the sliders in the
+    show's Экраны in Шоу -- the same button, moved, not a second one."""
+    assert window.level == "view"
+    assert window.link_banner.isAncestorOf(window.linked)
+    assert window.linked.isVisible()
+    window.linked.setChecked(True)
+    tick(0.1)
+    assert window.linked.text() == "Разъединить"
+    assert "связаны" in window.link_said.text()
+    window.linked.setChecked(False)
+    tick(0.1)
+    assert window.linked.text() == "Связать"
+    assert "не связаны" in window.link_said.text()
 
 
 def test_the_link_still_ties_the_two_sliders(window, tick):
@@ -496,19 +510,29 @@ def test_the_layers_are_in_a_menu(window, tick):
         assert not box.isVisible(), "a layer box is still on the bar"
 
 
-def test_the_screens_panel_is_there_in_the_quick_look(window, tick):
-    window._fold_levels(True)
+def test_how_the_screens_look_is_one_bar_over_the_picture(window, tick):
+    """The match, the top's back, the alpha, the backing, the frame and the
+    whole monitor: one bar, over the picture, in the quick look."""
+    from conftest import PREVIEW
+    window.mode.setCurrentText(PREVIEW)
     tick(0.2)
-    assert window.level == "view" and window.levels_panel.isVisible()
+    assert window.level == "view" and window.look_bar.isVisible()
     for widget in (window.matching, window.solid_top, window.alpha,
-                   window.backing, window.linked):
-        assert window.levels_panel.isAncestorOf(widget), widget.objectName()
-    assert window.levels_lines["Frame"][2].isVisible(), \
-        "the frame's brightness is not there in the quick look"
-    window.levels_sliders["Top"].setValue(140)
-    assert window.row_for("Top").gain.value() == 140
-    assert not window.row_for("Top").gain.isVisible(), "the row still has one"
-    window.levels_sliders["Top"].setValue(100)
+                   window.backing, window.frame_button, window.full_button,
+                   window.reset_button):
+        assert window.look_bar.isAncestorOf(widget), widget.objectName()
+        assert widget.isVisible(), widget.objectName()
+    assert window.look_bar.geometry().right() <= window.canvas.width()
+    # The brightness is on each card, the frame's included.
+    for title in ("Top", "Bottom", "Lamels", "Frame", "Sound"):
+        row = window.row_for(title)
+        assert row.gain is not None and row.isAncestorOf(row.gain), title
+    assert window.row_for("Kinetic").gain is None
+    window.mode.setCurrentText("Flat")
+    tick(0.2)
+    assert window.tile_button.isVisible() and not window.frame_button.isVisible()
+    window.mode.setCurrentText(PREVIEW)
+    tick(0.2)
 
 
 def test_one_reading_of_time_and_it_counts_frames_of_the_whole(window, tick):

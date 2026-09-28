@@ -141,8 +141,10 @@ def test_the_editor_moves_a_clip_and_ctrl_z_puts_it_back(app):
     tracks = app.at("qa_show_tracks")
     # Top L0, in the lane's own pixels: the lanes are laid out in logical
     # pixels, and the tracks' height says how many physical ones that is.
-    scale = tracks.tall / 281.0
-    y = tracks.top + int(59 * scale)
+    # In the editor: the empty Cue and Kinetic lanes at 16 each, then Top
+    # L0 at 34, 26 tall; 251 in all.
+    scale = tracks.tall / 251.0
+    y = tracks.top + int(47 * scale)
     x = tracks.left + int(tracks.wide * 0.3)
     app.click_at(x, y)
     assert tx_now(app) == 0, f"the clip does not start at 0: {tx_now(app)}"

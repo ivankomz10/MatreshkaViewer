@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PySide6.QtWidgets import QWidget
 
 import look
 from conftest import HOME, PREVIEW, render_and_wait, wait_for
@@ -216,29 +217,37 @@ def test_the_switch_is_small_and_the_show_line_is_the_show_s(quick_look, tick):
         assert button.width() < 160
 
 
-def test_the_screens_panel_moves_the_rows_own_sliders(quick_look, tick):
+def test_the_screens_column_moves_the_cards_own_sliders(quick_look, tick):
+    """The show's Экраны: sliders that are the cards' own values, with the
+    match and the link moved in under them, and moved back on the way out."""
     window = quick_look
     window._set_level("show")
-    window._fold_levels(True)
     tick(0.3)
-    assert window.levels_panel.isVisible()
-    canvas = window.canvas
-    panel = window.levels_panel
-    assert panel.x() + panel.width() <= canvas.width(), "it hangs off the picture"
-    assert panel.x() > canvas.width() // 2, "it is not against the right edge"
+    column = window.findChild(QWidget, "qa_show_screens")
+    assert column is not None and column.isVisible()
+    assert set(window.levels_sliders) == {"Top", "Bottom", "Lamels", "Sound"}, \
+        "a frame's brightness in a show, which has no frame"
+    for slider in window.levels_sliders.values():
+        assert column.isAncestorOf(slider) and slider.isVisible()
     window.levels_sliders["Top"].setValue(150)
     assert window.row_for("Top").gain.value() == 150
     window.row_for("Bottom").gain.setValue(80)
     assert window.levels_sliders["Bottom"].value() == 80
-    assert window.levels_panel.isAncestorOf(window.matching)
-    assert not window.levels_lines["Frame"][2].isVisible(), \
-        "a frame's brightness in a show, which has no frame"
-    window._fold_levels(False)
-    tick(0.2)
-    assert not window.levels_panel.isVisible() and window.levels_tab.isVisible()
-    window.levels_tab.click()
-    tick(0.2)
-    assert window.levels_panel.isVisible()
+    for widget in (window.matching, window.linked):
+        assert column.isAncestorOf(widget), widget.objectName()
+        assert widget.isVisible(), widget.objectName()
+    assert window.linked.text() == "Top \u21c4 Bottom"
+    # The transport's buttons stand beside the show's time.
+    assert window.show_pane.head.isAncestorOf(window.play_button)
+    assert window.play_button.isVisible()
+    assert not window.transport_bar.isVisible()
+    window._set_level("view")
+    tick(0.3)
+    assert window.look_bar.isAncestorOf(window.matching)
+    assert window.link_banner.isAncestorOf(window.linked)
+    assert window.transport_bar.isAncestorOf(window.play_button)
+    assert window.play_button.isVisible() and window.matching.isVisible()
+    assert window.look_bar.width() >= window.look_bar.sizeHint().width()
     for title in ("Top", "Bottom"):
         window.row_for(title).gain.setValue(100)
 
@@ -359,9 +368,9 @@ def test_the_playhead_driving_into_the_wait_lights_loop(quick_look, tick):
     wait_for(tick, lambda: window.show_view.frame > 830,
              "the playhead never got into the loop", 10)
     assert window.show_view.looping, "LOOP stayed dark"
-    assert window.show_pane.loopbar.switch.isChecked()
+    assert window.show_pane.ruler.switch.isChecked()
     # The hand on the switch: the loop lets go, and the show goes on.
-    window.show_pane.loopbar.switch.click()
+    window.show_pane.ruler.switch.click()
     assert not window.show_view.looping
     assert window.show_view.let_go == (800, 1099)
     window._toggle()
@@ -432,19 +441,20 @@ def test_a_render_goes_through_the_gaps(quick_look, tick):
     assert not list(temp.glob("show_mix_*.wav")), "the show's mix was left"
 
 
-def test_the_counts_under_the_picture_fold_away(quick_look, tick):
-    """The line about the card stays; the file by file counts go."""
+def test_the_counts_over_the_status_line_fold_away(quick_look, tick):
+    """The status line stays; the file by file counts over it go."""
     window = quick_look
     window._fold_stats(True)
     tick(0.3)
     assert window.stats.isVisible() and "qa_top.mov" in window.stats.text()
-    assert window.stats_head.text().startswith("\u25be")
+    assert window.stats_head.text() == "Статистика декодера \u25be"
     window.stats_head.click()
     tick(0.3)
     assert not window.stats.isVisible(), "the counts stayed up"
     assert window.stats_head.isVisible()
-    assert window.stats_head.text().startswith("\u25b8")
-    assert "файлы: 3" in window.stats_head.text()
+    assert window.stats_head.text() == "Статистика декодера \u25b4"
+    assert "файлы: 3" in window.status_files.text()
+    assert "\u25cf" in window.status.text()
     assert window._settings_now()["stats_open"] is False
     window._fold_stats(True)
     tick(0.2)

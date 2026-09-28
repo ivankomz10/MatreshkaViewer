@@ -229,6 +229,17 @@ class Viewer:
         node = self.at(qa)
         return (node.value or node.name or "").strip()
 
+    def holds(self, row: str) -> str:
+        """The name of the file on a source card, or "" for an empty card.
+
+        The card shows the file's name and keeps the path out of sight, and
+        an empty one shows a place to drop a file instead of a name.
+        """
+        node = self.maybe(f"qa_file_{row}")
+        if node is None or not node.showing:
+            return ""
+        return (node.value or node.name or "").strip()
+
     # -- doing things to it --------------------------------------------------
 
     def in_front(self) -> bool:

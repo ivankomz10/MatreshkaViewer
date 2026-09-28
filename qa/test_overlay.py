@@ -124,7 +124,8 @@ def test_only_geometry_has_a_framing_line(app):
 # -- the link between the two sliders ----------------------------------------
 
 def test_the_link_says_whether_it_is_on(app):
-    """A box in the Экраны panel now, and a box says so by its tick."""
+    """A button at the foot of the source cards, and it says so by its
+    checked state and its words."""
     link = app.at("qa_link")
     was = link.checked
     app.click("qa_link")
@@ -135,13 +136,13 @@ def test_the_link_says_whether_it_is_on(app):
 
 
 def test_the_link_covers_nothing_and_nothing_covers_it(app):
-    """It stands in the Экраны panel, with the sliders it ties."""
+    """It stands at the foot of the source cards, under the two it ties."""
     link = app.at("qa_link")
     landed = app.desk.under(*link.middle)
     assert landed is not None and landed.qa == "qa_link", (
         f"a click on the link would land on {landed}")
     for qa in ("qa_clear_top", "qa_gain_top", "qa_clear_bottom", "qa_gain_bottom",
-               "qa_path_top", "qa_path_bottom", "qa_sources_header"):
+               "qa_file_top", "qa_file_bottom", "qa_sources_header"):
         assert not link.overlaps(app.at(qa)), f"the link covers {qa}"
 
 

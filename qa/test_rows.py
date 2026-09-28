@@ -17,11 +17,11 @@ def test_the_browse_button_loads_a_clip(app):
     app.choose("qa_mode", PREVIEW)
     app.click("qa_clear_lamels")
     time.sleep(0.5)
-    assert app.at("qa_path_lamels").value == "", "the row did not empty"
+    assert app.holds("lamels") == "", "the card did not empty"
 
     app.open_file("lamels", media.MEDIA / media.CLIPS["lamels"][0])
     loaded = app.wait_until(
-        lambda one: one.at("qa_path_lamels").value.endswith("qa_lamels.mov"),
+        lambda one: one.holds("lamels").endswith("qa_lamels.mov"),
         "the picker loaded nothing", within=30)
     assert loaded
     note = app.says("qa_note_lamels")
@@ -32,15 +32,15 @@ def test_the_browse_button_loads_a_clip(app):
 def test_clearing_a_row_takes_it_off_the_screen(app):
     app.click("qa_clear_lamels")
     time.sleep(0.6)
-    assert app.at("qa_path_lamels").value == ""
+    assert app.holds("lamels") == ""
     assert app.says("qa_note_lamels") == "", (
         f"the row still says {app.says('qa_note_lamels')!r}")
-    assert not app.at("qa_clear_lamels").enabled, (
-        "an empty row still offers to be cleared")
+    assert app.maybe("qa_clear_lamels") is None, (
+        "an empty card still offers to be cleared")
     # Put it back for whatever runs next.
     app.open_file("lamels", media.MEDIA / media.CLIPS["lamels"][0])
     app.wait_until(
-        lambda one: one.at("qa_path_lamels").value.endswith("qa_lamels.mov"),
+        lambda one: one.holds("lamels").endswith("qa_lamels.mov"),
         "the clip did not go back", within=30)
 
 

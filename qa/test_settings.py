@@ -46,8 +46,8 @@ def test_the_window_comes_back_as_it_was_left(fresh):
         assert again.at("qa_out_name").value == "kept_name.mp4"
         assert again.at("qa_link").checked, "the link came back off"
         for row in ("top", "bottom", "lamels"):
-            assert again.at(f"qa_path_{row}").value.endswith(f"qa_{row}.mov"), (
-                f"{row} came back holding {again.at(f'qa_path_{row}').value!r}")
+            assert again.holds(row).endswith(f"qa_{row}.mov"), (
+                f"{row} came back holding {again.holds(row)!r}")
     finally:
         again.stop()
 

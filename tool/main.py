@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox,
                                QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMenu, QProgressBar, QListView,
                                QPushButton, QSizePolicy, QSlider, QSpinBox,
-                               QSplitter, QToolButton, QWidgetAction,
+                               QScrollArea, QSplitter, QToolButton,
+                               QWidgetAction,
                                QStyleFactory, QToolTip, QVBoxLayout, QWidget)
 from rendercanvas.pyside6 import RenderCanvas
 
@@ -75,7 +76,7 @@ SHOW_MODES = (PREVIEW, "Flat", "Inspection")
 
 APP_NAME = "Matreshka Viewer"
 APP_VERSION = "0.4"
-MONO = "Cascadia Mono, Consolas, DejaVu Sans Mono, Menlo, monospace"
+MONO = "IBM Plex Mono, Cascadia Mono, Consolas, DejaVu Sans Mono, Menlo, monospace"
 
 # How the building is drawn: the key each mode is known by in the code and
 # in a settings file, and what the tab says. Named by what is on the screen.
@@ -163,10 +164,6 @@ SHORT = {
     "Lamel_screen": "Lamels",
 }
 
-
-# The width every row leaves for the link button that sits between two of
-# them. Wide enough for the button and a little air either side.
-LINK_SIDE = 24
 
 ICONS = "icons"
 _drawn: dict = {}
@@ -276,11 +273,13 @@ class ModeTabs(QWidget):
 
     def __init__(self, items) -> None:
         super().__init__()
+        self.setSizePolicy(QSizePolicy.Policy.Preferred,
+                           QSizePolicy.Policy.Expanding)
         self._keys = [key for key, _label, _story in items]
         self._index = 0
         line = QHBoxLayout(self)
         line.setContentsMargins(0, 0, 0, 0)
-        line.setSpacing(0)
+        line.setSpacing(2)
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
         self.buttons = {}
@@ -289,7 +288,9 @@ class ModeTabs(QWidget):
             button.setObjectName(f"qa_mode_{MODE_TAG.get(key, key.lower())}")
             button.setCheckable(True)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            button.setStyleSheet(LEVEL_BUTTON)
+            button.setProperty("tab", True)
+            button.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                 QSizePolicy.Policy.Expanding)
             button.setToolTip(story)
             button.clicked.connect(lambda _=False, at=index: self.setCurrentIndex(at))
             self.group.addButton(button)
@@ -344,10 +345,59 @@ def _tag(title: str) -> str:
 
 
 def _divider() -> QFrame:
+    """A thin upright line between two groups on a bar."""
     line = QFrame()
-    line.setFrameShape(QFrame.Shape.VLine)
-    line.setStyleSheet("color:#3a3a3a;")
+    line.setFixedSize(1, 24)
+    line.setStyleSheet(f"background:{theme.SEAM};")
     return line
+
+
+def _see_through(widget: QWidget) -> QWidget:
+    """A box that only holds others: the bar it stands on shows through.
+
+    The sheet paints every widget in the panel's colour, which on a bar of
+    another colour is a patch around whatever the box holds.
+    """
+    widget.setStyleSheet(f"#{widget.objectName()} {{ background:transparent; }}")
+    return widget
+
+
+def _pill(text: str, name: str, story: str,
+          checkable: bool = True) -> QPushButton:
+    """A switch in a bar of switches: flat until it is on, then the accent."""
+    button = QPushButton(text)
+    button.setObjectName(name)
+    button.setProperty("pill", True)
+    button.setCheckable(checkable)
+    button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setToolTip(story)
+    return button
+
+
+# How tall every control on a bar is: one height, so a bar reads as one row.
+CONTROL = 30
+
+
+def _even(layout, tall: int = CONTROL) -> None:
+    """Every control on a line at one height -- fields, lists, buttons."""
+    for index in range(layout.count()):
+        widget = layout.itemAt(index).widget()
+        if widget is None or isinstance(widget, QLabel):
+            continue
+        if widget.property("tab") or widget.property("segment"):
+            continue
+        if (isinstance(widget, (QPushButton, QToolButton, QComboBox, QSpinBox,
+                                QLineEdit))
+                or widget.property("field")):
+            widget.setFixedHeight(tall)
+
+
+# What is laid over the picture stands on this: dark enough to read over a
+# white frame, thin enough that the picture is still there under it.
+OVERLAY_BG = "rgba(20,21,24,219)"
+# The one light button, Play, has its picture in this.
+PLAY_INK = "#111111"
 
 
 class DependencyDialog(QDialog):
@@ -435,7 +485,7 @@ class DependencyDialog(QDialog):
             status.setStyleSheet(f"color:{colour};")
             detail = QLabel(item.detail)
             detail.setWordWrap(True)
-            detail.setStyleSheet("color:#8d97a5;")
+            detail.setStyleSheet(f"color:{theme.QUIET};")
             for column, widget in enumerate((name, status, detail)):
                 self.grid.addWidget(widget, row, column)
 
@@ -564,15 +614,16 @@ class Timeline(QSlider):
         super().paintEvent(event)
         if self._range is not None:
             brush = QPainter(self)
-            room = self.width() - 12
-            left = 6 + round(self._range[0] * room)
-            right = 6 + round(self._range[1] * room)
+            room = self.width() - 2
+            left = 1 + round(self._range[0] * room)
+            right = 1 + round(self._range[1] * room)
             live = QColor(theme.LIVE)
             live.setAlpha(60)
-            brush.fillRect(left, 2, max(2, right - left), self.height() - 4, live)
+            middle = self.height() // 2
+            brush.fillRect(left, middle - 6, max(2, right - left), 12, live)
             brush.setPen(QPen(QColor(theme.LIVE), 2))
-            brush.drawLine(left, 2, left, self.height() - 3)
-            brush.drawLine(right, 2, right, self.height() - 3)
+            brush.drawLine(left, middle - 7, left, middle + 7)
+            brush.drawLine(right, middle - 7, right, middle + 7)
             brush.end()
         if not self._marks or self._span <= 0:
             return
@@ -583,21 +634,28 @@ class Timeline(QSlider):
         # Along the groove the handle travels, which is the width less the
         # handle: a mark at the very end must not sit under the handle's own
         # overhang.
-        room = self.width() - 12
+        room = self.width() - 2
         for at, _ in self._marks:
             part = max(0.0, min(1.0, at / self._span))
-            x = 6 + round(part * room)
-            brush.drawLine(x, 3, x, self.height() - 4)
+            x = 1 + round(part * room)
+            brush.drawLine(x, self.height() // 2 - 6, x, self.height() // 2 + 6)
         brush.end()
 
 
-class Row(QWidget):
-    """One screen's file: a field, a button, and somewhere to drop a movie.
+class Row(QFrame):
+    """One screen's file, as a card in the column of sources.
 
-    One file per row, as before the timeline. Several files one after another,
-    and the counts that repeat them, are what the show mode is for; here a
-    row is the quick answer to "what does this look like on the building".
+    One file per card, as before the timeline. Several files one after
+    another, and the counts that repeat them, are what the show mode is for;
+    here a card is the quick answer to "what does this look like on the
+    building". What the card says of its file -- size, codec, rate, length --
+    is set in the typewriter face so the cards read as a column; a card with
+    nothing in it is a place to drop a file.
     """
+
+    SAID = {"Top": "верхний экран", "Bottom": "нижний экран",
+            "Lamels": "ламели", "Frame": "накладка", "Sound": "звук",
+            "Kinetic": "моторы"}
 
     def __init__(self, title: str, screen: str, on_pick, on_drop,
                  overlay: bool = False, on_place=None, on_gain=None,
@@ -609,46 +667,37 @@ class Row(QWidget):
         self.sound = sound
         self.motors = motors
         self.on_drop = on_drop
+        self.on_pick = on_pick
         self.on_gain = on_gain or (lambda _row: None)
         self.setAcceptDrops(True)
         # What the test driver knows this row and its widgets by. Six rows are
         # built from this one class, so every name carries the row's own.
         tag = _tag(title)
         self.setObjectName(f"qa_row_{tag}")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._quiet = (f"#qa_row_{tag} {{ background:{theme.CARD};"
+                       f" border:1px solid {theme.CARD_EDGE}; border-radius:6px; }}")
+        self._lit = (f"#qa_row_{tag} {{ background:{theme.ACCENT};"
+                     f" border:1px solid {theme.LINE}; border-radius:6px; }}")
+        self.setStyleSheet(self._quiet)
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        whole = QVBoxLayout(self)
+        whole.setContentsMargins(12, 7, 12, 8)
+        whole.setSpacing(4)
 
-        # The screen's mark, in the colour it has everywhere in the window.
+        head = QHBoxLayout()
+        head.setSpacing(8)
         mark = QLabel()
-        mark.setPixmap(theme.cell(title, 15))
-        mark.setFixedWidth(17)
-        layout.addWidget(mark)
+        mark.setPixmap(theme.cell(title, 8))
+        mark.setFixedWidth(10)
+        head.addWidget(mark)
         self.label = QLabel(title)
-        self.label.setFixedWidth(52)
-        layout.addWidget(self.label)
-
-        self.field = QLineEdit()
-        self.field.setObjectName(f"qa_path_{tag}")
-        self.field.setPlaceholderText(
-            "перетащите сюда WAV или выберите файл" if sound
-            else "перетащите сюда JSON моторов или выберите файл" if motors
-            else "перетащите сюда ролик или картинку, или выберите файл")
-        self.field.setAcceptDrops(False)     # the row handles it for the whole strip
-        layout.addWidget(self.field, 3)
-
-        browse = iconed(QPushButton(), "file", "Выбрать файл",
-                        "Выбрать файл для этой строки. Перетащить его на "
-                        "строку — то же самое.", name=f"qa_browse_{tag}")
-        browse.clicked.connect(lambda: on_pick(self))
-        layout.addWidget(browse)
-
-        self.clear_button = iconed(QPushButton(), "clear", "Убрать",
-                                   "Очистить строку. Сам файл не трогается.",
-                                   name=f"qa_clear_{tag}")
-        self.clear_button.clicked.connect(self.clear)
-        layout.addWidget(self.clear_button)
+        self.label.setFont(theme.ui(10, QFont.Weight.DemiBold))
+        head.addWidget(self.label)
+        said = QLabel(self.SAID.get(title, ""))
+        said.setStyleSheet(f"color:{theme.QUIET}; font-size:12px;")
+        head.addWidget(said)
+        head.addStretch(1)
 
         self.how = None
         if overlay:
@@ -656,7 +705,7 @@ class Row(QWidget):
             self.how.setObjectName(f"qa_how_{tag}")
             self.how.addItem("Вписать", "Fit")
             self.how.addItem("Растянуть", "Stretch")
-            self.how.setFixedWidth(96)
+            self.how.setFixedWidth(104)
             self.how.setToolTip(
                 "«Вписать» сохраняет пропорции кадра и ставит его по центру, "
                 "а экран остаётся виден по бокам. «Растянуть» тянет кадр к "
@@ -664,32 +713,85 @@ class Row(QWidget):
             # Not a reload: the file has not changed, only where it sits, and
             # reloading would throw away the clock and start again from zero.
             self.how.currentIndexChanged.connect(lambda _: on_place())
-            layout.addWidget(self.how)
+            head.addWidget(self.how)
+
+        browse = QPushButton("Заменить")
+        browse.setObjectName(f"qa_browse_{tag}")
+        browse.setProperty("link", True)
+        browse.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        browse.setToolTip("Выбрать файл для этой строки. Перетащить его на "
+                          "карточку — то же самое.")
+        browse.clicked.connect(lambda: on_pick(self))
+        head.addWidget(browse)
+        self.browse_button = browse
+
+        self.clear_button = QPushButton("×")
+        self.clear_button.setObjectName(f"qa_clear_{tag}")
+        self.clear_button.setProperty("link", True)
+        self.clear_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.clear_button.setToolTip("Убрать файл из строки. Сам файл не "
+                                     "трогается.")
+        self.clear_button.setFixedWidth(18)
+        self.clear_button.clicked.connect(self.clear)
+        head.addWidget(self.clear_button)
+        whole.addLayout(head)
+
+        # The path, whole, in a field: what the rest of the viewer reads and a
+        # session keeps. Never on show -- a path in a column this narrow is
+        # its middle -- the card shows the file's name, and the path is in
+        # the name's hover.
+        self.field = QLineEdit()
+        self.field.setObjectName(f"qa_path_{tag}")
+        self.field.setAcceptDrops(False)     # the card handles it
+        self.field.textChanged.connect(lambda _: self._shown())
+        self.field.setVisible(False)
+        self.file = QLabel()
+        self.file.setObjectName(f"qa_file_{tag}")
+        self.file.setStyleSheet("font-size:13px;")
+        self.file.setTextFormat(Qt.TextFormat.PlainText)
+        self.file.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                QSizePolicy.Policy.Preferred)
+        whole.addWidget(self.file)
+
+        self.note = QLabel()
+        self.note.setObjectName(f"qa_note_{tag}")
+        self.note.setFont(theme.mono(8.5))
+        self.note.setStyleSheet(f"color:{theme.META};")
+        self.note.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                QSizePolicy.Policy.Preferred)
+        whole.addWidget(self.note)
+
+        self.drop = QLabel(
+            "Перетащите WAV или выберите файл" if sound
+            else "Перетащите JSON моторов или выберите файл" if motors
+            else "Перетащите ролик или картинку, или выберите файл")
+        self.drop.setObjectName(f"qa_drop_{tag}")
+        self.drop.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.drop.setWordWrap(True)
+        self.drop.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.drop.setStyleSheet(
+            f"QLabel {{ border:1px dashed #3a3d44; border-radius:4px; padding:8px;"
+            f" color:{theme.QUIET}; font-size:12px; }}")
+        self.drop.mousePressEvent = lambda _event: on_pick(self)
+        whole.addWidget(self.drop)
 
         # By eye, on top of whatever the automatic match works out. A slider
         # rather than a number because this is a judgement, not a measurement,
-        # and the useful move is nudging it while looking at the picture.
-        #
-        # The motors have none. What they do is not a matter of taste: the
-        # file says how far the screens travel, and anything else is a picture
-        # of a building that does not exist. The width is kept as a gap so the
-        # rows still line up.
+        # and the useful move is nudging it while looking at the picture. The
+        # motors have none: what they do is not a matter of taste.
         self.gain = None
-        if motors:
-            beside = QWidget()
-            beside.setObjectName(f"qa_gap_{tag}")
-            beside.setVisible(False)
-            layout.addWidget(beside)
-        else:
-            # The value lives here; the slider a hand moves is in the Экраны
-            # panel over the picture, which is where the rest of how a screen
-            # looks lives too. Kept on the row, out of sight, because the row
-            # is what a screen's brightness belongs to and is saved with.
+        if not motors:
+            line = QHBoxLayout()
+            line.setSpacing(10)
+            said = QLabel("Громкость" if sound else "Яркость")
+            said.setFixedWidth(62)
+            said.setStyleSheet(f"color:{theme.QUIET}; font-size:12px;")
+            line.addWidget(said)
             self.gain = QSlider(Qt.Orientation.Horizontal)
-            self.gain.setObjectName(f"qa_rowgain_{tag}")
+            self.gain.setObjectName(f"qa_gain_{tag}")
             self.gain.setRange(0, 200)
             self.gain.setValue(100)
-            self.gain.setFixedWidth(96)
+            self.gain.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             if sound:
                 # Volume, and there is no such thing as louder than the file.
                 self.gain.setRange(0, 100)
@@ -699,24 +801,17 @@ class Row(QWidget):
                 self.gain.setToolTip(
                     "Яркость этого экрана, на глаз. 1.00 оставляет её такой, "
                     "какой её делают геометрия и «Сравнять яркость». "
-                    "Двойной щелчок возвращает обратно.")
+                    "Двойной щелчок по карточке возвращает обратно.")
             self.gain.valueChanged.connect(self._gain_moved)
-            self.gain.setVisible(False)
-            layout.addWidget(self.gain)
-
+            line.addWidget(self.gain, 1)
             self.gain_shown = QLabel("1.00")
-            self.gain_shown.setObjectName(f"qa_rowgainvalue_{tag}")
-            self.gain_shown.setFont(QFont(MONO, 9))
-            self.gain_shown.setVisible(False)
-            layout.addWidget(self.gain_shown)
-
-        self.note = QLabel()
-        self.note.setObjectName(f"qa_note_{tag}")
-        self.note.setMinimumWidth(160)
-        self.note.setStyleSheet(f"color:{theme.QUIET};")
-        layout.addWidget(self.note, 2)
-
-        self._quiet = self.styleSheet()
+            self.gain_shown.setObjectName(f"qa_gainvalue_{tag}")
+            self.gain_shown.setFont(theme.mono(9))
+            self.gain_shown.setFixedWidth(36)
+            self.gain_shown.setAlignment(Qt.AlignmentFlag.AlignRight
+                                         | Qt.AlignmentFlag.AlignVCenter)
+            line.addWidget(self.gain_shown)
+            whole.addLayout(line)
         self._shown()
 
     @property
@@ -741,8 +836,16 @@ class Row(QWidget):
         self.on_drop()
 
     def _shown(self) -> None:
-        """Nothing loaded, nothing to clear."""
-        self.clear_button.setEnabled(bool(self.field.text()))
+        """A file, or a place to drop one."""
+        path = self.field.text().strip()
+        loaded = bool(path)
+        self.file.setText(Path(path).name if loaded else "")
+        self.file.setToolTip(path)
+        self.file.setVisible(loaded)
+        self.note.setVisible(loaded)
+        self.drop.setVisible(not loaded)
+        self.clear_button.setVisible(loaded)
+        self.browse_button.setText("Заменить" if loaded else "Выбрать")
 
     # -- dropping ------------------------------------------------------------
 
@@ -761,7 +864,7 @@ class Row(QWidget):
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802 -- Qt naming
         if event.mimeData().hasUrls() and self._movie_in(event):
-            self.setStyleSheet(f"background:{theme.LIVE_DIM};")
+            self.setStyleSheet(self._lit)
             event.acceptProposedAction()
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802
@@ -779,17 +882,6 @@ class Row(QWidget):
             self.field.setText(path)
             self._shown()
             self.on_drop()
-
-
-FOLD_HEADER = ("QPushButton { text-align:left; padding:2px 6px; border:none; "
-               f"background:transparent; color:{theme.QUIET}; }} "
-               f"QPushButton:hover {{ color:{theme.TEXT}; }}")
-FOLD_HEADER_WARN = FOLD_HEADER.replace(f"color:{theme.QUIET}", f"color:{theme.WARN}", 1)
-LEVEL_BUTTON = "QPushButton { padding:2px 10px; }"
-SCREENS_PANEL = ("QFrame#qa_screens { background:rgba(23,28,35,235); "
-                 f"border:1px solid {theme.SEAM}; border-radius:4px; }} "
-                 "QFrame#qa_screens QLabel, QFrame#qa_screens QCheckBox, "
-                 "QFrame#qa_screens QSlider { background:transparent; }")
 
 
 class Viewer(QMainWindow):
@@ -845,7 +937,6 @@ class Viewer(QMainWindow):
         self._show_was = 0.0           # where the playhead was, for the loops
         self._split_sizes: list = []
         self._keys_open = False
-        self._levels_open = True       # the floating panel of brightnesses
         # The editor's: the show's history, and its working file once it has
         # one. `ask_resume` is what asks whether to carry on with a draft --
         # a dialog, which the tests answer for themselves.
@@ -885,11 +976,8 @@ class Viewer(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        # The show's own line: which show, and opening another. Only in Шоу --
-        # in the quick look it would be a line of the window given to nothing.
-        self.show_bar = self._show_bar()
-        layout.addWidget(self.show_bar)
-        self.show_bar.setVisible(False)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         # Named, not ordered: the fields can be rearranged without the videos
         # quietly going to the wrong screens.
@@ -917,92 +1005,58 @@ class Viewer(QMainWindow):
         # Not `self.show`, which would put a number where Qt keeps a method.
         self.show_now = None
 
-        # The rows fold away. Six of them are 204 pixels -- on a window a
-        # thousand tall that is a fifth of the picture's height, going to
-        # fields that are set once and then read. So they live in a panel with
-        # a line that says what is loaded, and the line is enough to work by.
-        # Whether the rows are up, kept as a fact rather than asked of the
-        # widget: `isVisible` is false for everything in a window that has
-        # not been shown yet, and reading it during the build hid the link
-        # button for good and made the folded line lie about the fold.
-        self.sources_open = True
-        self.sources = QWidget()
-        self.sources.setObjectName("qa_sources")
-        stacked = QVBoxLayout(self.sources)
-        stacked.setContentsMargins(0, 0, 0, 0)
-        stacked.setSpacing(4)
-
-        # A strip rather than the bare button, because the link stands in it
-        # beside the button -- beside it, not inside it: a button within the
-        # button that folds the panel is a click that lands on the wrong one.
-        strip = QWidget()
-        strip.setObjectName("qa_sources_strip")
-        self.sources_strip = QHBoxLayout(strip)
-        self.sources_strip.setContentsMargins(0, 0, 0, 0)
-        self.sources_strip.setSpacing(6)
-        self.sources_head = QPushButton()
-        self.sources_head.setObjectName("qa_sources_header")
-        self.sources_head.setFlat(True)
-        self.sources_head.setStyleSheet(FOLD_HEADER)
-        self.sources_head.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        # Through a lambda, not straight at the method: `clicked` hands its
-        # handler a bool -- False for a button that is not checkable -- and
-        # that landed in `open_it`, so every click folded and none unfolded.
-        self.sources_head.clicked.connect(lambda: self._fold_sources())
-        HINTS[self.sources_head] = (
-            "Источники",
-            "Строки с файлами: что на каком экране, звук, моторы. Свернуть "
-            "их — картинке достаётся вся высота окна; развернуть — можно "
-            "менять файлы. Состояние запоминается.")
-        self.sources_strip.addWidget(self.sources_head, 1)
-        stacked.addWidget(strip)
-
-        self.sources_body = QWidget()
-        self.sources_body.setObjectName("qa_sources_body")
-        self.source_rows = QVBoxLayout(self.sources_body)
-        self.source_rows.setContentsMargins(0, 0, 0, 0)
-        self.source_rows.setSpacing(6)
-        for row in self.rows:
-            self.source_rows.addWidget(row)
-        stacked.addWidget(self.sources_body)
-        layout.addWidget(self.sources)
-
-        # Tying Top and Bottom together. In the Экраны panel with the two
-        # sliders it ties, which is where somebody looking at them looks; it
-        # is laid there when the panel is built.
-        self.linked = QCheckBox("Связать Top и Bottom")
+        # Tying Top and Bottom together: at the foot of the sources, under
+        # the two sliders it ties. In the show it is also on the screens'
+        # column, as a second button that follows this one.
+        self.linked = QPushButton("Связать")
         self.linked.setObjectName("qa_link")
+        self.linked.setCheckable(True)
+        self.linked.setProperty("link", True)
         self.linked.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.linked.setToolTip(
             "Связывает ползунки Top и Bottom в том отношении, в каком они "
             "стоят на момент включения. Выставьте каждый так, чтобы экраны "
-            "читались одинаково, поставьте галку — и дальше любой из ползунков "
+            "читались одинаково, нажмите это — и дальше любой из ползунков "
             "поднимает и опускает оба, не теряя баланса. Если одному упереться "
             "в край, останавливаются оба.")
         self.linked.toggled.connect(self._link_changed)
+        self.linked.toggled.connect(lambda _on: self._say_link())
 
-        # max_fps defaults to 30 in rendercanvas, which is not a thing to
-        # discover by wondering why sixty frames a second look like thirty.
-        layout.addLayout(self._scene_controls())
+        # The line along the top: the name, Просмотр or Шоу, how the building
+        # is drawn, the layers, and the checks and the log.
+        layout.addWidget(self._scene_controls())
+        # The show's own line: which show, and opening another. Only in Шоу --
+        # in the quick look it would be a line of the window given to nothing.
+        self.show_bar = self._show_bar()
+        layout.addWidget(self.show_bar)
+        self.show_bar.setVisible(False)
+
+        body = QWidget()
+        body.setObjectName("qa_body")
+        across = QHBoxLayout(body)
+        across.setContentsMargins(0, 0, 0, 0)
+        across.setSpacing(0)
+        across.addWidget(self._sources_column())
 
         # On demand rather than always: a still picture redrawn sixty times a
         # second costs a laptop its battery and tells nobody anything. A frame
         # is asked for when something changes, and while a clip is playing.
-        # The picture, with the show's column beside it, over the show's
+        # The picture, with the show's columns beside it, over the show's
         # strips, with a boundary between them that is dragged. Built once and
         # around the canvas, before the canvas is handed to the card: a
         # surface belongs to the window it was made for, and moving the canvas
         # into another one afterwards is not a thing to find out about on
-        # somebody else's machine. In Просмотр the column and the strips are
+        # somebody else's machine. In Просмотр the columns and the strips are
         # simply not on show.
         self.split = QSplitter(Qt.Orientation.Vertical)
         self.split.setObjectName("qa_split")
         self.split.setChildrenCollapsible(False)
+        self.split.setHandleWidth(1)
         upper = QWidget()
         upper.setObjectName("qa_upper")
         beside = QHBoxLayout(upper)
         beside.setContentsMargins(0, 0, 0, 0)
-        beside.setSpacing(4)
+        beside.setSpacing(0)
         self.canvas = RenderCanvas(parent=upper, update_mode="ondemand",
                                    max_fps=60, vsync=True)
         self.canvas.setObjectName("qa_canvas")
@@ -1015,7 +1069,7 @@ class Viewer(QMainWindow):
         self._full_screen_button()
         self._frame_line()
         self._keys_card()
-        self._levels_panel()
+        self._look_bar()
         # How far into the flat layout somebody is looking. One is the whole
         # of it, and the focus is which point of it sits in the middle.
         #
@@ -1064,21 +1118,28 @@ class Viewer(QMainWindow):
         self.show_view.dropped.connect(self._drop_files)
         self.show_view.editing_changed.connect(self._editing_shown)
         self.show_view.range_wanted.connect(self._range_from_show)
-        layout.addWidget(self.split, 1)
+        across.addWidget(self.split, 1)
+        layout.addWidget(body, 1)
 
-        # A widget rather than a bare row, so that in Шоу it can move up to
-        # stand beside the show's time, over the loops, and come back.
+        # A widget rather than a bare row, so that in Шоу its buttons and its
+        # grid can move up to stand beside the show's time, and come back.
         self.transport_bar = self._transport()
         layout.addWidget(self.transport_bar)
-        self._transport_at = layout.indexOf(self.transport_bar)
 
         self.export_bar = QWidget()
+        self.export_bar.setObjectName("qa_render_bar")
+        self.export_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.export_bar.setStyleSheet(
+            f"#qa_render_bar {{ background:{theme.PANEL};"
+            f" border-top:1px solid {theme.SEAM}; }}")
+        self.export_bar.setFixedHeight(60)
         self.export_bar.setLayout(self._export_controls())
         layout.addWidget(self.export_bar)
 
         self.rebake_bar = self._rebake_controls()
         layout.addWidget(self.rebake_bar)
         self.rebake_bar.setVisible(False)
+        self._screens_column()
 
         # Everything whose position is worth carrying to the next session,
         # gathered in one place rather than scattered through the handlers
@@ -1095,47 +1156,23 @@ class Viewer(QMainWindow):
             combo.currentIndexChanged.connect(lambda _: self._remember())
         self.out_name.textChanged.connect(lambda _: self._remember())
 
-        # The line about the card and how fast it is drawing, with the file by
-        # file counts under it. They fold away the same way the rows do: the
-        # counts are for when something stutters, and the rest of the time
-        # they are six lines of the window given to numbers.
-        # Folded to begin with: the counts are for when something stutters.
+        # The decoder's counts, file by file, over the status line, and
+        # folded away to begin with: they are for when something stutters.
         self.stats_open = False
         self._dropped_seen = 0
         self._dropped_grew = 0.0
-        self.stats_head = QPushButton()
-        self.stats_head.setObjectName("qa_stats_header")
-        self.stats_head.setFlat(True)
-        self.stats_head.setStyleSheet(FOLD_HEADER)
-        self.stats_head.setFont(QFont(MONO, 9))
-        self.stats_head.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.stats_head.setSizePolicy(QSizePolicy.Policy.Ignored,
-                                      QSizePolicy.Policy.Fixed)
-        self.stats_head.setToolTip("Скорость отрисовки и счётчики чтения по "
-                                   "каждому файлу. Свернуть — останется одна "
-                                   "строка. Состояние запоминается.")
-        # Through a lambda: `clicked` would hand its bool to `open_it`.
-        self.stats_head.clicked.connect(lambda: self._fold_stats())
-        counts = QHBoxLayout()
-        counts.setSpacing(6)
-        counts.addWidget(self.stats_head, 1)
-        # The log is about the same thing the counts are: what the program is
-        # doing. It used to end the transport, among the buttons for time.
-        log = iconed(QPushButton(), "log", "Лог",
-                     "Открыть папку, в которую пишется эта сессия",
-                     side=24, name="qa_log")
-        log.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        log.clicked.connect(self._open_log)
-        counts.addWidget(log)
-        layout.addLayout(counts)
         self.stats = QLabel()
         self.stats.setObjectName("qa_stats")
-        self.stats.setFont(QFont(MONO, 9))
-        self.stats.setStyleSheet(f"color:{theme.QUIET};")
+        self.stats.setFont(theme.mono(8.5))
+        self.stats.setStyleSheet(
+            f"QLabel {{ color:{theme.QUIET}; background:{theme.SUNKEN};"
+            f" border-top:1px solid {theme.SEAM}; padding:6px 16px; }}")
         self.stats.setTextFormat(Qt.TextFormat.RichText)
         self.stats.setSizePolicy(QSizePolicy.Policy.Ignored,
                                  QSizePolicy.Policy.Preferred)
+        self.stats.setVisible(False)
         layout.addWidget(self.stats)
+        layout.addWidget(self._status_bar())
 
         self.painter = None
         self.context = None
@@ -1173,7 +1210,7 @@ class Viewer(QMainWindow):
                     self.solid.load_calibration(name, read_rgba(picture))
             self.canvas.request_draw(self._draw)
         else:
-            self.stats_head.setText(self.failure)
+            self._say_failure()
 
         self._note_output()
         self._framing_changed()
@@ -1195,57 +1232,64 @@ class Viewer(QMainWindow):
         beat.start(16)
         self._beat_timer = beat
 
-    def _level_switch(self) -> QHBoxLayout:
-        """Просмотр or Шоу: two small buttons at the head of the bar of modes.
+    def _level_switch(self) -> QFrame:
+        """Просмотр or Шоу: one control of two halves, at the head of the top line.
 
-        In that bar rather than on a line of their own above everything. On
-        their own, with nothing beside them in the quick look, they took half
-        the window's width each; here they are the same size in both.
+        Two segments of one control rather than two buttons, because it is a
+        choice between two, and it keeps its size and its place in both.
         """
-        bar = QHBoxLayout()
+        holder = QFrame()
+        holder.setObjectName("qa_levels")
+        holder.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        holder.setStyleSheet(f"#qa_levels {{ background:{theme.DEEP};"
+                             f" border:1px solid {theme.SEAM}; border-radius:6px; }}")
+        bar = QHBoxLayout(holder)
+        bar.setContentsMargins(2, 2, 2, 2)
         bar.setSpacing(0)
         self.levels = QButtonGroup(self)
         self.levels.setExclusive(True)
         self.level_buttons = {}
         for key, text, story in (
                 ("view", "Просмотр",
-                 "Быстрый просмотр: по файлу на строку, все с нулевого кадра. "
-                 "Положил, посмотрел на здании, отрендерил."),
+                 "Быстрый просмотр: по файлу на карточку, все с нулевого "
+                 "кадра. Положил, посмотрел на здании, отрендерил."),
                 ("show", "Шоу",
                  "Шоу на таймлайне: клипы на своих кадрах, слои, фейды, лупы, "
-                 "кью. Открыто на чтение — ничего не сдвинуть. Без открытого "
-                 ".trix показывает строки Просмотра как шоу, цепочки из 0.3 "
-                 "— друг за другом.")):
+                 "кью; правится в редакторе. Без открытого .trix показывает "
+                 "карточки Просмотра как шоу.")):
             button = QPushButton(text)
             button.setObjectName(f"qa_level_{key}")
             button.setCheckable(True)
+            button.setProperty("segment", True)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            button.setStyleSheet(LEVEL_BUTTON)
             button.setToolTip(story)
-            button.setSizePolicy(QSizePolicy.Policy.Fixed,
-                                 QSizePolicy.Policy.Fixed)
             button.clicked.connect(lambda _=False, k=key: self._set_level(k))
             self.levels.addButton(button)
             self.level_buttons[key] = button
             bar.addWidget(button)
         self.level_buttons["view"].setChecked(True)
-        return bar
+        return holder
 
     def _show_bar(self) -> QWidget:
-        """The line above everything in Шоу: which show, and the editor.
+        """The show's own line, under the top one in Шоу: which show, and the editor.
 
-        Opening a show and starting a new one; the editor's switch; the name,
-        which is the show file's `project.name` and is typed into only in the
-        editor; what is in it; and in the editor, going back and forward
-        through the changes, a cue, deleting, and giving the draft up.
+        Opening a show and starting a new one; the name, which is the show
+        file's `project.name` and is typed into only in the editor, over what
+        is in the show; the draft, as a pill, while there is one; and at the
+        far end the editor's switch, with going back and forward through the
+        changes, a cue, deleting and giving the draft up beside it.
         """
         holder = QWidget()
         holder.setObjectName("qa_show_bar")
+        holder.setFixedHeight(48)
+        holder.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        holder.setStyleSheet(f"#qa_show_bar {{ background:{theme.SHOWBAR};"
+                             f" border-bottom:1px solid {theme.SEAM}; }}")
         bar = QHBoxLayout(holder)
-        bar.setContentsMargins(0, 0, 0, 0)
-        bar.setSpacing(6)
+        bar.setContentsMargins(16, 0, 16, 0)
+        bar.setSpacing(12)
 
-        def button(text, name, hint, act, checkable=False):
+        def button(text, name, hint, act, checkable=False, into=True):
             one = QPushButton(text)
             one.setObjectName(name)
             one.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -1254,7 +1298,8 @@ class Viewer(QMainWindow):
             one.setSizePolicy(QSizePolicy.Policy.Fixed,
                               QSizePolicy.Policy.Fixed)
             one.clicked.connect(act)
-            bar.addWidget(one)
+            if into:
+                bar.addWidget(one)
             return one
 
         self.open_show_button = button(
@@ -1265,36 +1310,53 @@ class Viewer(QMainWindow):
         button("Новое шоу", "qa_new_show",
                "Пустое шоу на 22 минуты, сразу в редакторе: файлы бросаются "
                "из проводника прямо на дорожки.", lambda: self._new_show())
-        bar.addWidget(_divider())
-        self.editor_button = button(
-            "\u270e Редактор", "qa_editor",
-            "Отпереть шоу: клипы тащатся, поля справа пишут в клип, лупы "
-            "рисуются, файлы бросаются на дорожки. Каждая правка сама "
-            "пишется в черновик рядом с программой (drafts); сам .trix не "
-            "трогается никогда.", lambda on: self._set_editing(on), True)
-        self.editor_button.setStyleSheet(LEVEL_BUTTON)
+
+        # The name over what is in the show: two lines, the name the larger.
+        names = QWidget()
+        names.setObjectName("qa_show_names")
+        _see_through(names)
+        stack = QVBoxLayout(names)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setSpacing(0)
         self.project_name = QLineEdit()
         self.project_name.setObjectName("qa_project_name")
+        self.project_name.setFrame(False)
         self.project_name.setPlaceholderText("имя шоу")
-        self.project_name.setFixedWidth(300)
         self.project_name.setReadOnly(True)
+        self.project_name.setFixedWidth(220)
+        self.project_name.setStyleSheet(
+            f"QLineEdit {{ font-family:{theme.UI_CSS}; font-size:13px;"
+            f" font-weight:600; padding:0px 2px; }}")
         self.project_name.setToolTip("Имя шоу — project.name в .trix. Правится "
                                      "в редакторе.")
         self.project_name.editingFinished.connect(self._renamed)
-        bar.addWidget(self.project_name)
+        stack.addWidget(self.project_name)
         self.project = QLabel()
         self.project.setObjectName("qa_project")
-        self.project.setFont(QFont(MONO, 9))
+        self.project.setFont(theme.mono(8.5))
         self.project.setTextFormat(Qt.TextFormat.PlainText)
         self.project.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
-        # However long the name, it does not get to widen the window.
+        # However long the list, it does not get to widen the window.
         self.project.setSizePolicy(QSizePolicy.Policy.Ignored,
                                    QSizePolicy.Policy.Preferred)
-        bar.addWidget(self.project, 1)
+        stack.addWidget(self.project)
+        bar.addWidget(names, 1)
+
+        # The draft, while there is one: the work is not in the show file
+        # yet, and that is the one thing about it worth a colour of its own.
+        self.draft_pill = QLabel()
+        self.draft_pill.setObjectName("qa_draft")
+        self.draft_pill.setStyleSheet(
+            f"QLabel {{ background:{theme.DRAFT_BG}; color:{theme.GOLD};"
+            f" border-radius:11px; padding:3px 10px; font-size:12px; }}")
+        self.draft_pill.setVisible(False)
+        bar.addWidget(self.draft_pill)
+        bar.addStretch(1)
+
         self.editor_only = [
-            button("\u21b6", "qa_undo", "Отменить (Ctrl+Z)", lambda: self._undo()),
-            button("\u21b7", "qa_redo", "Вернуть (Ctrl+Y)", lambda: self._redo()),
+            button("↶", "qa_undo", "Отменить (Ctrl+Z)", lambda: self._undo()),
+            button("↷", "qa_redo", "Вернуть (Ctrl+Y)", lambda: self._redo()),
             button("+ кью", "qa_cue_add",
                    "Кью на кадре плейхеда, с тем же адресом, что у кью перед "
                    "ним. Universe, channel и value — справа.",
@@ -1306,11 +1368,18 @@ class Viewer(QMainWindow):
                    "стирается: уходит в drafts\\old.", lambda: self._revert()),
         ]
         for widget in self.editor_only[:2]:
-            widget.setFixedWidth(30)
-            widget.setStyleSheet("QPushButton { padding:2px 0px; "
+            widget.setFixedWidth(34)
+            widget.setStyleSheet("QPushButton { padding:4px 0px; "
                                  "font-size:14px; }")
         for widget in self.editor_only:
             widget.setVisible(False)
+        self.editor_button = button(
+            "✎ Редактор", "qa_editor",
+            "Отпереть шоу: клипы тащатся, поля справа пишут в клип, лупы "
+            "рисуются, файлы бросаются на дорожки. Каждая правка сама "
+            "пишется в черновик рядом с программой (drafts); сам .trix не "
+            "трогается никогда.", lambda on: self._set_editing(on), True)
+        _even(bar)
         return holder
 
     # -- the editor ------------------------------------------------------------
@@ -1563,8 +1632,8 @@ class Viewer(QMainWindow):
     def _set_level(self, level: str) -> None:
         """Into the quick look or into the show, each with its own content.
 
-        Each keeps what it had. The rows are the quick look's and the show
-        is the show's: going into Шоу and back leaves the rows as they were,
+        Each keeps what it had. The cards are the quick look's and the show
+        is the show's: going into Шоу and back leaves the cards as they were,
         whatever the show had on it, so nothing is lost either way round.
         """
         level = "show" if level == "show" else "view"
@@ -1585,19 +1654,10 @@ class Viewer(QMainWindow):
         self.level_buttons[level].setChecked(True)
         showing = level == "show"
         self.sources.setVisible(not showing)
-        self.slider.setVisible(not showing)     # the ruler is the timeline
         self.show_side.setVisible(showing)
         self.show_pane.setVisible(showing)
         self.show_bar.setVisible(showing)
-        # The transport stands beside the show's time, over the loops; in the
-        # quick look it goes back under the picture, where it was.
-        if showing:
-            self.show_pane.header.insertWidget(0, self.transport_bar)
-        else:
-            self.centralWidget().layout().insertWidget(self._transport_at,
-                                                       self.transport_bar)
-        self.frame_label.setVisible(not showing)
-        self.time_label.setVisible(not showing)
+        self._move_controls(showing)
         self.keys_card.setText(timeline.keys_text(level))
         # The strips need their three hundred pixels, and the picture can
         # spare them: the boundary gives them back.
@@ -1618,6 +1678,33 @@ class Viewer(QMainWindow):
             self._load()
         self._lay_overlays()
         self._remember()
+
+    def _move_controls(self, showing: bool) -> None:
+        """The few controls both levels have, where each level keeps them.
+
+        Moved rather than made twice, so there is one of each to be set and
+        remembered. In Шоу the transport's buttons and its grid go up beside
+        the show's time, and the match and the link go to the show's Экраны,
+        under the sliders they are about; in Просмотр they come back.
+        """
+        header = self.show_pane.header
+        if showing:
+            header.insertWidget(0, self.transport_buttons)
+            header.addWidget(self.sync_box)
+            self.show_switches.insertWidget(0, self.matching)
+            self.show_switches.insertWidget(1, self.linked)
+        else:
+            self._transport_line.insertWidget(0, self.transport_buttons)
+            self._transport_line.addWidget(self.sync_box)
+            self.look_line.insertWidget(0, self.matching)
+            self._banner_line.addWidget(self.linked)
+        self.transport_bar.setVisible(not showing)
+        for widget in (self.transport_buttons, self.sync_box, self.linked):
+            widget.setVisible(True)
+        # Said outright rather than left to the layout's own showing, which
+        # comes a turn later -- after the bar over the picture was measured.
+        self.matching.setVisible(self.mode.currentText() != "ReBake")
+        self._say_link()
 
     def _lay_split(self) -> None:
         """The strips at their height, or where somebody last dragged them."""
@@ -1990,25 +2077,34 @@ class Viewer(QMainWindow):
         self.touch()
 
     def _say_project(self, show, trouble: str = "") -> None:
-        """The name in its field, and what the show is, beside it."""
+        """The name, what the show is under it, and the draft's pill."""
         self.project_name.blockSignals(True)
         self.project_name.setText(show.name)
         self.project_name.blockSignals(False)
+        self.project_name.setCursorPosition(0)
+        self.project_name.ensurePolished()
+        wide = self.project_name.fontMetrics().horizontalAdvance(
+            show.name or "имя шоу") + 18
+        self.project_name.setFixedWidth(max(160, min(560, wide)))
         if trouble:
             said = f"{trouble}  —  показаны строки Просмотра"
-            self.project.setStyleSheet("color:#e25c5c;")
+            colour = theme.ERROR
         else:
             described = show.describe()
             said = (described[len(show.name):].strip()
                     if show.name and described.startswith(show.name)
                     else described.strip())
             if self._show_source == "rows" and self.draft is None:
-                said = "строки Просмотра как шоу   " + said
-            if self.draft is not None:
-                said += f"   \u270e черновик, правок {self.draft.changes}"
-            self.project.setStyleSheet(
-                "color:#f08c4a;" if show.missing() else "color:#8d97a5;")
+                said = "строки Просмотра как шоу · " + said
+            colour = theme.WARN if show.missing() else theme.QUIET
+        self.project.setStyleSheet(f"color:{colour};")
         self.project.setText(said)
+        drafted = self.draft is not None and not trouble
+        self.draft_pill.setVisible(drafted)
+        if drafted:
+            self.draft_pill.setText(f"черновик · правок {self.draft.changes}")
+            self.draft_pill.setToolTip(f"черновик: {self.draft.where}\n"
+                                       "сам .trix не трогается")
         self.project.setToolTip(
             (f"черновик: {self.draft.where}\n" if self.draft else "")
             + (self.trix_path or "строки Просмотра"))
@@ -2105,27 +2201,30 @@ class Viewer(QMainWindow):
             None, seconds, lambda index, h=held: h[index] is not None, p))
 
     def _keys_card(self) -> None:
-        """The keys of the show mode, over the picture, when asked for."""
+        """The keys and the mouse, over the picture's top left, when asked for."""
         self.keys_button = QPushButton("?", self.canvas)
         self.keys_button.setObjectName("qa_keys_button")
-        self.keys_button.setFixedSize(28, 28)
+        self.keys_button.setFixedSize(26, 26)
         self.keys_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.keys_button.setCursor(Qt.CursorShape.PointingHandCursor)
         # No padding: the window's own twelve pixels a side leave a button
-        # 28 wide four pixels for its one character, and it came out as ";".
+        # this small no room for its one character.
         self.keys_button.setStyleSheet(
-            self.OVERLAY_BUTTON
-            + " QPushButton { padding:0px; font-weight:bold; }")
+            f"QPushButton {{ background:{OVERLAY_BG}; border:1px solid {theme.SEAM};"
+            f" border-radius:13px; padding:0px; color:{theme.SECOND};"
+            f" font-weight:600; }}"
+            f" QPushButton:hover {{ background:{theme.RAISED}; color:#ffffff; }}")
         self.keys_button.setToolTip("Клавиши и мышь (?)")
         self.keys_button.clicked.connect(self._toggle_keys)
-        self.keys_button.setVisible(False)
         self.keys_card = QLabel(timeline.keys_text("view"), self.canvas)
         self.keys_card.setObjectName("qa_keys")
-        self.keys_card.setFont(QFont(MONO, 9))
+        self.keys_card.setFont(theme.mono(8.5))
         self.keys_card.setTextFormat(Qt.TextFormat.PlainText)
         self._empty_card()
         self.keys_card.setStyleSheet(
-            "QLabel { background:rgba(20,20,20,205); color:#c8c8c8; "
-            "border:1px solid #3a3a3a; border-radius:4px; padding:8px 10px; }")
+            f"QLabel {{ background:rgba(20,21,24,240); color:{theme.SECOND};"
+            f" border:1px solid {theme.SEAM}; border-radius:6px;"
+            f" padding:10px 12px; }}")
         self.keys_card.setVisible(False)
 
     def _say_loop(self, on: bool) -> None:
@@ -2134,111 +2233,313 @@ class Viewer(QMainWindow):
         where = f" {here[0]}..{here[1]}" if here else ""
         logfile.write(f"show: loop{where} {'holds' if on else 'let go'}")
 
-    def _levels_panel(self) -> None:
-        """The screens: how bright each is, how they are read and backed.
+    def _look_bar(self) -> None:
+        """How the screens look, in one bar over the top right of the picture.
 
-        Over the right-hand side of the picture, where the file's frame never
-        reaches, in both levels and in every way of drawing, and folded away
-        with ›. One place for everything about how the screens look: before,
-        it was split between the rows, the top bar and, in the show, a panel
-        of its own -- with Match in two of them. The sliders here move the
-        rows' own values, which is what a session remembers.
+        Over the picture because that is what each of these changes, and in
+        one bar because they are one question -- how is this being shown:
+        the match, the top's own back, how the alpha is read, what is behind,
+        the render's frame, tiling, the whole monitor, and back to the whole
+        frame. Before, they were split between a bar of their own, a panel
+        over the picture and the top line.
         """
-        panel = QFrame(self.canvas)
-        panel.setObjectName("qa_screens")
-        panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        panel.setStyleSheet(SCREENS_PANEL)
-        panel.setFixedWidth(270)
-        whole = QVBoxLayout(panel)
-        whole.setContentsMargins(10, 6, 8, 10)
-        whole.setSpacing(5)
-        head = QHBoxLayout()
-        title = QLabel("Экраны")
-        title.setFont(theme.heading())
-        title.setStyleSheet(f"color:{theme.QUIET};")
-        head.addWidget(title)
-        head.addStretch(1)
-        hide = QPushButton("\u203a")
-        hide.setObjectName("qa_screens_hide")
-        hide.setFixedSize(22, 20)
-        hide.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        hide.setStyleSheet("QPushButton { padding:0px; }")
-        hide.setToolTip("Убрать панель; вернуть — кнопкой у правого края")
-        hide.clicked.connect(lambda: self._fold_levels(False))
-        head.addWidget(hide)
-        whole.addLayout(head)
+        bar = QFrame(self.canvas)
+        bar.setObjectName("qa_look")
+        bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        bar.setStyleSheet(f"#qa_look {{ background:{OVERLAY_BG};"
+                          f" border:1px solid {theme.SEAM}; border-radius:6px; }}")
+        line = QHBoxLayout(bar)
+        line.setContentsMargins(6, 4, 6, 4)
+        line.setSpacing(6)
+        self.look_line = line
+        self.look_seams = []
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(6)
-        grid.setVerticalSpacing(3)
+        def seam() -> QFrame:
+            one = QFrame()
+            one.setFixedSize(1, 16)
+            one.setStyleSheet(f"background:{theme.EDGE};")
+            self.look_seams.append(one)
+            return one
+
+        for widget in (self.matching, self.solid_top, seam(),
+                       self.alpha_label, self.alpha, self.backing_label,
+                       self.backing, seam(), self.frame_button,
+                       self.tile_button, self.full_button, self.reset_button):
+            line.addWidget(widget)
+        self.look_bar = bar
+
+    def _say_look(self) -> None:
+        """Which of the bar's switches this mode has any use for.
+
+        The frame where there is a render rectangle to mark: Preview and
+        Inspection both write the file camera's frame. Tiling only in Flat,
+        the one mode that draws strips rather than one picture.
+        """
+        mode = self.mode.currentText()
+        self.frame_button.setVisible(mode in (PREVIEW, "Inspection"))
+        self.tile_button.setVisible(mode == "Flat")
+        self.look_seams[0].setVisible(mode != "ReBake")
+
+    def _screens_column(self) -> None:
+        """The show's Экраны: each screen's brightness and the sound's level.
+
+        In Просмотр these are on the cards. The sliders here move the cards'
+        own values -- which are what a session remembers -- so the two never
+        disagree, and the link between Top and Bottom holds in both.
+        """
+        column = self.show_side.screens
         self.levels_sliders = {}
         self.levels_lines = {}
-        for line, (title_, said) in enumerate((("Top", "Top"),
-                                               ("Bottom", "Bottom"),
-                                               ("Lamels", "Lamels"),
-                                               ("Frame", "Frame"),
-                                               ("Sound", "Звук"))):
-            row = self.row_for(title_)
+        for title, said in (("Top", "Top"), ("Bottom", "Bottom"),
+                            ("Lamels", "Lamels"), ("Sound", "Звук")):
+            row = self.row_for(title)
             if row is None or row.gain is None:
                 continue
-            tag = _tag(title_)
-            mark = QLabel()
-            mark.setPixmap(theme.cell(title_, 15))
-            mark.setFixedWidth(17)
+            tag = _tag(title)
+            line = QHBoxLayout()
+            line.setSpacing(10)
             name = QLabel(said)
-            name.setFixedWidth(52)
+            name.setFixedWidth(50)
             slider = ResetSlider(Qt.Orientation.Horizontal)
-            slider.setObjectName(f"qa_gain_{tag}")
+            slider.setObjectName(f"qa_show_gain_{tag}")
             slider.setRange(row.gain.minimum(), row.gain.maximum())
             slider.setValue(row.gain.value())
             slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             slider.setToolTip(row.gain.toolTip())
             value = QLabel(f"{row.multiplier:.2f}")
-            value.setObjectName(f"qa_gainvalue_{tag}")
-            value.setFont(QFont(MONO, 9))
+            value.setObjectName(f"qa_show_gainvalue_{tag}")
+            value.setFont(theme.mono(9))
             value.setFixedWidth(34)
+            value.setAlignment(Qt.AlignmentFlag.AlignRight
+                               | Qt.AlignmentFlag.AlignVCenter)
             slider.valueChanged.connect(row.gain.setValue)
             row.gain.valueChanged.connect(
                 lambda amount, s=slider, v=value: (
                     s.blockSignals(True), s.setValue(amount),
                     s.blockSignals(False), v.setText(f"{amount / 100:.2f}")))
-            for column, widget in enumerate((mark, name, slider, value)):
-                grid.addWidget(widget, line, column)
-            self.levels_sliders[title_] = slider
-            self.levels_lines[title_] = (mark, name, slider, value)
-        whole.addLayout(grid)
-        whole.addWidget(self.linked)
-        rule = QFrame()
-        rule.setFrameShape(QFrame.Shape.HLine)
-        rule.setStyleSheet(f"color:{theme.SEAM};")
-        whole.addWidget(rule)
-        whole.addWidget(self.matching)
-        whole.addWidget(self.solid_top)
-        pair = QGridLayout()
-        pair.setHorizontalSpacing(8)
-        pair.setVerticalSpacing(4)
-        pair.addWidget(self.alpha_label, 0, 0)
-        pair.addWidget(self.alpha, 0, 1)
-        pair.addWidget(self.backing_label, 1, 0)
-        pair.addWidget(self.backing, 1, 1)
-        whole.addLayout(pair)
-        panel.setVisible(False)
-        self.levels_panel = panel
+            line.addWidget(name)
+            line.addWidget(slider, 1)
+            line.addWidget(value)
+            column.addLayout(line)
+            self.levels_sliders[title] = slider
+            self.levels_lines[title] = (name, slider, value)
+        # The match and the link stand here in Шоу, under the sliders they are
+        # about; `_move_controls` brings them and takes them back.
+        self.show_switches = QHBoxLayout()
+        self.show_switches.setSpacing(6)
+        self.show_switches.addStretch(1)
+        column.addSpacing(2)
+        column.addLayout(self.show_switches)
 
-        self.levels_tab = QPushButton("\u2039", self.canvas)
-        self.levels_tab.setObjectName("qa_screens_open")
-        self.levels_tab.setFixedSize(22, 60)
-        self.levels_tab.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.levels_tab.setStyleSheet(
-            self.OVERLAY_BUTTON + " QPushButton { padding:0px; }")
-        self.levels_tab.setToolTip("Экраны: яркость, сравнение, альфа, фон, звук")
-        self.levels_tab.clicked.connect(lambda: self._fold_levels(True))
-        self.levels_tab.setVisible(False)
+    SOURCES_WIDE = 340
+    SOURCES_NARROW = 40
 
-    def _fold_levels(self, open_it: bool) -> None:
-        self._levels_open = bool(open_it)
-        self._lay_overlays()
-        self._remember()
+    def _sources_column(self) -> QWidget:
+        """The files of the quick look, down the left: a card for each.
+
+        A column rather than rows over the picture: six rows across the top
+        were a fifth of the picture's height, going to fields that are set
+        once and then read. A card says what its file is in a line of its own
+        and has its slider under it; one with nothing in it is a place to
+        drop a file. Folded, the column is a strip of the six marks, lit for
+        the ones that are loaded.
+        """
+        # Whether the cards are out, kept as a fact rather than asked of the
+        # widget: `isVisible` is false for everything in a window that has
+        # not been shown yet.
+        self.sources_open = True
+        column = QWidget()
+        column.setObjectName("qa_sources")
+        column.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        column.setStyleSheet(f"#qa_sources {{ background:{theme.PANEL};"
+                             f" border-right:1px solid {theme.SEAM}; }}")
+        column.setFixedWidth(self.SOURCES_WIDE)
+        whole = QVBoxLayout(column)
+        whole.setContentsMargins(0, 0, 0, 0)
+        whole.setSpacing(0)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        self.sources_head_line = head
+        self.sources_head = QPushButton("Источники")
+        self.sources_head.setObjectName("qa_sources_header")
+        self.sources_head.setFlat(True)
+        self.sources_head.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.sources_head.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Through a lambda, not straight at the method: `clicked` hands its
+        # handler a bool, and that landed in `open_it`.
+        self.sources_head.clicked.connect(lambda: self._fold_sources())
+        head.addWidget(self.sources_head, 1)
+        self.sources_count = QLabel()
+        self.sources_count.setObjectName("qa_sources_count")
+        self.sources_count.setStyleSheet(f"color:{theme.QUIET}; font-size:12px;")
+        head.addWidget(self.sources_count)
+        whole.addLayout(head)
+
+        self.sources_marks = QWidget()
+        self.sources_marks.setObjectName("qa_sources_marks")
+        marks = QVBoxLayout(self.sources_marks)
+        marks.setContentsMargins(0, 6, 0, 0)
+        marks.setSpacing(12)
+        self.source_marks = []
+        for _row in self.rows:
+            mark = QLabel()
+            mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            marks.addWidget(mark)
+            self.source_marks.append(mark)
+        marks.addStretch(1)
+        self.sources_marks.setVisible(False)
+        whole.addWidget(self.sources_marks)
+
+        self.sources_body = QWidget()
+        self.sources_body.setObjectName("qa_sources_body")
+        self.source_rows = QVBoxLayout(self.sources_body)
+        self.source_rows.setContentsMargins(10, 0, 10, 8)
+        self.source_rows.setSpacing(5)
+        for row in self.rows:
+            self.source_rows.addWidget(row)
+        self.source_rows.addStretch(1)
+        # Scrolled rather than let set the window's height: six cards are
+        # taller than a laptop's picture wants to give up.
+        self.sources_scroll = QScrollArea()
+        self.sources_scroll.setObjectName("qa_sources_scroll")
+        self.sources_scroll.setWidget(self.sources_body)
+        self.sources_scroll.setWidgetResizable(True)
+        self.sources_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.sources_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        whole.addWidget(self.sources_scroll, 1)
+
+        # The link at the foot, under the two cards whose sliders it ties.
+        self.link_banner = QWidget()
+        self.link_banner.setObjectName("qa_link_holder")
+        around = QVBoxLayout(self.link_banner)
+        around.setContentsMargins(10, 0, 10, 12)
+        self.link_frame = QFrame()
+        self.link_frame.setObjectName("qa_link_banner")
+        self.link_frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._banner_line = QHBoxLayout(self.link_frame)
+        self._banner_line.setContentsMargins(12, 7, 10, 7)
+        self._banner_line.setSpacing(8)
+        self.link_said = QLabel()
+        self.link_said.setObjectName("qa_link_said")
+        self._banner_line.addWidget(self.link_said, 1)
+        self._banner_line.addWidget(self.linked)
+        around.addWidget(self.link_frame)
+        whole.addWidget(self.link_banner)
+
+        self.sources = column
+        self._lay_sources()
+        self._say_link()
+        return column
+
+    def _lay_sources(self) -> None:
+        """The column out with its cards, or folded to its marks."""
+        on = self.sources_open
+        self.sources_scroll.setVisible(on)
+        self.link_banner.setVisible(on)
+        self.sources_count.setVisible(on)
+        self.sources_marks.setVisible(not on)
+        self.sources_head_line.setContentsMargins(
+            *((16, 14, 16, 10) if on else (0, 12, 0, 4)))
+        self.sources_head.setStyleSheet(
+            "QPushButton { border:none; background:transparent; padding:0px;"
+            f" font-size:14px; font-weight:600; color:{theme.TEXT};"
+            f" text-align:{'left' if on else 'center'}; }}"
+            f" QPushButton:hover {{ color:{theme.LINE}; }}")
+        self.sources.setFixedWidth(self.SOURCES_WIDE if on
+                                   else self.SOURCES_NARROW)
+
+    def _status_bar(self) -> QWidget:
+        """The line along the foot of the window.
+
+        The card and how fast it is drawing, how many files are being read
+        and whether any frames were thrown away, what the render or the
+        snapshot last said, and the decoder's counts, folded, at the far end.
+        """
+        holder = QWidget()
+        holder.setObjectName("qa_status_bar")
+        holder.setFixedHeight(28)
+        holder.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        holder.setStyleSheet(
+            f"#qa_status_bar {{ background:{theme.SUNKEN};"
+            f" border-top:1px solid {theme.SEAM}; }}"
+            f" #qa_status_bar QLabel {{ color:{theme.QUIET}; }}"
+            f" #qa_status_bar QPushButton {{ font-family:{theme.MONO_CSS};"
+            f" font-size:11px; color:{theme.SECOND}; }}")
+        line = QHBoxLayout(holder)
+        line.setContentsMargins(16, 0, 16, 0)
+        line.setSpacing(18)
+        self.status = QLabel()
+        self.status.setObjectName("qa_status")
+        self.status.setTextFormat(Qt.TextFormat.RichText)
+        self.status_pace = QLabel()
+        self.status_pace.setObjectName("qa_status_pace")
+        self.status_files = QLabel()
+        self.status_files.setObjectName("qa_status_files")
+        self.eta = QLabel()
+        self.eta.setObjectName("qa_eta")
+        self.eta.setAlignment(Qt.AlignmentFlag.AlignRight
+                              | Qt.AlignmentFlag.AlignVCenter)
+        for label in (self.status, self.status_pace, self.status_files,
+                      self.eta):
+            label.setFont(theme.mono(8.5))
+        for label in (self.status_pace, self.eta):
+            # However long, they do not get to widen the window.
+            label.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                QSizePolicy.Policy.Preferred)
+        line.addWidget(self.status)
+        line.addWidget(self.status_pace, 2)
+        line.addWidget(self.status_files)
+        line.addWidget(self.eta, 3)
+        self.stats_head = QPushButton("Статистика декодера ▴")
+        self.stats_head.setObjectName("qa_stats_header")
+        self.stats_head.setProperty("link", True)
+        self.stats_head.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.stats_head.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.stats_head.setToolTip("Счётчики чтения по каждому файлу: сколько "
+                                   "прочитано, выброшено, пропущено. Для "
+                                   "случая, когда что-то дёргается. Состояние "
+                                   "запоминается.")
+        # Through a lambda: `clicked` would hand its bool to `open_it`.
+        self.stats_head.clicked.connect(lambda: self._fold_stats())
+        line.addWidget(self.stats_head)
+        return holder
+
+    def _say_failure(self) -> None:
+        """No card: said where the card would have been named."""
+        self.status.setText(html.escape(self.failure))
+        self.status.setStyleSheet(f"color:{theme.ERROR};")
+
+    def _say_link(self) -> None:
+        """What the link says of itself, in the place it stands now."""
+        if not hasattr(self, "link_said"):
+            return
+        on = self.linked.isChecked()
+        showing = self.level == "show"
+        self.linked.setText("Top ⇄ Bottom" if showing
+                            else "Разъединить" if on else "Связать")
+        self.linked.setProperty("pill", showing)
+        self.linked.setProperty("link", not showing)
+        style = self.linked.style()
+        style.unpolish(self.linked)
+        style.polish(self.linked)
+        self.link_said.setText("Top и Bottom связаны" if on
+                               else "Top и Bottom не связаны")
+        self.link_frame.setStyleSheet(
+            f"#qa_link_banner {{ background:{theme.LINK_BG if on else theme.CARD};"
+            f" border:1px solid {theme.LINK_BG if on else theme.CARD_EDGE};"
+            f" border-radius:6px; }}"
+            f" #qa_link_banner QLabel {{ color:{theme.LINK_FG if on else theme.QUIET};"
+            f" font-size:12px; }}"
+            f" #qa_link_banner QPushButton {{ color:{'#ffffff' if on else theme.LINE};"
+            f" font-weight:500; font-size:12px; }}")
+
+    def _machine_dialog(self) -> None:
+        """What this machine has of what is needed, asked for from the top line."""
+        found = depends.check()
+        logfile.write("machine check asked for: " + depends.summary())
+        DependencyDialog(found, self).exec()
 
     def _empty_card(self) -> None:
         """What an empty quick look offers: to be given something to show."""
@@ -2246,28 +2547,28 @@ class Viewer(QMainWindow):
         card.setObjectName("qa_empty")
         card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         card.setStyleSheet(
-            f"QFrame#qa_empty {{ background:rgba(23,28,35,235); "
-            f"border:1px solid {theme.SEAM}; border-radius:6px; }} "
-            "QFrame#qa_empty QLabel { background:transparent; }")
-        card.setFixedWidth(400)
+            f"QFrame#qa_empty {{ background:rgba(20,21,24,240);"
+            f" border:1px solid {theme.SEAM}; border-radius:8px; }}"
+            " QFrame#qa_empty QLabel { background:transparent; }")
+        card.setFixedWidth(420)
         whole = QVBoxLayout(card)
-        whole.setContentsMargins(18, 14, 18, 16)
+        whole.setContentsMargins(20, 16, 20, 18)
         whole.setSpacing(10)
         title = QLabel("Ничего не загружено")
         title.setFont(theme.heading())
-        title.setStyleSheet(f"color:{theme.QUIET};")
         whole.addWidget(title)
-        said = QLabel("Перетащите ролики на строки сверху или выберите их "
+        said = QLabel("Перетащите ролики на карточки слева или выберите их "
                       "здесь — по именам они разойдутся по экранам сами. "
                       "Шоу из редактора площадки открывается как шоу.")
         said.setWordWrap(True)
+        said.setStyleSheet(f"color:{theme.SECOND};")
         whole.addWidget(said)
         line = QHBoxLayout()
         pick = QPushButton("Выбрать файлы…")
         pick.setObjectName("qa_empty_pick")
         pick.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        pick.setStyleSheet(f"QPushButton {{ background:{theme.LIVE_DIM}; "
-                           f"border-color:{theme.LIVE_EDGE}; }}")
+        pick.setStyleSheet(f"QPushButton {{ background:{theme.ACCENT}; "
+                           f"border-color:{theme.ACCENT}; color:#ffffff; }}")
         pick.clicked.connect(self._pick_many)
         line.addWidget(pick)
         show = QPushButton("Открыть шоу…")
@@ -2339,10 +2640,35 @@ class Viewer(QMainWindow):
 
     # -- what is shown -------------------------------------------------------
 
-    def _scene_controls(self) -> QHBoxLayout:
-        bar = QHBoxLayout()
-        bar.setSpacing(6)
-        bar.addLayout(self._level_switch())
+    def _scene_controls(self) -> QWidget:
+        """The line along the top: the name, the level, how the building is
+        drawn and its layers; the machine's check and the log at the far end.
+
+        The switches about how the screens look are made here as well, and
+        laid in the bar over the picture, which is what they change.
+        """
+        holder = QWidget()
+        holder.setObjectName("qa_top_bar")
+        holder.setFixedHeight(48)
+        holder.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        holder.setStyleSheet(f"#qa_top_bar {{ background:{theme.BAR};"
+                             f" border-bottom:1px solid {theme.SEAM}; }}")
+        bar = QHBoxLayout(holder)
+        bar.setContentsMargins(16, 0, 16, 0)
+        bar.setSpacing(16)
+
+        brand = QHBoxLayout()
+        brand.setSpacing(8)
+        name = QLabel(APP_NAME)
+        name.setObjectName("qa_app_name")
+        name.setStyleSheet("font-size:14px; font-weight:600;")
+        brand.addWidget(name)
+        version = QLabel(APP_VERSION)
+        version.setFont(theme.mono(9))
+        version.setStyleSheet(f"color:{theme.QUIET};")
+        brand.addWidget(version)
+        bar.addLayout(brand)
+        bar.addWidget(self._level_switch())
         bar.addWidget(_divider())
 
         self.mode = ModeTabs([
@@ -2360,16 +2686,16 @@ class Viewer(QMainWindow):
              "Top и Bottom, каждая полоса разрезана посередине: слева файл, "
              "справа то, что из него сделает перепечка.")])
         self.mode.setObjectName("qa_mode")
+        _see_through(self.mode)
         if self.mesh is None:
             self.mode.setCurrentIndex(1)
             self.mode.setEnabled(False)
             self.mode.setToolTip("Рядом с приложением нет запечённой сцены")
         self.mode.currentIndexChanged.connect(self._mode_changed)
         bar.addWidget(self.mode)
-        bar.addWidget(_divider())
 
-        # Everything on this bar that is about the building. Перепечка is
-        # about a source file, and none of it applies there.
+        # Everything that is about the building. Перепечка is about a source
+        # file, and none of it applies there.
         self.scene_only = []
 
         # The pieces of the building, in a menu: they are set once a week,
@@ -2378,13 +2704,12 @@ class Viewer(QMainWindow):
         self.toggles = {}
         self.layers_button = QToolButton()
         self.layers_button.setObjectName("qa_layers")
-        self.layers_button.setText("Слои")
-        # Qt draws the menu's arrow itself; a second one in the text was two.
-        self.layers_button.setStyleSheet(
-            "QToolButton { padding:4px 18px 4px 10px; }")
+        self.layers_button.setText("Слои ▾")
         self.layers_button.setPopupMode(
             QToolButton.ToolButtonPopupMode.InstantPopup)
         self.layers_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.layers_button.setStyleSheet(
+            f"QToolButton {{ color:{theme.SECOND}; padding:5px 12px; }}")
         self.layers_button.setToolTip("Какие части здания рисовать")
         menu = QMenu(self.layers_button)
         # One box for the top screen, not two. Its two geometries are the same
@@ -2400,32 +2725,47 @@ class Viewer(QMainWindow):
             box.setToolTip(name)
             box.setStyleSheet("QCheckBox { padding:4px 10px; }")
             box.toggled.connect(lambda on, n=name: self._show_layer(n, on))
-            holder = QWidgetAction(menu)
-            holder.setDefaultWidget(box)
-            menu.addAction(holder)
+            holder_ = QWidgetAction(menu)
+            holder_.setDefaultWidget(box)
+            menu.addAction(holder_)
             self.toggles[name] = box
         self.layers_button.setMenu(menu)
         bar.addWidget(self.layers_button)
         self.scene_only.append(self.layers_button)
         bar.addStretch(1)
 
-        # How the screens look. Made here and laid in the Экраны panel over
-        # the picture, with the brightness they go together with.
-        self.matching = QCheckBox("Сравнять яркость")
-        self.matching.setObjectName("qa_match")
-        self.matching.setChecked(True)
-        self.matching.setToolTip(
+        check = QPushButton("Проверка машины")
+        check.setObjectName("qa_check_machine")
+        check.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        check.setStyleSheet(f"QPushButton {{ color:{theme.SECOND}; }}")
+        check.setToolTip("Что есть на этой машине из нужного: видеокарта, "
+                         "ffmpeg, звук. Там же — скачать ffmpeg, если его нет.")
+        check.clicked.connect(self._machine_dialog)
+        bar.addWidget(check)
+        # The log is about the same thing the status line is: what the program
+        # is doing. It is here, with the check, at the end of the top line.
+        log = QPushButton("Лог")
+        log.setObjectName("qa_log")
+        log.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        log.setStyleSheet(f"QPushButton {{ color:{theme.SECOND}; }}")
+        log.setToolTip("Открыть папку, в которую пишется эта сессия")
+        log.clicked.connect(self._open_log)
+        bar.addWidget(log)
+
+        # How the screens look. Made here and laid in the bar over the picture.
+        self.matching = _pill(
+            "Сравнять яркость", "qa_match",
             "Экраны устроены по-разному: верхний — раздельные соты, четверть "
             "его площади тёмная, нижний почти сплошной, поэтому одинаковый "
             "белый на верхнем читается тусклее. Это приводит более яркий к "
             "более тусклому, чтобы они совпадали на всех уровнях, включая "
             "максимум. Выключено — показывает так, как есть в геометрии.")
+        self.matching.setChecked(True)
         self.matching.toggled.connect(self._matching_changed)
         self.scene_only.append(self.matching)
 
-        self.solid_top = QCheckBox("Без изнанки верха")
-        self.solid_top.setObjectName("qa_solid_top")
-        self.solid_top.setToolTip(
+        self.solid_top = _pill(
+            "Без изнанки верха", "qa_solid_top",
             "Убирает дальнюю сторону верхнего экрана, чтобы его собственная "
             "изнанка не просвечивала сквозь передние соты. Работает и на "
             "движущемся, и на неподвижном. Выключено — показывает как есть, "
@@ -2435,6 +2775,7 @@ class Viewer(QMainWindow):
         self.scene_only.append(self.solid_top)
 
         self.alpha_label = QLabel("Альфа")
+        self.alpha_label.setStyleSheet(f"color:{theme.QUIET}; font-size:12px;")
         self.scene_only.append(self.alpha_label)
         self.alpha = QComboBox()
         self.alpha.setObjectName("qa_alpha")
@@ -2450,22 +2791,26 @@ class Viewer(QMainWindow):
         self.scene_only.append(self.alpha)
 
         self.backing_label = QLabel("Фон")
+        self.backing_label.setStyleSheet(f"color:{theme.QUIET}; font-size:12px;")
         self.backing = QComboBox()
         self.backing.setObjectName("qa_behind")
         self.backing.addItem("Калибровка", "Calibration")
         self.backing.addItem("Чёрный", "Black")
-        self.backing.setFixedWidth(132)
+        self.backing.setFixedWidth(118)
         self.backing.setToolTip(
             "Что показывают экраны там, где контент прозрачен или его нет")
         self.backing.currentIndexChanged.connect(self._backing_changed)
 
-        reset = iconed(QPushButton(), "home", "Сбросить вид",
-                       "Назад к целому кадру. Двойной щелчок по картинке "
-                       "делает то же; колесо приближает, перетаскивание "
-                       "двигает.", name="qa_reset_view")
-        reset.clicked.connect(self.reset_view)
-        bar.addWidget(reset)
-        return bar
+        self.reset_button = _pill(
+            "↺", "qa_reset_view",
+            "Сбросить вид: назад к целому кадру. Двойной щелчок по картинке "
+            "делает то же; колесо приближает, перетаскивание двигает.",
+            checkable=False)
+        self.reset_button.setStyleSheet("QPushButton { font-size:14px; "
+                                        "padding:1px 7px; }")
+        self.reset_button.clicked.connect(self.reset_view)
+        _even(bar)
+        return holder
 
     def _show_layer(self, name: str, on: bool) -> None:
         if self.solid is not None:
@@ -2581,11 +2926,9 @@ class Viewer(QMainWindow):
                 self._keep_chains(aside)
             if "sources_open" in saved:
                 self.sources_open = bool(saved["sources_open"])
-                self.sources_body.setVisible(self.sources_open)
+                self._lay_sources()
             if "stats_open" in saved:
                 self.stats_open = bool(saved["stats_open"])
-            if "show_panel" in saved:
-                self._levels_open = bool(saved["show_panel"])
             if "frame_edge" in saved:
                 self.frame_button.setChecked(bool(saved["frame_edge"]))
             if "tile_flat" in saved:
@@ -2629,8 +2972,6 @@ class Viewer(QMainWindow):
             self.trix_path = str(saved["trix"])
             if not Path(self.trix_path).exists():
                 logfile.write(f"show: {self.trix_path} is no longer there")
-        if "show_panel" in saved:
-            self._levels_open = bool(saved["show_panel"])
         split = saved.get("split") or []
         if len(split) == 2:
             self._split_sizes = [int(one) for one in split]
@@ -2650,6 +2991,7 @@ class Viewer(QMainWindow):
         # are up. The link needs nothing: it stands in the Bottom heading and
         # goes away with the panel because the panel is what holds it.
         self._say_sources()
+        self._say_link()
         # Written once at the start as well, so the file says what the window
         # is actually showing even in a session where nothing was touched --
         # and so a first run leaves the defaults behind in a readable form.
@@ -2696,7 +3038,6 @@ class Viewer(QMainWindow):
             "level": self.level,
             "trix": self.trix_path,
             "split": list(self._split_sizes),
-            "show_panel": self._levels_open,
             # The working file, and whether the editor was on over it.
             "draft": str(self.draft.where) if self.draft is not None else "",
             "editing": bool(self.show_view.editing),
@@ -2839,47 +3180,109 @@ class Viewer(QMainWindow):
 
     # -- the strip of controls ---------------------------------------------
 
+    def _transport_button(self, picture: str, says: str, story: str,
+                          name: str, act, tall: int = 32) -> QPushButton:
+        """One of the transport's buttons: dark ones, and Play the light one."""
+        play = picture == "play"
+        button = QPushButton()
+        button.setObjectName(name)
+        button.setProperty("play" if play else "transport", True)
+        button.setIcon(theme.drawn_icon(picture, PLAY_INK if play else theme.TEXT))
+        button.setIconSize(QSize(16, 16) if play else QSize(13, 13))
+        button.setFixedSize(44 if play else 34, tall)
+        # None of them takes the keyboard: a button that had it would answer
+        # the space bar itself, and the space bar is Play.
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        button.setToolTip("")          # ours, on our own timing, not Qt's
+        HINTS[button] = (says, story)
+        button.clicked.connect(act)
+        return button
+
+    TRANSPORT = (
+        ("first", "В начало", "В начало.  Ctrl со стрелкой влево делает то же."),
+        ("back", "На кадр назад",
+         "На кадр назад по сетке просмотра.  Стрелка влево делает то же."),
+        ("play", "Играть",
+         "Играть или остановить.  Пробел делает то же — отовсюду, кроме "
+         "поля, в котором печатают."),
+        ("on", "На кадр вперёд",
+         "На кадр вперёд по сетке просмотра.  Стрелка вправо делает то же."),
+        ("last", "В конец", "В конец.  Ctrl со стрелкой вправо делает то же."))
+
+    def _transport_acts(self) -> dict:
+        return {"first": lambda: self._move(0.0),
+                "back": lambda: self._step(-1),
+                "play": self._toggle,
+                "on": lambda: self._step(1),
+                "last": lambda: self._move(self.clock.duration)}
+
     def _transport(self) -> QWidget:
+        """Under the picture in Просмотр: the buttons, where the piece is, the
+        slider along it, and the grid it is watched on.
+
+        The buttons and the grid are widgets of their own so that in Шоу they
+        can go up and stand beside the show's time, and come back.
+        """
         holder = QWidget()
         holder.setObjectName("qa_transport")
+        holder.setFixedHeight(64)
+        holder.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        holder.setStyleSheet(f"#qa_transport {{ background:{theme.BAR};"
+                             f" border-top:1px solid {theme.SEAM}; }}")
         bar = QHBoxLayout(holder)
-        bar.setContentsMargins(0, 0, 0, 0)
-        bar.setSpacing(4)
+        bar.setContentsMargins(16, 0, 16, 0)
+        bar.setSpacing(14)
+        self._transport_line = bar
 
-        for picture, says, story, act in (
-                ("first", "В начало",
-                 "В начало.  Ctrl со стрелкой влево делает то же.",
-                 lambda: self._move(0.0)),
-                ("back", "На кадр назад",
-                 "На кадр назад по сетке просмотра.  Стрелка влево делает то же.",
-                 lambda: self._step(-1)),
-                ("on", "На кадр вперёд",
-                 "На кадр вперёд по сетке просмотра.  Стрелка вправо делает то же.",
-                 lambda: self._step(1)),
-                ("last", "В конец",
-                 "В конец.  Ctrl со стрелкой вправо делает то же.",
-                 lambda: self._move(self.clock.duration))):
-            button = iconed(QPushButton(), picture, says, story,
-                            name=f"qa_{picture}")
-            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            button.clicked.connect(act)
-            bar.addWidget(button)
-            if picture == "back":
-                self.play_button = iconed(
-                    QPushButton(), "play", "Играть",
-                    "Играть или остановить.  Пробел делает то же — отовсюду, "
-                    "кроме поля, в котором печатают.", name="qa_play")
-                self.play_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                self.play_button.clicked.connect(self._toggle)
-                bar.addWidget(self.play_button)
+        self.transport_buttons = QWidget()
+        self.transport_buttons.setObjectName("qa_transport_buttons")
+        _see_through(self.transport_buttons)
+        buttons = QHBoxLayout(self.transport_buttons)
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(4)
+        acts = self._transport_acts()
+        for picture, says, story in self.TRANSPORT:
+            button = self._transport_button(picture, says, story,
+                                            f"qa_{picture}", acts[picture])
+            buttons.addWidget(button)
+            if picture == "play":
+                self.play_button = button
+        bar.addWidget(self.transport_buttons)
 
-        bar.addSpacing(6)
+        # One reading of where the piece is: the timecode, and the frame out
+        # of how many there are. Both on the grid it is watched on.
+        self.time_label = QLabel("00:00:00:00")
+        self.time_label.setObjectName("qa_time_label")
+        self.time_label.setFont(theme.mono(15, bold=True))
+        bar.addWidget(self.time_label)
+        self.frame_label = QLabel("кадр 0 из 0")
+        self.frame_label.setObjectName("qa_frame_label")
+        self.frame_label.setFont(theme.mono(9))
+        self.frame_label.setMinimumWidth(150)
+        self.frame_label.setStyleSheet(f"color:{theme.QUIET};")
+        self.frame_label.setToolTip("Где стоит плейхед: кадр на сетке просмотра "
+                                    "и сколько их всего")
+        bar.addWidget(self.frame_label)
+
+        self.slider = Timeline(Qt.Orientation.Horizontal)
+        self.slider.setObjectName("qa_timeline")
+        self.slider.setRange(0, 1000)
+        self.slider.setFixedHeight(32)
+        self.slider.sliderMoved.connect(self._scrub)
+        bar.addWidget(self.slider, 1)
+
+        self.sync_box = QWidget()
+        self.sync_box.setObjectName("qa_sync_box")
+        _see_through(self.sync_box)
+        watching = QHBoxLayout(self.sync_box)
+        watching.setContentsMargins(0, 0, 0, 0)
+        watching.setSpacing(6)
         watch = QLabel("Смотреть по")
-        watch.setStyleSheet(f"color:{theme.QUIET}; background:transparent;")
-        bar.addWidget(watch)
+        watch.setStyleSheet(f"color:{theme.QUIET}; font-size:12px;")
+        watching.addWidget(watch)
         self.sync = QComboBox()
         self.sync.setObjectName("qa_sync")
-        self.sync.setFixedWidth(76)
+        self.sync.setFixedWidth(84)
         for rate in (60, 30):
             self.sync.addItem(f"{rate} к/с", float(rate))
         self.sync.setToolTip(
@@ -2888,32 +3291,9 @@ class Viewer(QMainWindow):
             "кадрах смотрится по кадру, а не выбирается дважды на каждый свой "
             "кадр. С какой частотой писать, выбирается в строке рендера.")
         self.sync.currentIndexChanged.connect(self._sync_changed)
-        bar.addWidget(self.sync)
-
-        self.slider = Timeline(Qt.Orientation.Horizontal)
-        self.slider.setObjectName("qa_timeline")
-        self.slider.setRange(0, 1000)
-        self.slider.sliderMoved.connect(self._scrub)
-        bar.addWidget(self.slider, 1)
-        # Where the slider's room goes while it is hidden, in Шоу: without
-        # it the buttons spread themselves across the whole width.
-        bar.addStretch(0)
-
-        # One reading of where the piece is: the timecode, and the frame out
-        # of how many there are. Both on the grid it is watched on.
-        self.time_label = QLabel("00:00:00:00")
-        self.time_label.setObjectName("qa_time_label")
-        self.time_label.setFont(theme.mono(10, bold=True))
-        self.time_label.setStyleSheet("background:transparent;")
-        bar.addWidget(self.time_label)
-        self.frame_label = QLabel("кадр 0 из 0")
-        self.frame_label.setObjectName("qa_frame_label")
-        self.frame_label.setFont(QFont(MONO, 9))
-        self.frame_label.setMinimumWidth(150)
-        self.frame_label.setStyleSheet(f"color:{theme.QUIET}; background:transparent;")
-        self.frame_label.setToolTip("Где стоит плейхед: кадр на сетке просмотра "
-                                    "и сколько их всего")
-        bar.addWidget(self.frame_label)
+        watching.addWidget(self.sync)
+        _even(watching)
+        bar.addWidget(self.sync_box)
         return holder
 
     WRITE_SIZE_HINT = (
@@ -2922,18 +3302,25 @@ class Viewer(QMainWindow):
         "не теряется ничего.")
 
     def _export_controls(self) -> QHBoxLayout:
+        """The render's line: its size, its frames, its rate and format, where
+        it goes and what it is called, a snapshot, and Рендер in red at the
+        end -- the one red thing in the window."""
         bar = QHBoxLayout()
-        bar.setSpacing(6)
+        bar.setContentsMargins(16, 0, 16, 0)
+        bar.setSpacing(10)
 
         def said(text: str) -> QLabel:
             label = QLabel(text)
-            label.setStyleSheet(f"color:{theme.QUIET}; background:transparent;")
+            label.setStyleSheet(f"color:{theme.QUIET}; font-size:12px;")
             return label
 
-        bar.addWidget(said("Размер"))
+        title = QLabel("Рендер")
+        title.setStyleSheet("font-size:13px; font-weight:600;")
+        bar.addWidget(title)
+        bar.addSpacing(4)
         self.size_choice = QComboBox()
         self.size_choice.setObjectName("qa_size")
-        self.size_choice.setFixedWidth(150)
+        self.size_choice.setFixedWidth(132)
         self.size_choice.setToolTip(self.WRITE_SIZE_HINT)
         self._fill_sizes()
         self.size_choice.currentIndexChanged.connect(self._framing_changed)
@@ -2951,7 +3338,7 @@ class Viewer(QMainWindow):
         for box, tip in ((self.first_frame, "Первый записываемый кадр"),
                          (self.last_frame, "Последний записываемый кадр, он "
                                            "сам включительно")):
-            box.setFixedWidth(80)
+            box.setFixedWidth(76)
             box.setRange(0, 0)
             box.setToolTip(tip + ". Считается так же, как счётчик у плейхеда, "
                                  "по сетке просмотра. Shift+I и Shift+O ставят "
@@ -2964,30 +3351,53 @@ class Viewer(QMainWindow):
         dash.setFixedWidth(8)
         bar.addWidget(dash)
         bar.addWidget(self.last_frame)
-        self.range_all = _small(QPushButton("всё"), 44)
+        self.range_all = QPushButton("всё")
         self.range_all.setObjectName("qa_range_all")
         self.range_all.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.range_all.setStyleSheet("QPushButton { padding:5px 8px; }")
         self.range_all.setToolTip("Всю вещь целиком")
         self.range_all.clicked.connect(self._reset_range)
         bar.addWidget(self.range_all)
 
-        bar.addWidget(said("Писать"))
         self.fps_choice = QComboBox()
         self.fps_choice.setObjectName("qa_fps")
-        self.fps_choice.setFixedWidth(76)
+        self.fps_choice.setFixedWidth(78)
+        self.fps_choice.setToolTip("С какой частотой писать файл")
         for rate in (30, 60):
             self.fps_choice.addItem(f"{rate} к/с", rate)
         bar.addWidget(self.fps_choice)
 
         self.format_choice = QComboBox()
         self.format_choice.setObjectName("qa_format")
-        self.format_choice.setFixedWidth(148)
+        self.format_choice.setFixedWidth(136)
         self._fill_formats()
         self.format_choice.currentIndexChanged.connect(self._format_changed)
         bar.addWidget(self.format_choice)
 
+        # Where it goes, as one field: the folder, quiet, and after it the
+        # name, which is the part that gets typed.
+        where = QFrame()
+        where.setObjectName("qa_out_path")
+        where.setProperty("field", True)
+        where.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        where.setStyleSheet(f"#qa_out_path {{ background:{theme.SUNKEN};"
+                            f" border:1px solid {theme.EDGE}; border-radius:4px; }}")
+        inside = QHBoxLayout(where)
+        inside.setContentsMargins(9, 0, 4, 0)
+        inside.setSpacing(0)
+        self.out_folder = QLabel()
+        self.out_folder.setObjectName("qa_out_folder")
+        self.out_folder.setFont(theme.mono(9))
+        self.out_folder.setStyleSheet(f"color:{theme.QUIET};")
+        # The folder gives way first: the name is what gets typed.
+        self.out_folder.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                      QSizePolicy.Policy.Preferred)
+        inside.addWidget(self.out_folder, 2)
         self.out_name = QLineEdit("preview_v1.mp4")
         self.out_name.setObjectName("qa_out_name")
+        self.out_name.setFrame(False)
+        self.out_name.setStyleSheet("QLineEdit { background:transparent; "
+                                    "border:none; padding:4px 0px; }")
         # The name this worked out for itself. While the box still holds it,
         # the sources may rename the render; the moment it holds something
         # else, somebody has decided and nothing here touches it again.
@@ -2996,10 +3406,11 @@ class Viewer(QMainWindow):
             "Как будет называться файл. Расширение следует за форматом слева "
             "и подставляется, если его не написать. Загрузите Что-то_top и "
             "Что-то_bottom — и имя составится само.")
-        self.out_name.setMinimumWidth(150)
-        bar.addWidget(self.out_name, 1)
+        self.out_name.setMinimumWidth(110)
+        inside.addWidget(self.out_name, 3)
+        bar.addWidget(where, 1)
 
-        browse = labeled(QPushButton(), "directory", "Куда…",
+        browse = labeled(QPushButton(), "", "Куда…",
                          "Папка, в которую писать, и как назвать файл",
                          name="qa_out_browse")
         browse.clicked.connect(self._pick_output)
@@ -3013,25 +3424,16 @@ class Viewer(QMainWindow):
         bar.addWidget(self.bump_button)
 
         snap = labeled(
-            QPushButton(), "snapshot", "Снимок", "Снимок кадра",
+            QPushButton(), "", "Снимок", "Снимок кадра",
             "Записать этот один кадр в PNG, рядом с тем, куда идёт видео. В "
-            f"{PREVIEW} это та же картинка, что записал бы рендер, в выбранном "
-            "размере; в Развертке — каждый экран отдельно, в его родном размере.",
-            name="qa_snapshot")
+            f"{MODE_LABEL[PREVIEW]} это та же картинка, что записал бы рендер, "
+            "в выбранном размере; в Развертке — каждый экран отдельно, в его "
+            "родном размере.", name="qa_snapshot")
         snap.clicked.connect(self._snapshot)
         bar.addWidget(snap)
 
-        self.render_button = labeled(
-            QPushButton(), "render", "Рендер", "Рендер",
-            "Записать весь диапазон, все экраны разом, в файл, названный "
-            "слева. Вид сперва возвращается к целому кадру, так что "
-            "записывается именно то, что в кадре.", name="qa_render")
-        self.render_button.clicked.connect(self._start_export)
-        bar.addWidget(self.render_button)
-
-        # These two only while something is being written: without a render
-        # an empty bar was the brightest thing in the window.
-        self.cancel_button = labeled(QPushButton(), "stop", "Стоп",
+        # These only while something is being written, or has just been.
+        self.cancel_button = labeled(QPushButton(), "", "Стоп",
                                      "Остановить рендер",
                                      "Записанное к этому моменту выбрасывается.",
                                      name="qa_cancel")
@@ -3047,22 +3449,26 @@ class Viewer(QMainWindow):
         self.progress.setVisible(False)
         bar.addWidget(self.progress)
 
-        self.eta = QLabel()
-        self.eta.setObjectName("qa_eta")
-        self.eta.setFont(QFont(MONO, 9))
-        self.eta.setStyleSheet(f"color:{theme.QUIET}; background:transparent;")
-        self.eta.setMinimumWidth(200)
-        self.eta.setSizePolicy(QSizePolicy.Policy.Ignored,
-                               QSizePolicy.Policy.Preferred)
-        bar.addWidget(self.eta, 1)
-
-        self.open_out = labeled(QPushButton(), "directory", "Открыть папку",
+        self.open_out = labeled(QPushButton(), "", "Открыть папку",
                                 "Открыть папку с записанным", "",
                                 name="qa_open_out")
         self.open_out.clicked.connect(self._open_out)
         self.open_out.setVisible(False)
         bar.addWidget(self.open_out)
 
+        self.render_button = labeled(
+            QPushButton(), "", "Рендер", "Рендер",
+            "Записать весь диапазон, все экраны разом, в файл, названный "
+            "слева. Вид сперва возвращается к целому кадру, так что "
+            "записывается именно то, что в кадре.", name="qa_render")
+        self.render_button.clicked.connect(self._start_export)
+        bar.addWidget(self.render_button)
+
+        # What gives way to Стоп and the bar while a file is being written:
+        # the line keeps its width, and so does the window.
+        self._idle_only = (browse, self.bump_button, snap, self.render_button)
+        _even(bar)
+        self.progress.setFixedHeight(8)
         self.out_dir = logfile.app_dir() / "OUT"
         self.job = None
         return bar
@@ -3080,6 +3486,9 @@ class Viewer(QMainWindow):
         self._lay_overlays()
         for widget in getattr(self, "scene_only", ()):
             widget.setVisible(not rebaking)
+        # Again, now that the bar over the picture has lost or regained the
+        # switches this mode has no use for, so it is laid at its new width.
+        self._lay_overlays()
         if hasattr(self, "rebake_bar"):
             self.rebake_bar.setVisible(rebaking)
             # The render row is about the building, and this mode is about a
@@ -3547,11 +3956,17 @@ class Viewer(QMainWindow):
         """The strip that only ReBake uses, hidden the rest of the time."""
         holder = QWidget()
         holder.setObjectName("qa_rebake_bar")
+        holder.setFixedHeight(60)
+        holder.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        holder.setStyleSheet(f"#qa_rebake_bar {{ background:{theme.PANEL};"
+                             f" border-top:1px solid {theme.SEAM}; }}")
         bar = QHBoxLayout(holder)
-        bar.setContentsMargins(0, 0, 0, 0)
-        bar.setSpacing(6)
+        bar.setContentsMargins(16, 0, 16, 0)
+        bar.setSpacing(10)
 
-        bar.addWidget(QLabel("Перепечь"))
+        title = QLabel("Перепечка")
+        title.setStyleSheet("font-size:13px; font-weight:600;")
+        bar.addWidget(title)
         self.rebake_what = QComboBox()
         self.rebake_what.setObjectName("qa_rebake_what")
         self.rebake_what.setFixedWidth(104)
@@ -3673,9 +4088,10 @@ class Viewer(QMainWindow):
 
         self.rebake_note = QLabel()
         self.rebake_note.setObjectName("qa_rebake_note")
-        self.rebake_note.setFont(QFont(MONO, 9))
-        self.rebake_note.setStyleSheet("color:#8d97a5;")
+        self.rebake_note.setFont(theme.mono(8.5))
+        self.rebake_note.setStyleSheet(f"color:{theme.QUIET};")
         bar.addWidget(self.rebake_note, 1)
+        _even(bar)
         return holder
 
     def _rebake_screens(self):
@@ -3735,34 +4151,25 @@ class Viewer(QMainWindow):
                   or (Path(__file__).resolve().parent / ICONS))
         arrow = (Path(folder) / "down.png").as_posix()
         return (
-            "QComboBox { background:rgba(20,20,20,190); color:#dcdcdc; "
-            "border:1px solid #4a4a4a; border-radius:3px; "
-            "padding:2px 22px 2px 6px; } "
-            "QComboBox:hover { border-color:#6f6f6f; } "
+            f"QComboBox {{ background:{OVERLAY_BG}; color:{theme.TEXT}; "
+            f"border:1px solid {theme.EDGE}; border-radius:4px; "
+            "padding:2px 22px 2px 8px; } "
+            f"QComboBox:hover {{ border-color:{theme.FAINT}; }} "
             "QComboBox::drop-down { subcontrol-origin:padding; "
             "subcontrol-position:center right; width:20px; border:none; "
             "background:transparent; } "
             'QComboBox::down-arrow { image:url("' + arrow + '"); '
             "width:9px; height:9px; } "
-            "QComboBox QAbstractItemView { background:#1c1c1c; color:#dcdcdc; "
-            "border:1px solid #4a4a4a; outline:none; "
-            "selection-background-color:#3a6ea5; selection-color:#ffffff; }")
-    LINK_BUTTON = ("QPushButton { border:1px solid #b4b4b4; border-radius:3px; "
-                   "background:#fafafa; padding:0px; } "
-                   "QPushButton:hover { background:#eaeaea; } "
-                   "QPushButton:checked { background:#cfe4fb; "
-                   "border:1px solid #3d86c6; }")
-    OVERLAY_BAR = ("QFrame { background:rgba(20,20,20,190); "
-                   "border:1px solid #3a3a3a; border-radius:4px; }")
+            f"QComboBox QAbstractItemView {{ background:{theme.CARD}; "
+            f"color:{theme.TEXT}; border:1px solid {theme.EDGE}; outline:none; "
+            f"selection-background-color:{theme.ACCENT}; "
+            "selection-color:#ffffff; }")
+    OVERLAY_BAR = (f"QFrame {{ background:{OVERLAY_BG}; "
+                   f"border:1px solid {theme.SEAM}; border-radius:6px; }}")
     FRAME_EDGE = ("background:transparent; "
                   "border:1px solid rgba(255,255,255,150);")
-    OVERLAY_BUTTON = ("QPushButton { background:rgba(20,20,20,190); "
-                      "border:1px solid #3a3a3a; border-radius:3px; } "
-                      "QPushButton:hover { background:rgba(64,64,64,220); } "
-                      "QPushButton:checked { background:rgba(92,92,92,235); "
-                      "border-color:#6f6f6f; }")
-    OVERLAY_LABEL = ("background:rgba(20,20,20,170); color:#c8c8c8; "
-                     "border:none; padding:2px 8px;")
+    OVERLAY_LABEL = (f"background:rgba(20,21,24,200); color:{theme.SECOND}; "
+                     "border:none; border-radius:4px; padding:2px 8px;")
 
     def _rebake_overlays(self) -> None:
         """The reading of each half, and the name of each half, on the picture."""
@@ -3810,7 +4217,7 @@ class Viewer(QMainWindow):
         self.rebake_after = QLabel("перепечка", self.canvas)
         self.rebake_after.setObjectName("qa_rebake_after")
         for tag in (self.rebake_before, self.rebake_after):
-            tag.setFont(QFont(MONO, 9))
+            tag.setFont(theme.mono(8.5))
             tag.setStyleSheet(self.OVERLAY_LABEL)
             tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -3833,52 +4240,18 @@ class Viewer(QMainWindow):
         self.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         QApplication.instance().installEventFilter(self)
 
-    def _full_icon(self, out: bool) -> QIcon:
-        """Four corners of a frame, facing out to go full and in to come back."""
-        # Drawn at four times the size it is shown at and left to Qt to bring
-        # down, which is the difference between clean edges and a smudge. The
-        # arms are a quarter of the side: longer and the four corners close up
-        # into a plain square going out, and meet in the middle coming back.
-        side, inset, arm = 64, 9, 15
-        picture = QPixmap(side, side)
-        picture.fill(Qt.GlobalColor.transparent)
-        pen = QPen(QColor("#dcdcdc"))
-        pen.setWidth(6)
-        pen.setCapStyle(Qt.PenCapStyle.SquareCap)
-        brush = QPainter(picture)
-        brush.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        brush.setPen(pen)
-        near, far = inset, side - inset
-        for x, y, across, down in ((near, near, 1, 1), (far, near, -1, 1),
-                                   (near, far, 1, -1), (far, far, -1, -1)):
-            if not out:
-                # The same corner walked inwards and turned around, which
-                # reads as the picture pulling back off the monitor.
-                x, y = x + across * arm, y + down * arm
-                across, down = -across, -down
-            brush.drawLine(x, y, x + across * arm, y)
-            brush.drawLine(x, y, x, y + down * arm)
-        brush.end()
-        return QIcon(picture)
-
     def _full_screen_button(self) -> None:
-        """The one overlay every mode has: the picture alone on the monitor."""
+        """The picture alone on the monitor: a switch in the bar over it, and
+        the transport over its foot while it lasts."""
         self._full = False
         self._before_full = None
         self._was_showing: list = []
-        self.full_button = QPushButton(self.canvas)
-        self.full_button.setObjectName("qa_full")
-        self.full_button.setIcon(self._full_icon(True))
-        self.full_button.setIconSize(QSize(18, 18))
-        self.full_button.setFixedSize(28, 28)
-        self.full_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.full_button.setStyleSheet(self.OVERLAY_BUTTON)
-        self.full_button.setToolTip(
+        self.full_button = _pill(
+            "Во весь экран", "qa_full",
             "Картинка на весь монитор, на котором стоит окно, всё остальное "
             "убирается. Ещё раз — обратно, или Escape. F11 делает то же с "
-            "клавиатуры.")
+            "клавиатуры.", checkable=False)
         self.full_button.clicked.connect(self._toggle_full)
-        self.full_button.setVisible(True)
 
         # Full screen takes the transport away with everything else, so the
         # timeline comes back on the picture itself. Only there: in a window
@@ -3889,33 +4262,17 @@ class Viewer(QMainWindow):
         self.full_bar.setStyleSheet(self.OVERLAY_BAR)
         self.full_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         line = QHBoxLayout(self.full_bar)
-        line.setContentsMargins(12, 6, 12, 6)
-        line.setSpacing(6)
-        # The same four moves and the same Play as the bar below has. None of
-        # them takes the keyboard: a button that had it would answer the space
-        # bar itself, and the space bar is Play.
-        for picture, says, story, act in (
-                ("first", "В начало",
-                 "В начало.  Ctrl со стрелкой влево делает то же.",
-                 lambda: self._move(0.0)),
-                ("back", "На кадр назад",
-                 "На кадр назад.  Стрелка влево делает то же.",
-                 lambda: self._step(-1)),
-                ("play", "Играть",
-                 "Играть или остановить.  Пробел делает то же.", None),
-                ("on", "На кадр вперёд",
-                 "На кадр вперёд.  Стрелка вправо делает то же.",
-                 lambda: self._step(1)),
-                ("last", "В конец",
-                 "В конец.  Ctrl со стрелкой вправо делает то же.",
-                 lambda: self._move(self.clock.duration))):
-            button = iconed(QPushButton(), picture, says, story,
-                            name=f"qa_full_{picture}")
-            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            button.clicked.connect(self._toggle if act is None else act)
+        line.setContentsMargins(10, 6, 12, 6)
+        line.setSpacing(4)
+        acts = self._transport_acts()
+        for picture, says, story in self.TRANSPORT:
+            button = self._transport_button(picture, says, story,
+                                            f"qa_full_{picture}", acts[picture],
+                                            tall=30)
             line.addWidget(button)
-            if act is None:
+            if picture == "play":
                 self.full_play = button
+        line.addSpacing(8)
         self.full_slider = QSlider(Qt.Orientation.Horizontal)
         self.full_slider.setObjectName("qa_full_slider")
         self.full_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -3924,9 +4281,9 @@ class Viewer(QMainWindow):
         line.addWidget(self.full_slider, 1)
         self.full_time = QLabel("0 / 0")
         self.full_time.setObjectName("qa_full_time")
-        self.full_time.setFont(QFont(MONO, 9))
-        self.full_time.setStyleSheet("color:#dcdcdc; background:transparent;")
-        self.full_time.setMinimumWidth(190)
+        self.full_time.setFont(theme.mono(9))
+        self.full_time.setStyleSheet(f"color:{theme.SECOND};")
+        self.full_time.setMinimumWidth(210)
         self.full_time.setAlignment(Qt.AlignmentFlag.AlignRight
                                     | Qt.AlignmentFlag.AlignVCenter)
         line.addWidget(self.full_time)
@@ -3937,37 +4294,6 @@ class Viewer(QMainWindow):
             shortcut.activated.connect(
                 lambda only=wanted: (self._toggle_full()
                                      if only is None or self._full else None))
-
-    def _frame_icon(self) -> QIcon:
-        """A rectangle of the frame's own shape, which is what it marks."""
-        side = 64
-        picture = QPixmap(side, side)
-        picture.fill(Qt.GlobalColor.transparent)
-        pen = QPen(QColor("#dcdcdc"))
-        pen.setWidth(6)
-        brush = QPainter(picture)
-        brush.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        brush.setPen(pen)
-        brush.drawRect(18, 9, side - 36, side - 18)
-        brush.end()
-        return QIcon(picture)
-
-    def _tile_icon(self) -> QIcon:
-        """One panel full, its neighbours running off both edges: the strip
-        repeating without end, which is what the button turns on."""
-        side = 64
-        picture = QPixmap(side, side)
-        picture.fill(Qt.GlobalColor.transparent)
-        brush = QPainter(picture)
-        brush.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        brush.setPen(QPen(QColor("#dcdcdc"), 5))
-        top, bottom, unit = 16, side - 16, side // 3
-        # The middle panel whole, the two beside it cut off at the frame,
-        # so the eye reads them as going on past it in both directions.
-        for centre in (-unit, unit * 0.5, unit * 2):
-            brush.drawRect(round(centre), top, unit, bottom - top)
-        brush.end()
-        return QIcon(picture)
 
     def _frame_line(self) -> None:
         """The rectangle that will be written, drawn on the picture.
@@ -3985,19 +4311,12 @@ class Viewer(QMainWindow):
         self.frame_edge.setStyleSheet(self.FRAME_EDGE)
         self.frame_edge.setVisible(False)
 
-        self.frame_button = QPushButton(self.canvas)
-        self.frame_button.setObjectName("qa_frame_edge_button")
-        self.frame_button.setIcon(self._frame_icon())
-        self.frame_button.setIconSize(QSize(18, 18))
-        self.frame_button.setFixedSize(28, 28)
-        self.frame_button.setCheckable(True)
-        self.frame_button.setChecked(True)
-        self.frame_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.frame_button.setStyleSheet(self.OVERLAY_BUTTON)
-        self.frame_button.setToolTip(
+        self.frame_button = _pill(
+            "Рамка", "qa_frame_edge_button",
             "Линия, показывающая, что попадёт в запись. Картинка занимает всё "
             "окно и продолжается за рамкой; эта линия говорит, где рамка. "
-            f"В {PREVIEW} и в Inspection, где есть что кадрировать.")
+            f"В {MODE_LABEL[PREVIEW]} и в Инспекторе, где есть что кадрировать.")
+        self.frame_button.setChecked(True)
         self.frame_button.toggled.connect(
             lambda _: (self._lay_overlays(), self._remember()))
 
@@ -4005,20 +4324,24 @@ class Viewer(QMainWindow):
         # to its left and right until the window is full, so a screen reads as
         # the endless band it really is on the wall rather than one turn of it
         # standing alone.
-        self.tile_button = QPushButton(self.canvas)
-        self.tile_button.setObjectName("qa_tile_button")
-        self.tile_button.setIcon(self._tile_icon())
-        self.tile_button.setIconSize(QSize(18, 18))
-        self.tile_button.setFixedSize(28, 28)
-        self.tile_button.setCheckable(True)
-        self.tile_button.setChecked(False)
-        self.tile_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.tile_button.setStyleSheet(self.OVERLAY_BUTTON)
-        self.tile_button.setToolTip(
+        self.tile_button = _pill(
+            "Плитка", "qa_tile_button",
             "Горизонтальный тайл: каждый экран повторяется лентой без конца, "
-            "влево и вправо, как он и идёт по кругу здания. Только во Flat.")
+            "влево и вправо, как он и идёт по кругу здания. Только в Развертке.")
+        self.tile_button.setChecked(False)
         self.tile_button.toggled.connect(
             lambda _: (self._lay_overlays(), self.touch(), self._remember()))
+
+        # What the line is, and what the hand can do here, at the foot.
+        self.frame_hint = QLabel(self.canvas)
+        self.frame_hint.setObjectName("qa_frame_hint")
+        self.frame_hint.setFont(theme.mono(8.5))
+        self.frame_hint.setStyleSheet(
+            f"QLabel {{ color:{theme.QUIET}; background:rgba(20,21,24,150);"
+            f" border-radius:4px; padding:2px 6px; }}")
+        self.frame_hint.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.frame_hint.setVisible(False)
 
     def _beside_canvas(self):
         """Every widget the window lays out, except the picture itself.
@@ -4079,7 +4402,7 @@ class Viewer(QMainWindow):
             for widget, was in self._was_showing:
                 widget.setVisible(was)
         self._full = going
-        self.full_button.setIcon(self._full_icon(not going))
+        self.full_button.setText("Выйти  Esc" if going else "Во весь экран")
         self._lay_overlays()
         self.touch()
 
@@ -4100,6 +4423,9 @@ class Viewer(QMainWindow):
     def eventFilter(self, watched, event):  # noqa: N802 -- Qt naming
         if watched is self.canvas and event.type() == QEvent.Type.Resize:
             self._lay_overlays()
+        if (watched is getattr(self, "out_folder", None)
+                and event.type() == QEvent.Type.Resize):
+            self._elide_folder()
         if watched in HINTS:
             if event.type() == QEvent.Type.Enter:
                 self._hint(watched)
@@ -4242,106 +4568,89 @@ class Viewer(QMainWindow):
         return True
 
     def _lay_overlays(self) -> None:
-        """Put them in their corners, and the names under their own halves."""
-        if not hasattr(self, "overlays"):
+        """Everything laid over the picture, each in its place for this mode.
+
+        The bar of how it looks at the top right; the keys at the top left,
+        their card under them; in ReBake the two readings, one each side, and
+        the names under their halves; the frame's own line and what it is; in
+        full screen the transport along the foot; with nothing loaded, the
+        offer to load something, in the middle.
+        """
+        if not hasattr(self, "look_bar"):
             return
         wide = self.canvas.width()
         tall = self.canvas.height()
-        edge = 10
-        taken = 0
-        if hasattr(self, "full_button"):
-            self.full_button.move(
-                max(edge, wide - self.full_button.width() - edge), edge)
-            self.full_button.raise_()
-            taken = self.full_button.width() + 6
-        if hasattr(self, "frame_button"):
-            # Where there is a render rectangle to mark: Preview and
-            # Inspection both write the file camera's frame, so both show the
-            # line. Flat is not one picture and ReBake is about a source file.
-            framed = self.mode.currentText() in (PREVIEW, "Inspection")
-            self.frame_button.setVisible(framed)
-            if framed:
-                self.frame_button.move(
-                    max(edge, wide - taken - self.frame_button.width() - edge),
-                    edge)
-                self.frame_button.raise_()
-                taken += self.frame_button.width() + 6
-            self._lay_frame_edge()
-        if hasattr(self, "tile_button"):
-            # Only in Flat: the other modes draw one picture, not strips to be
-            # laid end to end.
-            tileable = self.mode.currentText() == "Flat"
-            self.tile_button.setVisible(tileable)
-            if tileable:
-                self.tile_button.move(
-                    max(edge, wide - taken - self.tile_button.width() - edge),
-                    edge)
-                self.tile_button.raise_()
-                taken += self.tile_button.width() + 6
-        self.rebake_left_alpha.adjustSize()
-        self.rebake_right_alpha.adjustSize()
-        left = self.rebake_left_alpha
-        right = self.rebake_right_alpha
-        left.move(edge, edge)
-        # Clear of the full screen button, which is in that corner in every
-        # mode and would otherwise sit under this one.
-        right.move(max(edge, wide - right.width() - edge - taken), edge)
+        edge = 14
+        full = bool(getattr(self, "_full", False))
+        self._say_look()
+        bar = self.look_bar
+        bar.adjustSize()
+        bar.move(max(edge, wide - bar.width() - edge), edge)
+        bar.raise_()
+        self._lay_frame_edge()
+
+        button, card = self.keys_button, self.keys_card
+        button.setVisible(True)
+        button.move(edge, edge)
+        button.raise_()
+        card.setVisible(self._keys_open)
+        if card.isVisible():
+            card.adjustSize()
+            card.move(edge, edge + button.height() + 6)
+            card.raise_()
+
+        left, right = self.rebake_left_alpha, self.rebake_right_alpha
+        left.adjustSize()
+        right.adjustSize()
+        left.move(edge + button.width() + 8, edge)
+        # Under the bar, which is in that corner in every mode.
+        right.move(max(edge, wide - right.width() - edge),
+                   edge + bar.height() + 6)
+
         foot = 0
-        if hasattr(self, "full_bar"):
-            self.full_bar.setVisible(bool(getattr(self, "_full", False)))
-            if self.full_bar.isVisible():
-                high = self.full_bar.sizeHint().height()
-                self.full_bar.setGeometry(edge, tall - high - edge,
-                                          max(120, wide - 2 * edge), high)
-                self.full_bar.raise_()
-                foot = high + 6
+        self.full_bar.setVisible(full)
+        if full:
+            high = self.full_bar.sizeHint().height()
+            self.full_bar.setGeometry(edge, tall - high - edge,
+                                      max(120, wide - 2 * edge), high)
+            self.full_bar.raise_()
+            foot = high + 6
         for tag, middle in ((self.rebake_before, wide * 0.25),
                             (self.rebake_after, wide * 0.75)):
             tag.adjustSize()
             tag.move(int(middle - tag.width() / 2),
                      max(edge, tall - tag.height() - edge - foot))
-        if hasattr(self, "empty_card"):
-            # Only in the quick look, only while nothing is loaded at all.
-            empty = (self.level == "view" and not getattr(self, "_full", False)
-                     and not any(row.field.text().strip() for row in self.rows))
-            self.empty_card.setVisible(empty)
-            if empty:
-                self.empty_card.adjustSize()
-                self.empty_card.move(
-                    max(edge, (wide - self.empty_card.width()) // 2),
-                    max(edge, (tall - self.empty_card.height()) // 2))
-                self.empty_card.raise_()
-        if hasattr(self, "keys_button"):
-            # Bottom left of the picture, in both levels, and the card above
-            # the button that raises it.
-            showing = True
-            button, card = self.keys_button, self.keys_card
-            button.setVisible(showing)
-            card.setVisible(showing and self._keys_open)
-            button.setChecked(False)
-            button.move(edge, max(edge, tall - button.height() - edge - foot))
-            button.raise_()
-            if card.isVisible():
-                card.adjustSize()
-                card.move(edge, max(edge, button.y() - card.height() - 6))
-                card.raise_()
-        if hasattr(self, "levels_panel"):
-            # Against the right edge, under the buttons in that corner. The
-            # frame's brightness only where there is a frame: the quick look.
-            showing = not getattr(self, "_full", False)
-            for widget in self.levels_lines.get("Frame", ()):
-                widget.setVisible(self.level == "view")
-            panel, tab = self.levels_panel, self.levels_tab
-            panel.setVisible(showing and self._levels_open)
-            tab.setVisible(showing and not self._levels_open)
-            below = edge + 28 + 8
-            if panel.isVisible():
-                panel.adjustSize()
-                panel.move(max(edge, wide - panel.width() - edge), below)
-                panel.raise_()
-            if tab.isVisible():
-                tab.move(max(edge, wide - tab.width() - edge), below)
-                tab.raise_()
+
+        # Only in the quick look, only while nothing is loaded at all.
+        empty = (self.level == "view" and not full
+                 and not any(row.field.text().strip() for row in self.rows))
+        self.empty_card.setVisible(empty)
+        if empty:
+            self.empty_card.adjustSize()
+            self.empty_card.move(
+                max(edge, (wide - self.empty_card.width()) // 2),
+                max(edge, (tall - self.empty_card.height()) // 2))
+            self.empty_card.raise_()
+
+        hint = self.frame_hint
+        said = self._frame_hint_text() if (
+            self.level == "view" and not full and not empty
+            and self.mode.currentText() == PREVIEW) else ""
+        hint.setVisible(bool(said))
+        if said:
+            hint.setText(said)
+            hint.adjustSize()
+            hint.move(edge, max(edge, tall - hint.height() - 12))
+            hint.raise_()
+
+    def _frame_hint_text(self) -> str:
+        """What the frame is, and what the hand does, in one line."""
+        if self.mesh is None:
+            return ""
+        across, down = self.mesh.cropped or self.mesh.frame
+        what = (f"Рамка = кадр рендера {int(across)}×{int(down)}"
+                if self.frame_button.isChecked() else "Рамка выключена")
+        return f"{what} · колесо — ближе, двойной щелчок — сброс"
 
     def _lay_frame_edge(self) -> None:
         """Where the render's rectangle lands on the canvas, as a line.
@@ -4372,7 +4681,18 @@ class Viewer(QMainWindow):
             *shape, into=(self.canvas.width(), self.canvas.height()))
         self.frame_edge.setGeometry(round(left), round(top),
                                     round(across), round(down))
+        # Over the picture, and under everything else laid over it: the bar,
+        # the keys, the offer to load, the readings of ReBake.
         self.frame_edge.raise_()
+        for widget in self._over_the_frame():
+            widget.raise_()
+
+    def _over_the_frame(self) -> list:
+        """What is laid over the picture, the frame's line excepted."""
+        names = ("look_bar", "keys_button", "keys_card", "frame_hint",
+                 "empty_card", "full_bar", "rebake_left_alpha",
+                 "rebake_right_alpha", "rebake_before", "rebake_after")
+        return [getattr(self, name) for name in names if hasattr(self, name)]
 
     def _show_overlays(self, on: bool) -> None:
         if not hasattr(self, "overlays"):
@@ -4851,7 +5171,19 @@ class Viewer(QMainWindow):
         self.last_frame.setValue(last)
 
     def _note_output(self) -> None:
-        self.eta.setText(f"в {self.out_dir}")
+        """The folder, in the field before the name: its end, which is the
+        part that tells one folder from the next."""
+        folder = str(self.out_dir).rstrip("\\/") + ("\\" if sys.platform == "win32"
+                                                     else "/")
+        self.out_folder.setToolTip(folder)
+        self._elide_folder()
+
+    def _elide_folder(self) -> None:
+        """As much of the folder as the field has room for, from its end."""
+        folder = self.out_folder.toolTip()
+        room = max(40, self.out_folder.width())
+        self.out_folder.setText(self.out_folder.fontMetrics().elidedText(
+            folder, Qt.TextElideMode.ElideLeft, room))
 
     # -- rendering it out ------------------------------------------------------
 
@@ -5120,6 +5452,8 @@ class Viewer(QMainWindow):
         """While a file is being written: the bar that says how far, and Stop."""
         self.progress.setVisible(on)
         self.cancel_button.setVisible(on)
+        for widget in self._idle_only:
+            widget.setVisible(not on)
         if on:
             self.open_out.setVisible(False)
 
@@ -5191,19 +5525,19 @@ class Viewer(QMainWindow):
         start = str(Path(row.field.text()).parent) if row.field.text() else ""
         if row.motors:
             chosen, _ = QFileDialog.getOpenFileName(
-                self, "Choose a motor JSON", start,
-                "Motors (*.json);;All files (*)")
+                self, "Выбрать JSON моторов", start,
+                "Моторы (*.json);;Все файлы (*)")
         elif row.sound:
             chosen, _ = QFileDialog.getOpenFileName(
-                self, "Choose a WAV", start, "Sound (*.wav);;All files (*)")
+                self, "Выбрать WAV", start, "Звук (*.wav);;Все файлы (*)")
         else:
             chosen, _ = QFileDialog.getOpenFileName(
-                self, "Choose a movie or a picture", start,
-                "Movies and pictures (*.mov *.mp4 *.m4v *.mkv *.avi "
+                self, "Выбрать ролик или картинку", start,
+                "Ролики и картинки (*.mov *.mp4 *.m4v *.mkv *.avi "
                 "*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp *.tga);;"
-                "Movies (*.mov *.mp4 *.m4v *.mkv *.avi);;"
-                "Pictures (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp *.tga);;"
-                "All files (*)")
+                "Ролики (*.mov *.mp4 *.m4v *.mkv *.avi);;"
+                "Картинки (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp *.tga);;"
+                "Все файлы (*)")
         if chosen:
             row.field.setText(chosen)
             self._load()
@@ -5219,16 +5553,16 @@ class Viewer(QMainWindow):
         return [row for row in self.rows if row.motors]
 
     def _fold_sources(self, open_it=None) -> None:
-        """Show the rows or put them away, and say what is loaded either way."""
+        """Show the cards or fold the column to its marks."""
         if open_it is None:
             open_it = not self.sources_open
         self.sources_open = bool(open_it)
-        self.sources_body.setVisible(self.sources_open)
+        self._lay_sources()
         self._say_sources()
         self._remember()
 
-    def _say_sources(self) -> None:
-        """One line for the folded panel: what is loaded, in order."""
+    def sources_summary(self) -> str:
+        """What is loaded, card by card, in one line."""
         said = []
         for row in self.rows:
             text = row.field.text().strip()
@@ -5239,14 +5573,24 @@ class Viewer(QMainWindow):
                     and len(self.motors.parts) > 1:
                 more = f" +{len(self.motors.parts) - 1}"
             said.append(f"{row.title}: {Path(text).name}{more}")
-        whole = "   ".join(said) or "ничего не загружено"
-        arrow = "\u25be" if self.sources_open else "\u25b8"
-        short = whole if len(whole) < 150 else whole[:147] + "..."
-        self.sources_head.setText(f"{arrow}  {short}")
+        return "   ".join(said) or "ничего не загружено"
+
+    def _say_sources(self) -> None:
+        """How many cards have a file, and the marks of the folded column."""
+        loaded = [row for row in self.rows if row.field.text().strip()]
+        self.sources_count.setText(f"{len(loaded)} из {len(self.rows)} загружено")
+        self.sources_head.setText("Источники" if self.sources_open else "›")
+        whole = self.sources_summary()
         HINTS[self.sources_head] = (
-            "Источники" if self.sources_open else "Источники — развернуть",
-            whole + "\n\nСтроки с файлами: что на каком экране, звук, "
-            "моторы. Свёрнутые — картинке достаётся вся высота окна.")
+            "Источники — свернуть" if self.sources_open
+            else "Источники — развернуть",
+            whole + "\n\nКарточки с файлами: что на каком экране, звук, "
+            "моторы. Свёрнутые — картинке достаётся вся ширина окна.")
+        for row, mark in zip(self.rows, self.source_marks):
+            text = row.field.text().strip()
+            mark.setPixmap(theme.cell(row.title if text else "", 8))
+            mark.setToolTip(f"{row.title}: {Path(text).name}" if text
+                            else f"{row.title}: пусто")
 
     def _load(self) -> None:
         if self.level == "show":
@@ -5271,7 +5615,7 @@ class Viewer(QMainWindow):
             text = row.field.text().strip()
             row._shown()
             row.note.setText("")
-            row.note.setStyleSheet("color:#8d97a5;")
+            row.note.setStyleSheet(f"color:{theme.META};")
             if not text:
                 continue
             try:
@@ -5288,7 +5632,7 @@ class Viewer(QMainWindow):
                 screen = screen_gpu.Screen(self.device, stream.movie)
             except Exception as error:  # noqa: BLE001 -- shown beside the field
                 row.note.setText(str(error)[:60])
-                row.note.setStyleSheet("color:#e25c5c;")
+                row.note.setStyleSheet(f"color:{theme.ERROR};")
                 logfile.write(f"{text}: {error}")
                 continue
             stream.start()
@@ -5463,7 +5807,8 @@ class Viewer(QMainWindow):
     def _playing_says(self, playing: bool) -> None:
         """Both Play buttons at once -- the bar's below and the picture's."""
         for button in (self.play_button, self.full_play):
-            button.setIcon(icon("pause" if playing else "play"))
+            button.setIcon(theme.drawn_icon("pause" if playing else "play",
+                                            PLAY_INK))
             HINTS[button] = (("Стоп" if playing else "Играть"),
                              HINTS[button][1])
 
@@ -5935,7 +6280,7 @@ class Viewer(QMainWindow):
         except Exception as error:  # noqa: BLE001 -- shown beside the field
             self.track = None
             row.note.setText(str(error)[:60])
-            row.note.setStyleSheet("color:#e25c5c;")
+            row.note.setStyleSheet(f"color:{theme.ERROR};")
             logfile.write(f"{text}: {error}")
             return
         self.player.set_volume(row.multiplier)
@@ -5945,7 +6290,7 @@ class Viewer(QMainWindow):
                                      if self.player is not None
                                      and self.player.playing else None)
         row.note.setText(self.track.describe())
-        row.note.setStyleSheet("color:#8d97a5;")
+        row.note.setStyleSheet(f"color:{theme.META};")
         logfile.write(f"{Path(text).name}: {self.track.describe()}")
         if self.clock.playing:
             self.player.play()
@@ -5964,7 +6309,7 @@ class Viewer(QMainWindow):
             return
         row._shown()
         row.note.setText("")
-        row.note.setStyleSheet("color:#8d97a5;")
+        row.note.setStyleSheet(f"color:{theme.META};")
         self.motors = None
         self._moved_to = None
         text = row.field.text().strip()
@@ -5991,7 +6336,7 @@ class Viewer(QMainWindow):
             self.solid.rest_cells()
             self._pick_top()
             row.note.setText(str(error)[:60])
-            row.note.setStyleSheet("color:#e25c5c;")
+            row.note.setStyleSheet(f"color:{theme.ERROR};")
             logfile.write(f"{', '.join(Path(one).name for one in chain)}: {error}")
             self._say_sources()
             return
@@ -6005,7 +6350,7 @@ class Viewer(QMainWindow):
         row.note.setText(said)
         for bad in self.motors.complaints():
             row.note.setText(bad[:60])
-            row.note.setStyleSheet("color:#f08c4a;")
+            row.note.setStyleSheet(f"color:{theme.WARN};")
             logfile.write(f"kinetic: {bad}")
         self._mark_span()
         logfile.write(", ".join(Path(one).name for one in chain)
@@ -6198,15 +6543,20 @@ class Viewer(QMainWindow):
         # Only a rate while something is playing: drawing happens on demand,
         # so between changes "frames a second" would just measure how often
         # somebody touched the mouse.
-        pace = (f"рисует {self.shown_fps:4.1f} к/с, {self.draw_ms:.2f} мс на кадр"
+        pace = (f"рисует {self.shown_fps:4.1f} к/с · {self.draw_ms:.2f} мс на кадр"
                 if self.clock.playing else
-                f"стоит, последний кадр {self.draw_ms:.2f} мс")
+                f"стоит · последний кадр {self.draw_ms:.2f} мс")
         # Where the free camera is standing, while there is one. Otherwise
         # there is no way to say what you are looking at, or to get back to it.
         if self.inspecting() and self.solid is not None and self.solid.free:
-            pace = f"{pace}   камера {self.solid.free.describe()}"
-        head = (f"{self.adapter.info.get('device', '?')} "
-                f"({self.adapter.info.get('backend_type', '?')})   {pace}")
+            pace = f"{pace} · камера {self.solid.free.describe()}"
+        card = (f'<span style="color:{theme.META}">●</span> '
+                + html.escape(f"{self.adapter.info.get('device', '?')} · "
+                              f"{self.adapter.info.get('backend_type', '?')}"))
+        if card != getattr(self, "_card_said", None):
+            self._card_said = card
+            self.status.setText(card)
+        self.status_pace.setText(pace)
         lines, dropped = [], 0
         for index, stream in enumerate(self.streams):
             counts = stream.counts
@@ -6226,22 +6576,23 @@ class Viewer(QMainWindow):
                     + ("   в конце" if stream.at_end else ""))
             lines.append(theme.cell_html(row) + " " + html.escape(text))
         # Frames thrown away because they came too late are what a stutter
-        # is. Folded, the line says how many; while the number is growing it
+        # is. The status line says how many; while the number is growing it
         # says so in the colour that asks for attention.
         now = time.perf_counter()
         if dropped > self._dropped_seen:
             self._dropped_grew = now
         self._dropped_seen = dropped
         growing = now - self._dropped_grew < 3.0
-        arrow = "\u25be" if self.stats_open else "\u25b8"
-        mark = f"   · выброшено кадров {dropped}" if dropped else ""
-        more = "" if self.stats_open or not lines else \
-            f"   · файлы: {len(lines)}"
-        self.stats_head.setText(f"{arrow} {head}{mark}{more}")
+        files = f"файлы: {len(lines)}" if lines else "файлов нет"
+        if dropped:
+            files += f" · выброшено кадров {dropped}"
+        self.status_files.setText(files)
+        arrow = "▾" if self.stats_open else "▴"
+        self.stats_head.setText(f"Статистика декодера {arrow}")
         if growing != getattr(self, "_stats_warn", None):
             self._stats_warn = growing
-            self.stats_head.setStyleSheet(FOLD_HEADER_WARN if growing
-                                          else FOLD_HEADER)
+            self.status_files.setStyleSheet(
+                f"color:{theme.WARN};" if growing else "")
         self.stats.setText('<div style="white-space:pre">'
                            + "<br>".join(lines) + "</div>")
         self.stats.setVisible(self.stats_open and bool(lines))
@@ -6273,6 +6624,11 @@ STYLESHEET = theme.sheet()
 def main() -> int:
     written = logfile.start(APP_NAME, APP_VERSION)
     app = QApplication(sys.argv)
+    # The design's own faces when they travel with the program, then the
+    # window's type and its sheet: see theme.py.
+    theme.load_fonts(logfile.bundled("fonts")
+                     or (Path(__file__).resolve().parent / "fonts"))
+    app.setFont(theme.app_font())
     app.setStyleSheet(STYLESHEET)
     # Before the window is built, because building it is what takes the time.
     logfile.raise_splash(app)

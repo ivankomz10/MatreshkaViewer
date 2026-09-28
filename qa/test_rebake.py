@@ -104,7 +104,7 @@ def test_hap_rebake_takes_the_source_place(baker, copies):
         "the file under the old name is still the old file")
     # And the row still points at the same name, so everything downstream of
     # it keeps working.
-    assert baker.at("qa_path_top").value == str(copies["top"])
+    assert baker.holds("top") == copies["top"].name
     assert baker.log_has("rebake: wrote", within=10)
 
 

@@ -25,15 +25,15 @@ def test_says_what_it_found(app):
     line = app.log_has("GPU:", within=40)
     assert "GPU: ok" in line, line
     assert "ffmpeg" in line, line
-    shown = app.says("qa_stats_header")
-    assert "Vulkan" in shown or "D3D12" in shown or "Metal" in shown \
-        or "стоит" in shown, f"the footer says {shown!r}"
+    shown = app.says("qa_status")
+    assert "Vulkan" in shown or "D3D12" in shown or "Metal" in shown, (
+        f"the status line says {shown!r}")
 
 
 def test_carries_the_last_session_over(app):
     """Three clips named in the settings file are three clips loaded."""
     for row in ("top", "bottom", "lamels"):
-        path = app.at(f"qa_path_{row}").value
+        path = app.holds(row)
         assert path.endswith(f"qa_{row}.mov"), f"{row} holds {path!r}"
         note = app.says(f"qa_note_{row}")
         assert "x" in note, f"{row} says nothing about its file: {note!r}"

@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&family=Onest:wght@400;500;600;700&family=Golos+Text:wght@400;500;600&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#e9e7e2;font-family:system-ui,sans-serif}a{color:#2a78d6}a:hover{color:#1a5aa8}.dv-turn{padding:40px 44px 32px;border-bottom:1px solid rgba(0,0,0,.08);scroll-margin-top:16px}.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 20px}.dv-tid{font:600 10px ui-monospace,Menlo,monospace;padding:3px 7px;background:#1a1a1a;color:#fff;border-radius:4px;text-decoration:none}.dv-tname{font:600 13px/1.2 system-ui,sans-serif;color:#1a1a1a}.dv-opts{display:flex;flex-wrap:wrap;gap:48px;align-items:flex-start}.dv-opt{flex:none;display:flex;flex-direction:column;gap:9px;scroll-margin-top:16px}.dv-oid{font:600 10.5px ui-monospace,Menlo,monospace;padding:3px 7px;background:rgba(0,0,0,.08);color:#1a1a1a;border-radius:5px;text-decoration:none}.dv-olabel{display:flex;align-items:baseline;gap:8px;font:400 12px/1.3 system-ui,sans-serif;color:rgba(0,0,0,.6)}.dv-card{max-width:100%;background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden}.dv-opt:target .dv-oid{background:#2a78d6;color:#fff}.dv-next{margin:22px 0 0;font:12px/1.5 system-ui,sans-serif;color:rgba(0,0,0,.5)}</style>
+</helmet>
+<section class="dv-turn" id="t3">
+<div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname"><a class="dv-oid" href="#2a">2a</a> с тонкими клипами</span></div>
+<p style="max-width:900px;margin:0 0 24px;font:13px/1.55 system-ui,sans-serif;color:rgba(0,0,0,.65)">Плейхед, флажок, фейды и цвета из <a class="dv-oid" href="#2a">2a</a> без изменений. Клип стал тоньше: имя и длина в одну строку. Пустой уровень — 8 px. Все 12 дорожек теперь занимают 270 px вместо 364, освободившееся место отдано картинке.</p>
+<div class="dv-opts">
+
+<div class="dv-opt" id="3a">
+<div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a>Клип 22 px, имя и длина в одну строку внутри клипа.</div>
+<div class="dv-card" style="width:1440px;display:flex;flex-direction:column">
+<div data-screen-label="3a Дорожки" style="width:1440px;background:#16171a;color:#e6e7ea;font-family:'IBM Plex Sans',sans-serif;font-size:13px;position:relative;display:flex;flex-direction:column">
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:32px;border-bottom:1px solid #2c2e33;background:#1c1d20">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px"><span style="font-family:'IBM Plex Mono';font-size:10.5px;padding:2px 6px;border-radius:3px;border:1px solid #6b5a2c;color:#e3c27a">LOOP</span><span style="font-family:'IBM Plex Mono';font-size:11px;color:#8a8f98">800–1099</span></div>
+<div style="position:relative"><sc-for list="{{ tkMid }}" as="t" hint-placeholder-count="13"><div style="position:absolute;left:{{ t.left }};bottom:0;height:{{ t.h }};border-left:1px solid #4a4d54"></div><div style="position:absolute;left:{{ t.left }};top:4px;padding-left:5px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa0a9;white-space:nowrap">{{ t.label }}</div></sc-for></div>
+</div>
+<sc-for list="{{ rowsThin }}" as="r" hint-placeholder-count="12">
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:{{ r.h }};background:{{ r.lane }};border-bottom:1px solid #121315">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px;border-right:1px solid #2c2e33;background:#1c1d20;overflow:hidden"><span style="width:3px;align-self:stretch;margin:2px 0;border-radius:2px;background:{{ r.dot }}"></span><span style="font-weight:600;font-size:12px;color:{{ r.headFg }}">{{ r.label }}</span><span style="font-family:'IBM Plex Mono';color:#8a8f98;font-size:11px">{{ r.lvl }}</span></div>
+<div style="position:relative">
+<sc-for list="{{ r.clips }}" as="c" hint-placeholder-count="2">
+<div style="position:absolute;left:{{ c.left }};width:{{ c.width }};top:2px;bottom:2px;background:{{ c.a.bg }};border-radius:2px;box-shadow:inset 0 0 0 1px {{ c.a.bd }};border-left:2px solid {{ c.a.edge }};outline:{{ c.olA }};outline-offset:1px;overflow:hidden;box-sizing:border-box">
+<div style="position:absolute;left:0;top:0;bottom:0;width:{{ c.fiW }};background:linear-gradient(to bottom right, rgba(0,0,0,.55) calc(50% - 1px), rgba(255,255,255,.9) 50%, transparent calc(50% + 1px))"></div>
+<div style="position:absolute;right:0;top:0;bottom:0;width:{{ c.foW }};background:linear-gradient(to top right, transparent calc(50% - 1px), rgba(255,255,255,.9) 50%, rgba(0,0,0,.55) calc(50% + 1px))"></div>
+<div style="position:relative;height:100%;padding:0 7px;display:flex;align-items:center;gap:10px;white-space:nowrap"><span style="font-size:12px;font-weight:500;color:{{ c.a.fg }}">{{ c.name }}</span><span style="font-family:'IBM Plex Mono';font-size:11px;color:{{ c.a.meta }}">{{ c.meta }}</span></div>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-for>
+<div style="position:absolute;left:calc(150px + (100% - 150px) * {{ pMid }});top:0;bottom:0;width:0;pointer-events:none">
+<div style="position:absolute;left:-1px;top:32px;bottom:0;width:2px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.85)"></div>
+<div style="position:absolute;left:-46px;top:3px;width:92px;height:22px;border-radius:4px;background:#fff;color:#111;font-family:'IBM Plex Mono';font-size:11.5px;font-weight:500;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.5)">10:00:42</div>
+<div style="position:absolute;left:-5px;top:24px;width:10px;height:10px;background:#fff;transform:rotate(45deg)"></div>
+</div>
+</div>
+<div data-screen-label="3a Кадры" style="width:1440px;background:#16171a;color:#e6e7ea;font-family:'IBM Plex Sans',sans-serif;font-size:13px;border-top:8px solid #e9e7e2;position:relative">
+<div style="display:flex;align-items:center;gap:12px;height:30px;padding:0 12px;background:#1c1d20;border-bottom:1px solid #2c2e33;font-size:12px;color:#9aa0a9"><b style="color:#e6e7ea">Приближение до кадров</b><span>в окне 90 кадров · клетка кадра 14 px</span></div>
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:36px;border-bottom:1px solid #2c2e33;background:#1c1d20">
+<div style="display:flex;align-items:center;padding-left:12px;font-family:'IBM Plex Mono';font-size:11px;color:#8a8f98">кадры @60</div>
+<div style="position:relative"><sc-for list="{{ tkFr }}" as="t" hint-placeholder-count="30"><div style="position:absolute;left:{{ t.left }};bottom:0;height:{{ t.h }};border-left:1px solid {{ t.c }}"></div><sc-if value="{{ t.lab }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:{{ t.left }};top:3px;padding-left:4px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa0a9;white-space:nowrap">{{ t.label }}</div></sc-if></sc-for></div>
+</div>
+<sc-for list="{{ rowsFrThin }}" as="r" hint-placeholder-count="6">
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:{{ r.h }};background:{{ r.lane }};border-bottom:1px solid #121315">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px;border-right:1px solid #2c2e33;background:#1c1d20"><span style="width:3px;align-self:stretch;margin:2px 0;border-radius:2px;background:{{ r.dot }}"></span><span style="font-weight:600;font-size:12px;color:{{ r.headFg }}">{{ r.label }}</span><span style="font-family:'IBM Plex Mono';color:#8a8f98;font-size:11px">{{ r.lvl }}</span></div>
+<div style="position:relative">
+<sc-for list="{{ r.clips }}" as="c" hint-placeholder-count="2">
+<div style="position:absolute;left:{{ c.left }};width:{{ c.width }};top:2px;bottom:2px;background:{{ c.a.bg }};border-radius:2px;box-shadow:inset 0 0 0 1px {{ c.a.bd }};border-left:2px solid {{ c.a.edge }};outline:{{ c.olA }};outline-offset:1px;overflow:hidden;box-sizing:border-box">
+<div style="position:absolute;right:0;top:0;bottom:0;width:{{ c.foW }};background:linear-gradient(to top right, transparent calc(50% - 1px), rgba(255,255,255,.9) 50%, rgba(0,0,0,.55) calc(50% + 1px))"></div>
+<div style="position:relative;height:100%;padding:0 7px;display:flex;align-items:center;white-space:nowrap;font-size:12px;font-weight:500;color:{{ c.a.fg }}">{{ c.name }}</div>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-for>
+<div style="position:absolute;left:calc(150px + (100% - 150px) * {{ pFr }});width:calc((100% - 150px) * {{ cellFr }});top:30px;bottom:0;pointer-events:none">
+<div style="position:absolute;inset:36px 0 0 0;background:rgba(255,255,255,.16)"></div>
+<div style="position:absolute;left:-1px;top:36px;bottom:0;width:2px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.85)"></div>
+<div style="position:absolute;left:0;right:0;top:0;height:36px;background:#fff"></div>
+<div style="position:absolute;left:18px;top:6px;padding:3px 8px;border-radius:4px;background:#fff;color:#111;font-family:'IBM Plex Mono';font-size:11.5px;font-weight:500;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.5)">00:10:00:42 · кадр 36042</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="3b">
+<div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a>Лента. Имя над клипом, сам клип — полоса 8 px. Самый лёгкий вид, фейд читается по сужению полосы.</div>
+<div class="dv-card" style="width:1440px;display:flex;flex-direction:column">
+<div data-screen-label="3b Дорожки" style="width:1440px;background:#16171a;color:#e6e7ea;font-family:'IBM Plex Sans',sans-serif;font-size:13px;position:relative;display:flex;flex-direction:column">
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:32px;border-bottom:1px solid #2c2e33;background:#1c1d20">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px"><span style="font-family:'IBM Plex Mono';font-size:10.5px;padding:2px 6px;border-radius:3px;border:1px solid #6b5a2c;color:#e3c27a">LOOP</span><span style="font-family:'IBM Plex Mono';font-size:11px;color:#8a8f98">800–1099</span></div>
+<div style="position:relative"><sc-for list="{{ tkMid }}" as="t" hint-placeholder-count="13"><div style="position:absolute;left:{{ t.left }};bottom:0;height:{{ t.h }};border-left:1px solid #4a4d54"></div><div style="position:absolute;left:{{ t.left }};top:4px;padding-left:5px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa0a9;white-space:nowrap">{{ t.label }}</div></sc-for></div>
+</div>
+<sc-for list="{{ rowsTape }}" as="r" hint-placeholder-count="12">
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:{{ r.h }};background:{{ r.lane }};border-bottom:1px solid #121315">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px;border-right:1px solid #2c2e33;background:#1c1d20;overflow:hidden"><span style="width:3px;align-self:stretch;margin:2px 0;border-radius:2px;background:{{ r.dot }}"></span><span style="font-weight:600;font-size:12px;color:{{ r.headFg }}">{{ r.label }}</span><span style="font-family:'IBM Plex Mono';color:#8a8f98;font-size:11px">{{ r.lvl }}</span></div>
+<div style="position:relative">
+<sc-for list="{{ r.clips }}" as="c" hint-placeholder-count="2">
+<div style="position:absolute;left:{{ c.left }};width:{{ c.width }};top:0;bottom:0;outline:{{ c.olA }};outline-offset:-1px;border-radius:2px;overflow:hidden">
+<div style="position:absolute;left:0;right:0;top:2px;padding:0 6px;border-left:2px solid {{ c.a.edge }};height:16px;display:flex;align-items:center;gap:10px;white-space:nowrap"><span style="font-size:12px;font-weight:500;color:#eef0f3">{{ c.name }}</span><span style="font-family:'IBM Plex Mono';font-size:11px;color:#8a8f98">{{ c.meta }}</span></div>
+<div style="position:absolute;left:0;right:0;bottom:3px;height:8px;background:{{ c.a.edge }};border-radius:1px"></div>
+<div style="position:absolute;right:0;bottom:3px;height:8px;width:{{ c.foW }};background:linear-gradient(to top right, transparent 50%, {{ r.lane }} 50%)"></div>
+<div style="position:absolute;left:0;bottom:3px;height:8px;width:{{ c.fiW }};background:linear-gradient(to top left, transparent 50%, {{ r.lane }} 50%)"></div>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-for>
+<div style="position:absolute;left:calc(150px + (100% - 150px) * {{ pMid }});top:0;bottom:0;width:0;pointer-events:none">
+<div style="position:absolute;left:-1px;top:32px;bottom:0;width:2px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.85)"></div>
+<div style="position:absolute;left:-46px;top:3px;width:92px;height:22px;border-radius:4px;background:#fff;color:#111;font-family:'IBM Plex Mono';font-size:11.5px;font-weight:500;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.5)">10:00:42</div>
+<div style="position:absolute;left:-5px;top:24px;width:10px;height:10px;background:#fff;transform:rotate(45deg)"></div>
+</div>
+</div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Дальше: «<a class="dv-oid" href="#3a">3a</a> в полном окне» · «<a class="dv-oid" href="#3a">3a</a>, но 18 px» · «<a class="dv-oid" href="#3b">3b</a> для свёрнутого вида, <a class="dv-oid" href="#3a">3a</a> для обычного»</p>
+</section>
+<section class="dv-turn" id="t2">
+<div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Шоу на основе <a class="dv-oid" href="#1a">1a</a>: читаемые дорожки и плейхед по кадрам</span></div>
+<div style="max-width:1100px;margin:0 0 28px;font:13px/1.55 system-ui,sans-serif;color:rgba(0,0,0,.65);display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px">
+<div><b style="color:#1a1a1a">Дорожки.</b> Уровень с клипами 38 px вместо 19, пустой уровень сжат до 12 px. Имя клипа набрано пропорциональным шрифтом, под ним вторая строка: длина и фейд. Фейд нарисован диагональю с затемнением, как сейчас, но на полной высоте клипа. Группы экранов разделены фоном.</div>
+<div><b style="color:#1a1a1a">Плейхед.</b> Белая линия с тёмной обводкой, заметная на любом клипе. Флажок на линейке показывает таймкод и номер кадра. Позиция всегда целый кадр; при приближении плейхед занимает клетку ровно в один кадр, и её видно.</div>
+<div><b style="color:#1a1a1a">Пример.</b> Везде один и тот же момент шоу RusDay: кадр 36042 (00:10:00:42), склейка на 10:00, где RusDay гаснет за 2 секунды поверх 7Sisters. Внизу каждого варианта тот же момент при приближении до кадров.</div>
+</div>
+<div class="dv-opts">
+
+<div class="dv-opt" id="2a">
+<div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a>Заливка. Клипы залиты цветом экрана, плейхед — белая линия с флажком. Показан целиком в окне приложения.</div>
+<div class="dv-card" style="width:1440px;display:flex;flex-direction:column">
+<div data-screen-label="2a Шоу" style="width:1440px;height:900px;background:#1c1d20;color:#e6e7ea;font-family:'IBM Plex Sans',sans-serif;font-size:13px;display:grid;grid-template-rows:48px 48px 262px 52px minmax(0,1fr) 52px 28px">
+<div style="display:flex;align-items:center;gap:16px;padding:0 16px;border-bottom:1px solid #2c2e33;background:#18191b">
+<div style="display:flex;align-items:baseline;gap:8px"><span style="font-weight:600;font-size:14px">Matreshka Viewer</span><span style="font-family:'IBM Plex Mono';font-size:12px;color:#8a8f98">0.4</span></div>
+<div style="display:flex;background:#101113;border:1px solid #2c2e33;border-radius:6px;padding:2px"><div style="padding:5px 14px;border-radius:4px;color:#b8bcc4">Просмотр</div><div style="padding:5px 14px;border-radius:4px;background:#2f5f8f;color:#fff;font-weight:500">Шоу</div></div>
+<div style="width:1px;height:24px;background:#2c2e33"></div>
+<div style="display:flex;gap:2px;height:48px;align-items:stretch"><div style="display:flex;align-items:center;padding:0 14px;border-bottom:2px solid #6aa6de;color:#fff;font-weight:500">Превью</div><div style="display:flex;align-items:center;padding:0 14px;color:#9aa0a9">Развертка</div><div style="display:flex;align-items:center;padding:0 14px;color:#9aa0a9">Инспектор</div></div>
+<div style="padding:5px 12px;border:1px solid #34373d;border-radius:5px;color:#c6cad1">Слои ▾</div>
+<div style="flex:1"></div>
+<div style="display:flex;gap:6px;align-items:center;color:#9aa0a9;font-size:12px"><span style="color:#e6e7ea;font-weight:500">RU</span><span>/</span><span>EN</span></div>
+<div style="padding:5px 12px;border:1px solid #34373d;border-radius:5px;color:#c6cad1">Лог</div>
+</div>
+<div style="display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid #2c2e33;background:#202125">
+<span style="padding:5px 12px;border:1px solid #34373d;border-radius:5px">Открыть шоу…</span>
+<span style="padding:5px 12px;border:1px solid #34373d;border-radius:5px">Новое шоу</span>
+<div style="display:flex;flex-direction:column;line-height:1.25;min-width:0"><span style="font-weight:600;white-space:nowrap">2026-Daily-RusDay-STD150-Matreshka_Day-MuzeyTransporta</span><span style="font-family:'IBM Plex Mono';font-size:11.5px;color:#8a8f98">видео 17 · звук 6 · моторы 5 · кью 3 · лупы 1</span></div>
+<span style="padding:4px 10px;border-radius:12px;background:#3a3220;color:#e3c27a;font-size:12px">черновик · правок 18</span>
+<div style="flex:1"></div>
+<span style="padding:5px 10px;border:1px solid #34373d;border-radius:5px;color:#8a8f98">↶</span><span style="padding:5px 10px;border:1px solid #34373d;border-radius:5px;color:#8a8f98">↷</span>
+<span style="padding:5px 12px;border:1px solid #34373d;border-radius:5px">+ кью</span><span style="padding:5px 12px;border:1px solid #34373d;border-radius:5px">Удалить</span><span style="padding:5px 12px;border:1px solid #34373d;border-radius:5px">Вернуть файл</span>
+<span style="padding:5px 14px;border-radius:5px;background:#2f5f8f;color:#fff;font-weight:500">✎ Редактор</span>
+</div>
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 250px 380px;min-height:0;border-bottom:1px solid #2c2e33">
+<div style="background:#000;position:relative;overflow:hidden;display:flex;justify-content:center"><img src="assets/building.png" alt="" style="height:100%;display:block"><div style="position:absolute;left:12px;top:10px;width:26px;height:26px;border-radius:13px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-weight:600">?</div></div>
+<div style="background:#1c1d20;border-left:1px solid #2c2e33;padding:12px 16px;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;justify-content:space-between"><span style="font-weight:600">Экраны</span><span style="color:#8a8f98">›</span></div>
+<sc-for list="{{ screens }}" as="s" hint-placeholder-count="4"><div style="display:flex;align-items:center;gap:10px"><span style="width:50px">{{ s.key }}</span><div style="flex:1;height:4px;background:#34373d;border-radius:2px;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ s.pct }};background:#5b93c7;border-radius:2px"></div><div style="position:absolute;left:{{ s.pct }};top:-5px;width:14px;height:14px;margin-left:-7px;border-radius:7px;background:#e6e7ea"></div></div><span style="font-family:'IBM Plex Mono';font-size:12px;width:32px;text-align:right">{{ s.gain }}</span></div></sc-for>
+<div style="display:flex;gap:6px;font-size:12px;margin-top:auto"><span style="padding:3px 9px;border-radius:4px;border:1px solid #34373d">Сравнять яркость</span><span style="padding:3px 9px;border-radius:4px;background:#2f5f8f;color:#fff">Top ⇄ Bottom</span></div>
+</div>
+<div style="background:#202125;border-left:1px solid #2c2e33;padding:12px 16px;display:flex;flex-direction:column;gap:8px;min-height:0">
+<div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:2px;background:oklch(0.7 0.12 250)"></span><span style="font-weight:600">Клип</span><span style="color:#8a8f98;font-size:12px">Top · L0</span><span style="flex:1"></span><span style="font-size:12px;color:#9aa0a9;padding:2px 8px;border:1px solid #34373d;border-radius:4px">Диапазон рендера — этот клип</span></div>
+<div style="font-family:'IBM Plex Mono';font-size:12px;line-height:1.35">RusDay_SHOW_Top_v02_2026-06-09.mov <span style="color:#8a8f98">D:\Content\2026-dates\RusDay\</span></div>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 14px">
+<sc-for list="{{ fields2 }}" as="f" hint-placeholder-count="8"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="color:#9aa0a9;font-size:12px">{{ f.k }}</span><span style="font-family:'IBM Plex Mono';font-size:12px;padding:3px 8px;background:#141517;border:1px solid #34373d;border-radius:4px;min-width:74px;text-align:right">{{ f.v }}</span></div></sc-for>
+</div>
+</div>
+</div>
+<div style="display:flex;align-items:center;gap:14px;padding:0 16px;background:#1c1d20;border-bottom:1px solid #2c2e33">
+<div style="display:flex;gap:4px"><div style="width:34px;height:30px;border-radius:5px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-size:11px">|◀</div><div style="width:34px;height:30px;border-radius:5px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-size:11px">◀|</div><div style="width:44px;height:30px;border-radius:5px;background:#e6e7ea;color:#111;display:flex;align-items:center;justify-content:center">▶</div><div style="width:34px;height:30px;border-radius:5px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-size:11px">|▶</div><div style="width:34px;height:30px;border-radius:5px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-size:11px">▶|</div></div>
+<span style="font-family:'IBM Plex Mono';font-size:20px;font-weight:500">00:10:00:42</span>
+<span style="font-family:'IBM Plex Mono';font-size:12px;color:#8a8f98">кадр 36042 из 79200</span>
+<span style="font-size:12px;color:#8a8f98;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">на экранах: Top L0 RusDay_SHOW_Top (гаснет) + L1 7Sisters_Top_Canvas · Bottom L0 + L1 · Lamels L0 + L1</span>
+<div style="flex:1"></div>
+<span style="font-size:12px;color:#8a8f98">Смотреть по</span><span style="padding:4px 9px;border:1px solid #34373d;border-radius:4px;font-family:'IBM Plex Mono';font-size:12px">60 к/с ▾</span>
+</div>
+
+<div style="position:relative;background:#16171a;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:32px;border-bottom:1px solid #2c2e33;background:#1c1d20;flex:none">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px"><span style="font-family:'IBM Plex Mono';font-size:10.5px;padding:2px 6px;border-radius:3px;border:1px solid #6b5a2c;color:#e3c27a">LOOP</span><span style="font-family:'IBM Plex Mono';font-size:11px;color:#8a8f98">800–1099</span></div>
+<div style="position:relative">
+<sc-for list="{{ tkMid }}" as="t" hint-placeholder-count="13"><div style="position:absolute;left:{{ t.left }};bottom:0;height:{{ t.h }};border-left:1px solid #4a4d54"></div><div style="position:absolute;left:{{ t.left }};top:4px;padding-left:5px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa0a9;white-space:nowrap">{{ t.label }}</div></sc-for>
+</div>
+</div>
+<sc-for list="{{ rowsMid }}" as="r" hint-placeholder-count="11">
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:{{ r.h }};background:{{ r.lane }};border-bottom:1px solid #121315;flex:none">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px;border-right:1px solid #2c2e33;background:#1c1d20"><span style="width:3px;align-self:stretch;margin:3px 0;border-radius:2px;background:{{ r.dot }}"></span><span style="font-weight:600;font-size:12.5px;color:{{ r.headFg }}">{{ r.label }}</span><span style="font-family:'IBM Plex Mono';color:#8a8f98;font-size:11px">{{ r.lvl }}</span></div>
+<div style="position:relative">
+<sc-for list="{{ r.clips }}" as="c" hint-placeholder-count="2">
+<div style="position:absolute;left:{{ c.left }};width:{{ c.width }};top:2px;bottom:2px;background:{{ c.a.bg }};border-radius:3px;box-shadow:inset 0 0 0 1px {{ c.a.bd }};border-left:2px solid {{ c.a.edge }};outline:{{ c.olA }};outline-offset:1px;overflow:hidden;box-sizing:border-box">
+<div style="position:absolute;left:0;top:0;bottom:0;width:{{ c.fiW }};background:linear-gradient(to bottom right, rgba(0,0,0,.55) calc(50% - 1px), rgba(255,255,255,.9) 50%, transparent calc(50% + 1px))"></div>
+<div style="position:absolute;right:0;top:0;bottom:0;width:{{ c.foW }};background:linear-gradient(to top right, transparent calc(50% - 1px), rgba(255,255,255,.9) 50%, rgba(0,0,0,.55) calc(50% + 1px))"></div>
+<div style="position:relative;padding:3px 8px;display:flex;flex-direction:column;gap:1px;white-space:nowrap">
+<span style="font-size:12px;font-weight:500;color:{{ c.a.fg }};line-height:15px">{{ c.name }}</span>
+<sc-if value="{{ c.twoLine }}" hint-placeholder-val="{{ true }}"><span style="font-family:'IBM Plex Mono';font-size:11px;color:{{ c.a.meta }};line-height:14px">{{ c.meta }}</span></sc-if>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-for>
+<div style="position:absolute;left:calc(150px + (100% - 150px) * {{ pMid }});top:0;bottom:0;width:0;pointer-events:none">
+<div style="position:absolute;left:-1px;top:32px;bottom:0;width:2px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.85)"></div>
+<div style="position:absolute;left:-46px;top:3px;width:92px;height:22px;border-radius:4px;background:#fff;color:#111;font-family:'IBM Plex Mono';font-size:11.5px;font-weight:500;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.5)">10:00:42</div>
+<div style="position:absolute;left:-5px;top:24px;width:10px;height:10px;background:#fff;transform:rotate(45deg)"></div>
+</div>
+</div>
+
+<div style="display:flex;align-items:center;gap:10px;padding:0 16px;border-top:1px solid #2c2e33;background:#1c1d20;font-size:12px">
+<span style="font-weight:600;font-size:13px;margin-right:6px">Рендер</span>
+<span style="color:#8a8f98">Размер</span><span style="padding:5px 9px;background:#141517;border:1px solid #34373d;border-radius:4px;font-family:'IBM Plex Mono'">1080×1920 ▾</span>
+<span style="color:#8a8f98">Кадры</span><span style="padding:5px 9px;background:#141517;border:1px solid #34373d;border-radius:4px;font-family:'IBM Plex Mono'">0 – 79199</span><span style="padding:5px 9px;border:1px solid #34373d;border-radius:4px">всё</span>
+<span style="color:#8a8f98">Писать</span><span style="padding:5px 9px;background:#141517;border:1px solid #34373d;border-radius:4px;font-family:'IBM Plex Mono'">30 к/с ▾</span>
+<span style="padding:5px 9px;background:#141517;border:1px solid #34373d;border-radius:4px">H.264 mp4 ▾</span>
+<div style="flex:1;min-width:0;display:flex;align-items:center;background:#141517;border:1px solid #34373d;border-radius:4px;overflow:hidden"><span style="padding:5px 9px;color:#8a8f98;font-family:'IBM Plex Mono';white-space:nowrap">E:\05_Render\Matreshka_Viewer\OUT\</span><span style="padding:5px 0;font-family:'IBM Plex Mono'">Matreshka_preview.mp4</span></div>
+<span style="padding:5px 10px;border:1px solid #34373d;border-radius:4px">Куда…</span><span style="padding:5px 10px;border:1px solid #34373d;border-radius:4px">+1</span><span style="padding:5px 10px;border:1px solid #34373d;border-radius:4px">Снимок</span>
+<span style="padding:7px 18px;border-radius:5px;background:#c8463c;color:#fff;font-weight:600;font-size:13px">Рендер</span>
+</div>
+<div style="display:flex;align-items:center;gap:18px;padding:0 16px;border-top:1px solid #2c2e33;background:#141517;font-family:'IBM Plex Mono';font-size:11.5px;color:#8a8f98"><span><span style="color:#8fbf9a">●</span> RTX 3080 · Vulkan</span><span>стоит · последний кадр 3.50 мс</span><span>файлы: 6</span><span style="flex:1"></span><span style="color:#c6cad1">Статистика декодера ▴</span></div>
+</div>
+
+<div data-screen-label="2a Кадры" style="width:1440px;background:#16171a;color:#e6e7ea;font-family:'IBM Plex Sans',sans-serif;font-size:13px;border-top:8px solid #e9e7e2;position:relative">
+<div style="display:flex;align-items:center;gap:12px;height:30px;padding:0 12px;background:#1c1d20;border-bottom:1px solid #2c2e33;font-size:12px;color:#9aa0a9"><b style="color:#e6e7ea">Приближение до кадров</b><span>в окне 90 кадров · клетка кадра 14 px · ← → шаг на кадр</span></div>
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:36px;border-bottom:1px solid #2c2e33;background:#1c1d20">
+<div style="display:flex;align-items:center;padding-left:12px;font-family:'IBM Plex Mono';font-size:11px;color:#8a8f98">кадры @60</div>
+<div style="position:relative"><sc-for list="{{ tkFr }}" as="t" hint-placeholder-count="30"><div style="position:absolute;left:{{ t.left }};bottom:0;height:{{ t.h }};border-left:1px solid {{ t.c }}"></div><sc-if value="{{ t.lab }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:{{ t.left }};top:3px;padding-left:4px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa0a9;white-space:nowrap">{{ t.label }}</div></sc-if></sc-for></div>
+</div>
+<sc-for list="{{ rowsFr }}" as="r" hint-placeholder-count="6">
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:{{ r.h }};background:{{ r.lane }};border-bottom:1px solid #121315">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px;border-right:1px solid #2c2e33;background:#1c1d20"><span style="width:3px;align-self:stretch;margin:3px 0;border-radius:2px;background:{{ r.dot }}"></span><span style="font-weight:600;font-size:12.5px;color:{{ r.headFg }}">{{ r.label }}</span><span style="font-family:'IBM Plex Mono';color:#8a8f98;font-size:11px">{{ r.lvl }}</span></div>
+<div style="position:relative">
+<sc-for list="{{ r.clips }}" as="c" hint-placeholder-count="2">
+<div style="position:absolute;left:{{ c.left }};width:{{ c.width }};top:2px;bottom:2px;background:{{ c.a.bg }};border-radius:3px;box-shadow:inset 0 0 0 1px {{ c.a.bd }};border-left:2px solid {{ c.a.edge }};outline:{{ c.olA }};outline-offset:1px;overflow:hidden;box-sizing:border-box">
+<div style="position:absolute;right:0;top:0;bottom:0;width:{{ c.foW }};background:linear-gradient(to top right, transparent calc(50% - 1px), rgba(255,255,255,.9) 50%, rgba(0,0,0,.55) calc(50% + 1px))"></div>
+<div style="position:relative;padding:3px 8px;display:flex;flex-direction:column;white-space:nowrap"><span style="font-size:12px;font-weight:500;color:{{ c.a.fg }};line-height:15px">{{ c.name }}</span><sc-if value="{{ c.twoLine }}" hint-placeholder-val="{{ true }}"><span style="font-family:'IBM Plex Mono';font-size:11px;color:{{ c.a.meta }}">{{ c.meta }}</span></sc-if></div>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-for>
+<div style="position:absolute;left:calc(150px + (100% - 150px) * {{ pFr }});width:calc((100% - 150px) * {{ cellFr }});top:30px;bottom:0;pointer-events:none">
+<div style="position:absolute;inset:36px 0 0 0;background:rgba(255,255,255,.16)"></div>
+<div style="position:absolute;left:-1px;top:36px;bottom:0;width:2px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.85)"></div>
+<div style="position:absolute;left:0;right:0;top:0;height:36px;background:#fff"></div>
+<div style="position:absolute;left:18px;top:6px;padding:3px 8px;border-radius:4px;background:#fff;color:#111;font-family:'IBM Plex Mono';font-size:11.5px;font-weight:500;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.5)">00:10:00:42 · кадр 36042</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="2b">
+<div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a>Контур. Тёмные клипы с цветной полосой сверху: имя всегда белое на тёмном. Линейка в кадрах или таймкоде, плейхед подписан сверху и снизу, на каждом клипе под ним — кадр этого файла.</div>
+<div class="dv-card" style="width:1440px;display:flex;flex-direction:column">
+<div data-screen-label="2b Дорожки" style="width:1440px;background:#16171a;color:#e6e7ea;font-family:'IBM Plex Sans',sans-serif;font-size:13px;position:relative;display:flex;flex-direction:column">
+<div style="display:flex;align-items:center;gap:10px;height:38px;padding:0 12px;background:#1c1d20;border-bottom:1px solid #2c2e33;font-size:12px">
+<span style="color:#8a8f98">Шкала</span><div style="display:flex;background:#101113;border:1px solid #2c2e33;border-radius:5px;padding:2px"><span style="padding:3px 10px;border-radius:3px;color:#b8bcc4">таймкод</span><span style="padding:3px 10px;border-radius:3px;background:#2f5f8f;color:#fff">кадры</span></div>
+<span style="color:#8a8f98;margin-left:8px">Высота</span><div style="display:flex;background:#101113;border:1px solid #2c2e33;border-radius:5px;padding:2px"><span style="padding:3px 10px;color:#b8bcc4">S</span><span style="padding:3px 10px;border-radius:3px;background:#2f5f8f;color:#fff">M</span><span style="padding:3px 10px;color:#b8bcc4">L</span></div>
+<span style="padding:3px 10px;border-radius:4px;background:#2f5f8f;color:#fff;margin-left:8px">Сжать пустые уровни</span>
+<span style="padding:3px 10px;border-radius:4px;border:1px solid #34373d">Кадр клипа под плейхедом</span>
+<div style="flex:1"></div>
+<span style="font-family:'IBM Plex Mono';color:#8a8f98">окно 08:00–11:00 · F — вся длина</span>
+</div>
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:32px;border-bottom:1px solid #2c2e33;background:#1c1d20">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px"><span style="font-family:'IBM Plex Mono';font-size:10.5px;padding:2px 6px;border-radius:3px;border:1px solid #6b5a2c;color:#e3c27a">LOOP</span></div>
+<div style="position:relative"><sc-for list="{{ tkMidF }}" as="t" hint-placeholder-count="13"><div style="position:absolute;left:{{ t.left }};bottom:0;height:{{ t.h }};border-left:1px solid #4a4d54"></div><div style="position:absolute;left:{{ t.left }};top:4px;padding-left:5px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa0a9;white-space:nowrap">{{ t.label }}</div></sc-for></div>
+</div>
+<sc-for list="{{ rowsMid }}" as="r" hint-placeholder-count="11">
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:{{ r.h }};border-bottom:1px solid #202125">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px;border-right:1px solid #2c2e33;background:#1c1d20"><span style="width:8px;height:8px;border-radius:2px;background:{{ r.dot }}"></span><span style="font-weight:600;font-size:12.5px;color:{{ r.headFg }}">{{ r.label }}</span><span style="font-family:'IBM Plex Mono';color:#8a8f98;font-size:11px">{{ r.lvl }}</span></div>
+<div style="position:relative;background:#141517">
+<sc-for list="{{ r.clips }}" as="c" hint-placeholder-count="2">
+<div style="position:absolute;left:{{ c.left }};width:{{ c.width }};top:3px;bottom:3px;background:{{ c.b.bg }};border:1px solid {{ c.b.bd }};border-top:3px solid {{ c.b.band }};border-radius:3px;outline:{{ c.olA }};outline-offset:1px;overflow:hidden;box-sizing:border-box">
+<div style="position:absolute;left:0;top:0;bottom:0;width:{{ c.fiW }};background:linear-gradient(to bottom right, rgba(0,0,0,.6) calc(50% - 1px), {{ c.b.band }} 50%, transparent calc(50% + 1px))"></div>
+<div style="position:absolute;right:0;top:0;bottom:0;width:{{ c.foW }};background:linear-gradient(to top right, transparent calc(50% - 1px), {{ c.b.band }} 50%, rgba(0,0,0,.6) calc(50% + 1px))"></div>
+<div style="position:relative;padding:2px 8px;display:flex;flex-direction:column;white-space:nowrap"><span style="font-size:12px;font-weight:500;color:#f2f3f5;line-height:15px">{{ c.name }}</span><sc-if value="{{ c.twoLine }}" hint-placeholder-val="{{ true }}"><span style="font-family:'IBM Plex Mono';font-size:11px;color:#a9aeb6">{{ c.metaF }}</span></sc-if></div>
+<sc-if value="{{ c.under }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:{{ c.bl }};top:50%;transform:translate(6px,-50%);padding:1px 6px;border-radius:3px;background:rgba(0,0,0,.8);border:1px solid #fff;font-family:'IBM Plex Mono';font-size:10.5px;color:#fff;white-space:nowrap">{{ c.local }}</div></sc-if>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-for>
+<div style="position:absolute;left:calc(150px + (100% - 150px) * {{ pMid }});top:38px;bottom:0;width:0;pointer-events:none">
+<div style="position:absolute;left:-1px;top:32px;bottom:0;width:2px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.85)"></div>
+<div style="position:absolute;left:-36px;top:4px;width:72px;height:24px;border-radius:4px;background:#fff;color:#111;font-family:'IBM Plex Mono';font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center">36042</div>
+<div style="position:absolute;left:-50px;bottom:4px;width:100px;height:20px;border-radius:4px;background:#fff;color:#111;font-family:'IBM Plex Mono';font-size:11px;font-weight:500;display:flex;align-items:center;justify-content:center">00:10:00:42</div>
+</div>
+</div>
+<div data-screen-label="2b Кадры" style="width:1440px;background:#16171a;color:#e6e7ea;font-family:'IBM Plex Sans',sans-serif;font-size:13px;border-top:8px solid #e9e7e2;position:relative">
+<div style="display:flex;align-items:center;gap:12px;height:30px;padding:0 12px;background:#1c1d20;border-bottom:1px solid #2c2e33;font-size:12px;color:#9aa0a9"><b style="color:#e6e7ea">Приближение до кадров</b><span>каждый кадр — колонка; чётные чуть темнее, плейхед заливает свою колонку целиком</span></div>
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:36px;border-bottom:1px solid #2c2e33;background:#1c1d20">
+<div style="display:flex;align-items:center;padding-left:12px;font-family:'IBM Plex Mono';font-size:11px;color:#8a8f98">кадры @60</div>
+<div style="position:relative"><sc-for list="{{ tkFr }}" as="t" hint-placeholder-count="30"><div style="position:absolute;left:{{ t.left }};bottom:0;height:{{ t.h }};border-left:1px solid {{ t.c }}"></div><sc-if value="{{ t.lab }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:{{ t.left }};top:3px;padding-left:4px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa0a9">{{ t.labelF }}</div></sc-if></sc-for></div>
+</div>
+<div style="position:relative">
+<div style="position:absolute;left:150px;right:0;top:0;bottom:0;background:repeating-linear-gradient(to right, rgba(255,255,255,.035) 0, rgba(255,255,255,.035) calc((100% / 90)), transparent calc((100% / 90)), transparent calc((100% / 45)))"></div>
+<sc-for list="{{ rowsFr }}" as="r" hint-placeholder-count="6">
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:{{ r.h }};border-bottom:1px solid #202125;position:relative">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px;border-right:1px solid #2c2e33;background:#1c1d20"><span style="width:8px;height:8px;border-radius:2px;background:{{ r.dot }}"></span><span style="font-weight:600;font-size:12.5px;color:{{ r.headFg }}">{{ r.label }}</span><span style="font-family:'IBM Plex Mono';color:#8a8f98;font-size:11px">{{ r.lvl }}</span></div>
+<div style="position:relative">
+<sc-for list="{{ r.clips }}" as="c" hint-placeholder-count="2">
+<div style="position:absolute;left:{{ c.left }};width:{{ c.width }};top:3px;bottom:3px;background:{{ c.b.bg }};border:1px solid {{ c.b.bd }};border-top:3px solid {{ c.b.band }};border-radius:3px;outline:{{ c.olA }};outline-offset:1px;overflow:hidden;box-sizing:border-box">
+<div style="position:absolute;right:0;top:0;bottom:0;width:{{ c.foW }};background:linear-gradient(to top right, transparent calc(50% - 1px), {{ c.b.band }} 50%, rgba(0,0,0,.6) calc(50% + 1px))"></div>
+<div style="position:relative;padding:2px 8px;white-space:nowrap;font-size:12px;font-weight:500;color:#f2f3f5">{{ c.name }}</div>
+<sc-if value="{{ c.under }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:{{ c.bl }};top:50%;transform:translate(18px,-50%);padding:1px 6px;border-radius:3px;background:rgba(0,0,0,.8);border:1px solid #fff;font-family:'IBM Plex Mono';font-size:10.5px;color:#fff;white-space:nowrap">{{ c.local }}</div></sc-if>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-for>
+</div>
+<div style="position:absolute;left:calc(150px + (100% - 150px) * {{ pFr }});width:calc((100% - 150px) * {{ cellFr }});top:30px;bottom:0;pointer-events:none">
+<div style="position:absolute;inset:0;background:rgba(255,255,255,.22);border-left:2px solid #fff;border-right:1px solid rgba(255,255,255,.6)"></div>
+<div style="position:absolute;left:50%;top:5px;transform:translateX(-50%);padding:2px 7px;border-radius:4px;background:#fff;color:#111;font-family:'IBM Plex Mono';font-size:11.5px;font-weight:600">36042</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="2c">
+<div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a>Лупа. Заливка как в <a class="dv-oid" href="#2a">2a</a>, но над дорожками всегда висит полоса «±48 кадров вокруг плейхеда». Шоу видно целиком, а кадр и ближайшие склейки видны всегда.</div>
+<div class="dv-card" style="width:1440px;display:flex;flex-direction:column">
+<div data-screen-label="2c Дорожки" style="width:1440px;background:#16171a;color:#e6e7ea;font-family:'IBM Plex Sans',sans-serif;font-size:13px;position:relative;display:flex;flex-direction:column">
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:64px;background:#101113;border-bottom:1px solid #2c2e33;position:relative">
+<div style="display:flex;flex-direction:column;justify-content:center;gap:3px;padding-left:12px;border-right:1px solid #2c2e33"><span style="font-weight:600;font-size:12.5px">Кадры</span><span style="font-family:'IBM Plex Mono';font-size:11px;color:#8a8f98">35994–36090</span></div>
+<div style="position:relative;overflow:hidden">
+<sc-for list="{{ tkLens }}" as="t" hint-placeholder-count="40"><div style="position:absolute;left:{{ t.left }};bottom:0;height:{{ t.h }};border-left:1px solid {{ t.c }}"></div><sc-if value="{{ t.lab }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:{{ t.left }};top:6px;padding-left:3px;font-family:'IBM Plex Mono';font-size:11px;color:#8a8f98">{{ t.labelF }}</div></sc-if></sc-for>
+<div style="position:absolute;left:{{ lensCut }};top:0;bottom:0;border-left:2px solid #e3c27a"></div>
+<div style="position:absolute;left:{{ lensCut }};top:22px;padding:1px 6px;margin-left:4px;border-radius:3px;background:#3a3220;color:#e3c27a;font-size:11px;white-space:nowrap">склейка 10:00 · u2·ch44·v255 · фейд 2.0 с</div>
+<div style="position:absolute;left:{{ lensPh }};width:{{ lensCell }};top:0;bottom:0;background:#fff"></div>
+<div style="position:absolute;left:{{ lensPh }};top:24px;margin-left:16px;padding:2px 8px;border-radius:4px;background:#fff;color:#111;font-family:'IBM Plex Mono';font-size:12px;font-weight:600;white-space:nowrap">36042 · 00:10:00:42</div>
+<div style="position:absolute;right:8px;top:6px;font-size:11px;color:#8a8f98">42 кадра после склейки</div>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:30px;border-bottom:1px solid #2c2e33;background:#1c1d20">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px"><span style="font-family:'IBM Plex Mono';font-size:10.5px;padding:2px 6px;border-radius:3px;border:1px solid #6b5a2c;color:#e3c27a">LOOP</span></div>
+<div style="position:relative"><sc-for list="{{ tkAll }}" as="t" hint-placeholder-count="12"><div style="position:absolute;left:{{ t.left }};bottom:0;height:{{ t.h }};border-left:1px solid #4a4d54"></div><div style="position:absolute;left:{{ t.left }};top:4px;padding-left:5px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa0a9">{{ t.label }}</div></sc-for><div style="position:absolute;left:1%;width:0.4%;top:0;height:5px;background:#e3c27a"></div></div>
+</div>
+<sc-for list="{{ rowsAll }}" as="r" hint-placeholder-count="11">
+<div style="display:grid;grid-template-columns:150px minmax(0,1fr);height:{{ r.h }};background:{{ r.lane }};border-bottom:1px solid #121315">
+<div style="display:flex;align-items:center;gap:8px;padding-left:12px;border-right:1px solid #2c2e33;background:#1c1d20"><span style="width:3px;align-self:stretch;margin:3px 0;border-radius:2px;background:{{ r.dot }}"></span><span style="font-weight:600;font-size:12.5px;color:{{ r.headFg }}">{{ r.label }}</span><span style="font-family:'IBM Plex Mono';color:#8a8f98;font-size:11px">{{ r.lvl }}</span></div>
+<div style="position:relative">
+<sc-for list="{{ r.clips }}" as="c" hint-placeholder-count="2">
+<div style="position:absolute;left:{{ c.left }};width:{{ c.width }};top:2px;bottom:2px;background:{{ c.a.bg }};border-radius:3px;box-shadow:inset 0 0 0 1px {{ c.a.bd }};border-left:2px solid {{ c.a.edge }};outline:{{ c.olA }};outline-offset:1px;overflow:hidden;box-sizing:border-box">
+<div style="position:relative;padding:3px 8px;display:flex;flex-direction:column;white-space:nowrap"><span style="font-size:12px;font-weight:500;color:{{ c.a.fg }};line-height:15px">{{ c.name }}</span><sc-if value="{{ c.twoLine }}" hint-placeholder-val="{{ true }}"><span style="font-family:'IBM Plex Mono';font-size:11px;color:{{ c.a.meta }}">{{ c.meta }}</span></sc-if></div>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-for>
+<div style="position:absolute;left:calc(150px + (100% - 150px) * {{ pAll }});top:64px;bottom:0;width:0;pointer-events:none">
+<div style="position:absolute;left:-1px;top:30px;bottom:0;width:2px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.85)"></div>
+<div style="position:absolute;left:-5px;top:0;width:10px;height:30px;background:#fff;clip-path:polygon(0 0,100% 0,100% 70%,50% 100%,0 70%)"></div>
+</div>
+</div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Дальше: «клипы из <a class="dv-oid" href="#2a">2a</a>, подписи кадров из <a class="dv-oid" href="#2b">2b</a>» · «добавь лупу из <a class="dv-oid" href="#2c">2c</a> в <a class="dv-oid" href="#2a">2a</a>» · «покажи выбор и перетаскивание клипа»</p>
+</section>
+<section class="dv-turn" id="t1">
+<div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Три направления: Просмотр (Превью) и Шоу в Редакторе</span></div>
+<div style="max-width:1100px;margin:0 0 28px;font:13px/1.55 system-ui,sans-serif;color:rgba(0,0,0,.65);display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px">
+<div><b style="color:#1a1a1a">Что оставил.</b> Все функции и названия из README 0.3: шесть строк, четыре режима, Превью/Flat/ReBake/Inspection, Шоу с дорожками Cue→Sound, рендер, панель «Экраны». Цвета дорожек закреплены за экранами и одинаковы во всех трёх: Top синий, Bottom зелёный, Lamels охра, Kinetic красный, Sound фиолетовый.</div>
+<div><b style="color:#1a1a1a">Что поменял.</b> Длинные пути уходят в имя файла и папку двумя строками. Технические строки (кодек, fps, длина) набраны моноширинным и читаются столбцом. Рендер собран в один блок с большой кнопкой. Статистика декодера по умолчанию сжата в строку состояния. Основной шрифт 13–14 px вместо 12.</div>
+<div><b style="color:#1a1a1a">Язык.</b> Интерфейс на русском, названия экранов и форматов на английском, как в самом приложении. Переключатель RU/EN показан в заголовке; английские версии экранов сделаю в следующем раунде, когда будет выбрано направление.</div>
+</div>
+<div class="dv-opts">
+
+<div class="dv-opt" id="1a">
+<div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>«Мастерская». Прямое развитие текущего окна: источники слева, картинка по центру, транспорт и рендер снизу. IBM Plex, холодный графит.</div>
+<div class="dv-card" style="width:1440px;display:flex;flex-direction:column;gap:0">
+
+<div data-screen-label="1a Превью" style="width:1440px;height:900px;background:#1c1d20;color:#e6e7ea;font-family:'IBM Plex Sans',sans-serif;font-size:13px;display:grid;grid-template-rows:48px minmax(0,1fr) 64px 60px 28px">
+<div style="display:flex;align-items:center;gap:16px;padding:0 16px;border-bottom:1px solid #2c2e33;background:#18191b">
+<div style="display:flex;align-items:baseline;gap:8px"><span style="font-weight:600;font-size:14px">Matreshka Viewer</span><span style="font-family:'IBM Plex Mono';font-size:12px;color:#8a8f98">0.4</span></div>
+<div style="display:flex;background:#101113;border:1px solid #2c2e33;border-radius:6px;padding:2px">
+<div style="padding:5px 14px;border-radius:4px;background:#2f5f8f;color:#fff;font-weight:500">Просмотр</div>
+<div style="padding:5px 14px;border-radius:4px;color:#b8bcc4">Шоу</div>
+</div>
+<div style="width:1px;height:24px;background:#2c2e33"></div>
+<div style="display:flex;gap:2px;height:48px;align-items:stretch">
+<div style="display:flex;align-items:center;padding:0 14px;border-bottom:2px solid #6aa6de;color:#fff;font-weight:500">Превью</div>
+<div style="display:flex;align-items:center;padding:0 14px;color:#9aa0a9">Flat</div>
+<div style="display:flex;align-items:center;padding:0 14px;color:#9aa0a9">ReBake</div>
+<div style="display:flex;align-items:center;padding:0 14px;color:#9aa0a9">Inspection</div>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;gap:6px;align-items:center;color:#9aa0a9;font-size:12px"><span style="color:#e6e7ea;font-weight:500">RU</span><span>/</span><span>EN</span></div>
+<div style="padding:5px 12px;border:1px solid #34373d;border-radius:5px;color:#c6cad1">Проверка машины</div>
+<div style="padding:5px 12px;border:1px solid #34373d;border-radius:5px;color:#c6cad1">Лог</div>
+</div>
+
+<div style="display:grid;grid-template-columns:340px minmax(0,1fr);min-height:0">
+<div style="border-right:1px solid #2c2e33;background:#1c1d20;display:flex;flex-direction:column;min-height:0">
+<div style="display:flex;align-items:baseline;justify-content:space-between;padding:14px 16px 10px"><span style="font-weight:600;font-size:14px">Источники</span><span style="color:#8a8f98;font-size:12px">5 из 6 загружено</span></div>
+<div style="display:flex;flex-direction:column;gap:5px;padding:0 10px 8px;overflow:hidden">
+<sc-for list="{{ sources }}" as="s" hint-placeholder-count="6">
+<div style="background:#232428;border:1px solid #2e3035;border-radius:6px;padding:7px 12px;display:flex;flex-direction:column;gap:4px">
+<div style="display:flex;align-items:center;gap:8px">
+<span style="width:8px;height:8px;border-radius:2px;background:{{ s.dot }}"></span>
+<span style="font-weight:600">{{ s.key }}</span>
+<span style="color:#8a8f98;font-size:12px">{{ s.ru }}</span>
+<span style="flex:1"></span>
+<span style="font-size:12px;color:#8a8f98">Заменить</span>
+</div>
+<sc-if value="{{ s.loaded }}" hint-placeholder-val="{{ true }}">
+<div style="font-family:'IBM Plex Mono';font-size:12px;color:#e6e7ea;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.file }}</div>
+<div style="font-family:'IBM Plex Mono';font-size:11.5px;color:#8fbf9a">{{ s.meta }}</div>
+</sc-if>
+<sc-if value="{{ s.empty }}" hint-placeholder-val="{{ false }}">
+<div style="border:1px dashed #3a3d44;border-radius:4px;padding:8px;color:#8a8f98;font-size:12px;text-align:center">Перетащите ролик или картинку, или выберите файл</div>
+</sc-if>
+<sc-if value="{{ s.slider }}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;align-items:center;gap:10px">
+<span style="font-size:12px;color:#8a8f98;width:58px">{{ s.gainLabel }}</span>
+<div style="flex:1;height:4px;background:#34373d;border-radius:2px;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ s.pct }};background:#5b93c7;border-radius:2px"></div><div style="position:absolute;left:{{ s.pct }};top:-5px;width:14px;height:14px;margin-left:-7px;border-radius:7px;background:#e6e7ea"></div></div>
+<span style="font-family:'IBM Plex Mono';font-size:12px;width:36px;text-align:right">{{ s.gain }}</span>
+</div>
+</sc-if>
+</div>
+</sc-for>
+</div>
+<div style="margin:auto 10px 12px;padding:8px 12px;border-radius:6px;background:#1f3347;color:#bcd6ef;font-size:12px;display:flex;justify-content:space-between"><span>Top и Bottom связаны</span><span style="color:#fff;font-weight:500">Разъединить</span></div>
+</div>
+
+<div style="position:relative;background:#000;overflow:hidden;display:flex;justify-content:center">
+<img src="assets/building.png" alt="" style="height:100%;display:block">
+<div style="position:absolute;left:14px;top:14px;display:flex;gap:6px;align-items:center;background:rgba(20,21,24,.86);border:1px solid #2c2e33;border-radius:6px;padding:4px 6px">
+<span style="color:#8a8f98;font-size:12px;padding:0 4px">Слои</span>
+<span style="padding:3px 9px;border-radius:4px;background:#2f5f8f;color:#fff;font-size:12px">Body</span>
+<span style="padding:3px 9px;border-radius:4px;background:#2f5f8f;color:#fff;font-size:12px">Shell</span>
+<span style="padding:3px 9px;border-radius:4px;background:#2f5f8f;color:#fff;font-size:12px">Bottom</span>
+<span style="padding:3px 9px;border-radius:4px;background:#2f5f8f;color:#fff;font-size:12px">Top</span>
+<span style="padding:3px 9px;border-radius:4px;background:#2f5f8f;color:#fff;font-size:12px">Lamels</span>
+</div>
+<div style="position:absolute;right:14px;top:14px;display:flex;gap:6px;align-items:center;background:rgba(20,21,24,.86);border:1px solid #2c2e33;border-radius:6px;padding:4px 6px;font-size:12px">
+<span style="padding:3px 9px;border-radius:4px;color:#c6cad1">Match</span>
+<span style="padding:3px 9px;border-radius:4px;background:#2f5f8f;color:#fff">Solid top</span>
+<span style="width:1px;height:16px;background:#34373d"></span>
+<span style="padding:3px 6px;color:#8a8f98">Alpha</span><span style="padding:3px 9px;border:1px solid #34373d;border-radius:4px">Premultiplied ▾</span>
+<span style="padding:3px 6px;color:#8a8f98">Фон</span><span style="padding:3px 9px;border:1px solid #34373d;border-radius:4px">Black ▾</span>
+<span style="width:1px;height:16px;background:#34373d"></span>
+<span style="padding:3px 9px;border-radius:4px;background:#34373d">Рамка</span>
+<span style="padding:3px 9px;border-radius:4px;background:#34373d">Во весь экран</span>
+</div>
+<div style="position:absolute;left:14px;bottom:12px;font-family:'IBM Plex Mono';font-size:12px;color:#8a8f98">Рамка = кадр рендера 1080×1920 · колесо — ближе, двойной щелчок — сброс</div>
+</div>
+</div>
+
+<div style="display:flex;align-items:center;gap:14px;padding:0 16px;border-top:1px solid #2c2e33;background:#18191b">
+<div style="display:flex;gap:4px">
+<div style="width:34px;height:32px;border-radius:5px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-size:11px">|◀</div>
+<div style="width:34px;height:32px;border-radius:5px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-size:11px">◀|</div>
+<div style="width:44px;height:32px;border-radius:5px;background:#e6e7ea;color:#111;display:flex;align-items:center;justify-content:center;font-size:13px">▶</div>
+<div style="width:34px;height:32px;border-radius:5px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-size:11px">|▶</div>
+<div style="width:34px;height:32px;border-radius:5px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-size:11px">▶|</div>
+</div>
+<div style="font-family:'IBM Plex Mono';font-size:20px;font-weight:500;letter-spacing:.02em">01:59.37</div>
+<div style="font-family:'IBM Plex Mono';font-size:12px;color:#8a8f98;line-height:1.3">кадр 7162 / 25397<br>из 07:03.30</div>
+<div style="flex:1;height:32px;position:relative;display:flex;align-items:center">
+<div style="position:absolute;left:0;right:0;height:6px;border-radius:3px;background:#2a2c31"></div>
+<div style="position:absolute;left:0;width:28.2%;height:6px;border-radius:3px;background:#5b93c7"></div>
+<div style="position:absolute;left:28.2%;width:2px;height:24px;background:#fff;margin-left:-1px"></div>
+</div>
+<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#8a8f98">Sync<span style="padding:4px 9px;border:1px solid #34373d;border-radius:4px;color:#e6e7ea;font-family:'IBM Plex Mono'">60 fps ▾</span></div>
+</div>
+
+<div style="display:flex;align-items:center;gap:10px;padding:0 16px;border-top:1px solid #2c2e33;background:#1c1d20;font-size:12px">
+<span style="font-weight:600;font-size:13px;margin-right:6px">Рендер</span>
+<span style="color:#8a8f98">Кадр</span><span style="padding:5px 9px;background:#141517;border:1px solid #34373d;border-radius:4px;font-family:'IBM Plex Mono'">1080×1920 ▾</span>
+<span style="color:#8a8f98">Кадры</span><span style="padding:5px 9px;background:#141517;border:1px solid #34373d;border-radius:4px;font-family:'IBM Plex Mono'">0 – 25397</span>
+<span style="padding:5px 9px;background:#141517;border:1px solid #34373d;border-radius:4px;font-family:'IBM Plex Mono'">30 fps ▾</span>
+<span style="padding:5px 9px;background:#141517;border:1px solid #34373d;border-radius:4px">H.264 mp4 ▾</span>
+<span style="color:#8a8f98;margin-left:6px">Файл</span>
+<div style="flex:1;min-width:0;display:flex;align-items:center;background:#141517;border:1px solid #34373d;border-radius:4px;overflow:hidden"><span style="padding:5px 9px;color:#8a8f98;font-family:'IBM Plex Mono';white-space:nowrap">E:\05_Render\Matreshka_Viewer\OUT\</span><span style="padding:5px 0;font-family:'IBM Plex Mono'">Matreshka_preview.mp4</span></div>
+<span style="padding:5px 10px;border:1px solid #34373d;border-radius:4px">+1</span>
+<span style="padding:5px 10px;border:1px solid #34373d;border-radius:4px">Снимок</span>
+<span style="padding:7px 18px;border-radius:5px;background:#c8463c;color:#fff;font-weight:600;font-size:13px">Рендер</span>
+</div>
+
+<div style="display:flex;align-items:center;gap:18px;padding:0 16px;border-top:1px solid #2c2e33;background:#141517;font-family:'IBM Plex Mono';font-size:11.5px;color:#8a8f98">
+<span><span style="color:#8fbf9a">●</span> RTX 3080 · Vulkan · блоки прямо в сэмплер</span>
+<span>кадр 2.01 ms</span>
+<span>Top 92 · Bottom 79 · Lamels 88 прочитано, 0 пропущено</span>
+<span style="flex:1"></span>
+<span style="color:#c6cad1">Статистика декодера ▴</span>
+</div>
+</div>
+
+<div data-screen-label="1a Шоу редактор" style="width:1440px;height:900px;background:#1c1d20;color:#e6e7ea;font-family:'IBM Plex Sans',sans-serif;font-size:13px;display:grid;grid-template-rows:48px 48px 360px minmax(0,1fr) 56px 28px;border-top:8px solid #e9e7e2">
+<div style="display:flex;align-items:center;gap:16px;padding:0 16px;border-bottom:1px solid #2c2e33;background:#18191b">
+<div style="display:flex;align-items:baseline;gap:8px"><span style="font-weight:600;font-size:14px">Matreshka Viewer</span><span style="font-family:'IBM Plex Mono';font-size:12px;color:#8a8f98">0.4</span></div>
+<div style="display:flex;background:#101113;border:1px solid #2c2e33;border-radius:6px;padding:2px">
+<div style="padding:5px 14px;border-radius:4px;color:#b8bcc4">Просмотр</div>
+<div style="padding:5px 14px;border-radius:4px;background:#2f5f8f;color:#fff;font-weight:500">Шоу</div>
+</div>
+<div style="width:1px;height:24px;background:#2c2e33"></div>
+<div style="display:flex;gap:2px;height:48px;align-items:stretch">
+<div style="display:flex;align-items:center;padding:0 14px;border-bottom:2px solid #6aa6de;color:#fff;font-weight:500">Превью</div>
+<div style="display:flex;align-items:center;padding:0 14px;color:#9aa0a9">Flat</div>
+<div style="display:flex;align-items:center;padding:0 14px;color:#5d626b">ReBake</div>
+<div style="display:flex;align-items:center;padding:0 14px;color:#9aa0a9">Inspection</div>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;gap:6px;align-items:center;color:#9aa0a9;font-size:12px"><span style="color:#e6e7ea;font-weight:500">RU</span><span>/</span><span>EN</span></div>
+<div style="padding:5px 12px;border:1px solid #34373d;border-radius:5px;color:#c6cad1">Лог</div>
+</div>
+<div style="display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid #2c2e33;background:#202125">
+<span style="padding:5px 12px;border:1px solid #34373d;border-radius:5px">Открыть шоу…</span>
+<span style="padding:5px 12px;border:1px solid #34373d;border-radius:5px">Новое шоу</span>
+<div style="display:flex;flex-direction:column;line-height:1.25;min-width:0">
+<span style="font-weight:600;white-space:nowrap">2026-Daily-RusDay-STD150-Matreshka_Day-MuzeyTransporta</span>
+<span style="font-family:'IBM Plex Mono';font-size:11.5px;color:#8a8f98">17 video · 6 audio · 5 kinetic · 3 cue · 1 loop</span>
+</div>
+<span style="padding:4px 10px;border-radius:12px;background:#3a3220;color:#e3c27a;font-size:12px">Черновик · 18 правок · сохранено</span>
+<div style="flex:1"></div>
+<span style="padding:5px 10px;border:1px solid #34373d;border-radius:5px;color:#8a8f98">↶</span>
+<span style="padding:5px 10px;border:1px solid #34373d;border-radius:5px;color:#8a8f98">↷</span>
+<span style="padding:5px 12px;border:1px solid #34373d;border-radius:5px">+ кью</span>
+<span style="padding:5px 12px;border:1px solid #34373d;border-radius:5px">Удалить</span>
+<span style="padding:5px 12px;border:1px solid #34373d;border-radius:5px">Вернуть файл</span>
+<span style="padding:5px 14px;border-radius:5px;background:#2f5f8f;color:#fff;font-weight:500">Редактор включён</span>
+</div>
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 300px 320px;min-height:0;border-bottom:1px solid #2c2e33">
+<div style="background:#000;position:relative;overflow:hidden;display:flex;justify-content:center"><img src="assets/building.png" alt="" style="height:100%;display:block"><div style="position:absolute;left:12px;bottom:10px;font-family:'IBM Plex Mono';font-size:12px;color:#c6cad1;background:rgba(0,0,0,.6);padding:3px 8px;border-radius:4px">на экранах: RusDay_SHOW_Top · Bottom · Lameli</div><div style="position:absolute;left:12px;top:10px;width:26px;height:26px;border-radius:13px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-weight:600">?</div></div>
+<div style="background:#1c1d20;border-left:1px solid #2c2e33;padding:14px 16px;display:flex;flex-direction:column;gap:12px">
+<div style="display:flex;justify-content:space-between"><span style="font-weight:600;font-size:14px">Экраны</span><span style="color:#8a8f98">›</span></div>
+<div style="display:flex;gap:6px;font-size:12px"><span style="padding:3px 9px;border-radius:4px;border:1px solid #34373d">Match</span><span style="padding:3px 9px;border-radius:4px;background:#2f5f8f;color:#fff">Top ⇄ Bottom</span></div>
+<sc-for list="{{ screens }}" as="s" hint-placeholder-count="4">
+<div style="display:flex;align-items:center;gap:10px"><span style="width:52px">{{ s.key }}</span><div style="flex:1;height:4px;background:#34373d;border-radius:2px;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ s.pct }};background:#5b93c7;border-radius:2px"></div><div style="position:absolute;left:{{ s.pct }};top:-5px;width:14px;height:14px;margin-left:-7px;border-radius:7px;background:#e6e7ea"></div></div><span style="font-family:'IBM Plex Mono';font-size:12px;width:34px;text-align:right">{{ s.gain }}</span></div>
+</sc-for>
+<div style="margin-top:auto;border-top:1px solid #2c2e33;padding-top:12px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;justify-content:space-between"><span style="font-weight:600">Лупы</span><span style="font-family:'IBM Plex Mono';font-size:12px;color:#e3c27a">1 из 1 · 5.0 с</span></div>
+<div style="display:flex;gap:6px;align-items:center;font-family:'IBM Plex Mono';font-size:12px"><span style="color:#8a8f98">с</span><span style="flex:1;padding:4px 8px;background:#141517;border:1px solid #34373d;border-radius:4px">800</span><span style="color:#8a8f98">по</span><span style="flex:1;padding:4px 8px;background:#141517;border:1px solid #34373d;border-radius:4px">1099</span></div>
+<div style="display:flex;gap:6px;font-size:12px"><span style="padding:3px 9px;border:1px solid #34373d;border-radius:4px">+</span><span style="padding:3px 9px;border:1px solid #34373d;border-radius:4px">−</span><span style="padding:3px 9px;border:1px solid #34373d;border-radius:4px">по клипу</span><span style="padding:3px 9px;border:1px solid #34373d;border-radius:4px">из файла</span></div>
+</div>
+</div>
+<div style="background:#202125;border-left:1px solid #2c2e33;padding:14px 16px;display:flex;flex-direction:column;gap:8px;min-height:0">
+<div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:2px;background:oklch(0.7 0.12 250)"></span><span style="font-weight:600;font-size:14px">Клип</span><span style="color:#8a8f98;font-size:12px">Top · L0</span></div>
+<div style="font-family:'IBM Plex Mono';font-size:12px;line-height:1.35">RusDay_SHOW_Top_v02_2026-06-09.mov<br><span style="color:#8a8f98">D:\Content\2026-dates\RusDay\</span></div>
+<div style="display:grid;grid-template-columns:1fr 110px;gap:6px 10px;align-items:center;margin-top:4px">
+<sc-for list="{{ fields }}" as="f" hint-placeholder-count="8">
+<span style="color:#9aa0a9;font-size:12.5px">{{ f.k }}</span><span style="font-family:'IBM Plex Mono';font-size:12px;padding:3px 8px;background:#141517;border:1px solid #34373d;border-radius:4px;text-align:right">{{ f.v }}</span>
+</sc-for>
+</div>
+</div>
+</div>
+
+<div style="display:grid;grid-template-columns:120px minmax(0,1fr);grid-template-rows:26px 26px minmax(0,1fr);background:#18191b;min-height:0;position:relative">
+<div style="display:flex;align-items:center;padding-left:12px;font-family:'IBM Plex Mono';font-size:11px;color:#e3c27a;border-bottom:1px solid #2c2e33">LOOP</div>
+<div style="position:relative;border-bottom:1px solid #2c2e33;background:#1d1b16"><div style="position:absolute;left:1%;width:0.4%;top:4px;bottom:4px;background:#e3c27a;border-radius:2px"></div><div style="position:absolute;right:8px;top:4px;font-size:11px;color:#8a8f98">замок K</div></div>
+<div style="font-family:'IBM Plex Mono';font-size:11px;color:#8a8f98;display:flex;align-items:center;padding-left:12px;border-bottom:1px solid #2c2e33">06:40.00</div>
+<div style="position:relative;border-bottom:1px solid #2c2e33">
+<sc-for list="{{ ticks }}" as="t" hint-placeholder-count="12"><div style="position:absolute;left:{{ t.left }};top:0;bottom:0;border-left:1px solid #34373d;padding-left:4px;font-family:'IBM Plex Mono';font-size:11px;color:#8a8f98;display:flex;align-items:center">{{ t.label }}</div></sc-for>
+</div>
+<div style="grid-column:1 / 3;display:flex;flex-direction:column;overflow:hidden">
+<sc-for list="{{ rows }}" as="r" hint-placeholder-count="9">
+<div style="display:grid;grid-template-columns:120px minmax(0,1fr);height:{{ r.hA }};border-bottom:1px solid #232428">
+<div style="display:flex;align-items:center;gap:6px;padding-left:12px;font-size:12px"><span style="width:3px;align-self:stretch;margin:3px 0;background:{{ r.dot }}"></span><span style="font-weight:500">{{ r.label }}</span><span style="font-family:'IBM Plex Mono';color:#8a8f98;font-size:11px">{{ r.lvl }}</span></div>
+<div style="position:relative">
+<sc-for list="{{ r.clips }}" as="c" hint-placeholder-count="2"><div style="position:absolute;left:{{ c.left }};width:{{ c.width }};top:3px;bottom:3px;background:{{ c.a.bg }};border:1px solid {{ c.a.bd }};outline:{{ c.ol }};outline-offset:1px;border-radius:3px;color:{{ c.a.fg }};font-family:'IBM Plex Mono';font-size:11px;padding:0 6px;display:flex;align-items:center;white-space:nowrap;overflow:hidden">{{ c.name }}</div></sc-for>
+</div>
+</div>
+</sc-for>
+</div>
+<div style="position:absolute;left:calc(120px + (100% - 120px) * 0.303);top:26px;bottom:0;width:2px;background:#fff;pointer-events:none"></div>
+</div>
+
+<div style="display:flex;align-items:center;gap:14px;padding:0 16px;border-top:1px solid #2c2e33;background:#1c1d20">
+<div style="display:flex;gap:4px"><div style="width:34px;height:30px;border-radius:5px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-size:11px">|◀</div><div style="width:34px;height:30px;border-radius:5px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-size:11px">◀|</div><div style="width:44px;height:30px;border-radius:5px;background:#e6e7ea;color:#111;display:flex;align-items:center;justify-content:center">▶</div><div style="width:34px;height:30px;border-radius:5px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-size:11px">|▶</div><div style="width:34px;height:30px;border-radius:5px;background:#2a2c31;display:flex;align-items:center;justify-content:center;font-size:11px">▶|</div></div>
+<div style="font-family:'IBM Plex Mono';font-size:20px;font-weight:500">06:40.00</div>
+<div style="font-family:'IBM Plex Mono';font-size:12px;color:#8a8f98">кадр 24000 / 79199 · из 22:00.00</div>
+<div style="flex:1"></div>
+<span style="font-size:12px;color:#8a8f98">Sync</span><span style="padding:4px 9px;border:1px solid #34373d;border-radius:4px;font-family:'IBM Plex Mono';font-size:12px">60 fps ▾</span>
+<span style="padding:7px 16px;border:1px solid #34373d;border-radius:5px">Рендер шоу…</span>
+</div>
+<div style="display:flex;align-items:center;gap:18px;padding:0 16px;border-top:1px solid #2c2e33;background:#141517;font-family:'IBM Plex Mono';font-size:11.5px;color:#8a8f98"><span><span style="color:#8fbf9a">●</span> RTX 3080 · Vulkan</span><span>кадр 1.08 ms</span><span>моторы шоу посчитаны · 320 МБ</span><span style="flex:1"></span><span style="color:#c6cad1">Статистика декодера ▴</span></div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1b">
+<div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>«Пульт». Картинка занимает максимум места, всё управление — в одной правой панели с вкладками. Крупный шрифт, тёплый тёмный фон, янтарный акцент. Onest + JetBrains Mono.</div>
+<div class="dv-card" style="width:1440px;display:flex;flex-direction:column">
+
+<div data-screen-label="1b Превью" style="width:1440px;height:900px;background:#15130f;color:#efe9df;font-family:'Onest',sans-serif;font-size:14px;display:grid;grid-template-columns:minmax(0,1fr) 400px;grid-template-rows:56px minmax(0,1fr) 88px">
+<div style="grid-column:1 / 3;display:flex;align-items:center;gap:20px;padding:0 20px;border-bottom:1px solid #2b2720">
+<span style="font-weight:700;font-size:16px;letter-spacing:-.01em">Matreshka</span>
+<div style="display:flex;gap:4px;background:#221f19;border-radius:10px;padding:4px">
+<div style="padding:7px 18px;border-radius:7px;background:oklch(0.8 0.13 75);color:#1b160d;font-weight:600">Просмотр</div>
+<div style="padding:7px 18px;border-radius:7px;color:#bdb4a5">Шоу</div>
+</div>
+<div style="display:flex;gap:4px;background:#221f19;border-radius:10px;padding:4px">
+<div style="padding:7px 16px;border-radius:7px;background:#3a342a;color:#fff;font-weight:500">Превью</div>
+<div style="padding:7px 16px;border-radius:7px;color:#bdb4a5">Flat</div>
+<div style="padding:7px 16px;border-radius:7px;color:#bdb4a5">ReBake</div>
+<div style="padding:7px 16px;border-radius:7px;color:#bdb4a5">Inspection</div>
+</div>
+<div style="flex:1"></div>
+<span style="color:#bdb4a5;font-size:13px">RU · <span style="color:#7d7568">EN</span></span>
+<div style="padding:9px 22px;border-radius:9px;background:oklch(0.62 0.17 30);color:#fff;font-weight:600">Рендер</div>
+</div>
+
+<div style="position:relative;background:#000;overflow:hidden;display:flex;justify-content:center">
+<img src="assets/building.png" alt="" style="height:100%;display:block">
+<div style="position:absolute;left:16px;bottom:16px;display:flex;gap:8px;font-size:13px">
+<span style="padding:6px 12px;border-radius:8px;background:rgba(34,31,25,.9);border:1px solid #3a342a">Рамка кадра</span>
+<span style="padding:6px 12px;border-radius:8px;background:rgba(34,31,25,.9);border:1px solid #3a342a">Сбросить вид</span>
+</div>
+<div style="position:absolute;right:16px;bottom:16px;padding:6px 12px;border-radius:8px;background:rgba(34,31,25,.9);border:1px solid #3a342a;font-size:13px">Во весь экран · F11</div>
+</div>
+
+<div style="grid-row:2 / 4;grid-column:2;border-left:1px solid #2b2720;background:#1b1914;display:flex;flex-direction:column;min-height:0">
+<div style="display:flex;gap:0;border-bottom:1px solid #2b2720;padding:0 12px">
+<div style="padding:14px 14px 12px;border-bottom:2px solid oklch(0.8 0.13 75);font-weight:600">Источники</div>
+<div style="padding:14px 14px 12px;color:#9d9486">Вид</div>
+<div style="padding:14px 14px 12px;color:#9d9486">Рендер</div>
+<div style="padding:14px 14px 12px;color:#9d9486">Система</div>
+</div>
+<div style="display:flex;flex-direction:column;overflow:hidden">
+<sc-for list="{{ sources }}" as="s" hint-placeholder-count="6">
+<div style="padding:12px 20px;border-bottom:1px solid #26231d;display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;align-items:baseline;gap:10px"><span style="font-weight:600;font-size:15px;color:{{ s.dot }}">{{ s.key }}</span><span style="color:#9d9486;font-size:13px">{{ s.ru }}</span><span style="flex:1"></span><span style="font-family:'JetBrains Mono';font-size:13px">{{ s.gain }}</span></div>
+<sc-if value="{{ s.loaded }}" hint-placeholder-val="{{ true }}">
+<div style="font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.file }}</div>
+<div style="font-family:'JetBrains Mono';font-size:12px;color:#9d9486">{{ s.meta }}</div>
+</sc-if>
+<sc-if value="{{ s.empty }}" hint-placeholder-val="{{ false }}"><div style="color:#7d7568;font-size:13px">Пусто · перетащите файл сюда</div></sc-if>
+<sc-if value="{{ s.slider }}" hint-placeholder-val="{{ true }}"><div style="height:6px;background:#2e2a22;border-radius:3px;position:relative;margin-top:2px"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ s.pct }};background:oklch(0.8 0.13 75);border-radius:3px"></div></div></sc-if>
+</div>
+</sc-for>
+</div>
+<div style="margin-top:auto;padding:12px 20px;border-top:1px solid #2b2720;display:flex;justify-content:space-between;align-items:center;font-size:13px"><span>Связать Top и Bottom</span><span style="width:36px;height:20px;border-radius:10px;background:oklch(0.8 0.13 75);position:relative"><span style="position:absolute;right:2px;top:2px;width:16px;height:16px;border-radius:8px;background:#1b160d"></span></span></div>
+</div>
+
+<div style="display:flex;align-items:center;gap:20px;padding:0 20px;border-top:1px solid #2b2720;background:#1b1914">
+<div style="width:52px;height:52px;border-radius:26px;background:#efe9df;color:#15130f;display:flex;align-items:center;justify-content:center;font-size:18px">▶</div>
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-family:'JetBrains Mono';font-size:28px;font-weight:500;line-height:1">01:59.37</span><span style="font-family:'JetBrains Mono';font-size:12.5px;color:#9d9486">кадр 7162 из 25397 · 07:03.30</span></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:6px">
+<div style="height:28px;position:relative">
+<div style="position:absolute;left:0;right:0;top:11px;height:6px;border-radius:3px;background:#2e2a22"></div>
+<div style="position:absolute;left:0;width:28.2%;top:11px;height:6px;border-radius:3px;background:oklch(0.8 0.13 75)"></div>
+<div style="position:absolute;left:28.2%;top:4px;width:20px;height:20px;margin-left:-10px;border-radius:10px;background:#efe9df"></div>
+</div>
+<div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono';font-size:12px;color:#7d7568"><span>00:00</span><span>← → кадр · Shift секунда · пробел играть</span><span>07:03</span></div>
+</div>
+<span style="padding:8px 12px;border-radius:8px;background:#26231d;font-family:'JetBrains Mono';font-size:13px">60 fps ▾</span>
+</div>
+</div>
+
+<div data-screen-label="1b Шоу редактор" style="width:1440px;height:900px;background:#15130f;color:#efe9df;font-family:'Onest',sans-serif;font-size:14px;display:grid;grid-template-columns:minmax(0,1fr) 400px;grid-template-rows:56px 330px minmax(0,1fr) 72px;border-top:8px solid #e9e7e2">
+<div style="grid-column:1 / 3;display:flex;align-items:center;gap:20px;padding:0 20px;border-bottom:1px solid #2b2720">
+<span style="font-weight:700;font-size:16px">Matreshka</span>
+<div style="display:flex;gap:4px;background:#221f19;border-radius:10px;padding:4px"><div style="padding:7px 18px;border-radius:7px;color:#bdb4a5">Просмотр</div><div style="padding:7px 18px;border-radius:7px;background:oklch(0.8 0.13 75);color:#1b160d;font-weight:600">Шоу</div></div>
+<div style="display:flex;flex-direction:column;line-height:1.25;min-width:0"><span style="font-weight:600;white-space:nowrap">RusDay · Matreshka_Day · MuzeyTransporta</span><span style="font-size:12px;color:#9d9486">2026-Daily-RusDay-STD150-…-v001.trix · черновик, 18 правок</span></div>
+<div style="flex:1"></div>
+<div style="display:flex;gap:4px;background:#221f19;border-radius:10px;padding:4px"><div style="padding:7px 14px;border-radius:7px;color:#bdb4a5">Читать</div><div style="padding:7px 14px;border-radius:7px;background:#3a342a;color:#fff;font-weight:500">Править</div></div>
+<div style="padding:9px 22px;border-radius:9px;background:oklch(0.62 0.17 30);color:#fff;font-weight:600">Рендер</div>
+</div>
+<div style="background:#000;position:relative;overflow:hidden;display:flex;justify-content:center"><img src="assets/building.png" alt="" style="height:100%;display:block"><div style="position:absolute;right:14px;top:14px;width:200px;padding:12px 14px;border-radius:10px;background:rgba(27,25,20,.92);border:1px solid #3a342a;display:flex;flex-direction:column;gap:10px;font-size:13px"><div style="display:flex;justify-content:space-between"><b>Экраны</b><span style="color:#9d9486">скрыть</span></div><sc-for list="{{ screens }}" as="s" hint-placeholder-count="4"><div style="display:flex;flex-direction:column;gap:4px"><div style="display:flex;justify-content:space-between"><span>{{ s.key }}</span><span style="font-family:'JetBrains Mono';font-size:12px">{{ s.gain }}</span></div><div style="height:5px;background:#2e2a22;border-radius:3px;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ s.pct }};background:oklch(0.8 0.13 75);border-radius:3px"></div></div></div></sc-for></div></div>
+<div style="grid-row:2 / 5;grid-column:2;border-left:1px solid #2b2720;background:#1b1914;display:flex;flex-direction:column;min-height:0">
+<div style="display:flex;border-bottom:1px solid #2b2720;padding:0 12px"><div style="padding:14px 14px 12px;border-bottom:2px solid oklch(0.8 0.13 75);font-weight:600">Клип</div><div style="padding:14px 14px 12px;color:#9d9486">Лупы</div><div style="padding:14px 14px 12px;color:#9d9486">Шоу</div></div>
+<div style="padding:18px 20px;display:flex;flex-direction:column;gap:4px;border-bottom:1px solid #26231d"><span style="color:oklch(0.72 0.1 250);font-weight:600">Top · уровень 0</span><span style="font-size:15px;font-weight:500">RusDay_SHOW_Top_v02_2026-06-09.mov</span><span style="font-family:'JetBrains Mono';font-size:12px;color:#9d9486">D:\Content\2026-dates\RusDay\</span></div>
+<div style="padding:12px 20px;display:flex;flex-direction:column">
+<sc-for list="{{ fields }}" as="f" hint-placeholder-count="8"><div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #26231d"><span style="color:#bdb4a5">{{ f.k }}</span><span style="font-family:'JetBrains Mono';font-size:13px;padding:5px 10px;background:#221f19;border-radius:6px;min-width:90px;text-align:right">{{ f.v }}</span></div></sc-for>
+</div>
+<div style="margin-top:auto;padding:14px 20px;border-top:1px solid #2b2720;display:flex;gap:8px"><span style="flex:1;text-align:center;padding:9px;border-radius:8px;background:#26231d">+ кью</span><span style="flex:1;text-align:center;padding:9px;border-radius:8px;background:#26231d">Удалить</span><span style="flex:1;text-align:center;padding:9px;border-radius:8px;background:#26231d">↶ ↷</span></div>
+</div>
+<div style="background:#18160f;border-top:1px solid #2b2720;display:flex;flex-direction:column;min-height:0;position:relative">
+<div style="display:grid;grid-template-columns:132px minmax(0,1fr);height:30px;border-bottom:1px solid #2b2720"><div style="display:flex;align-items:center;padding-left:16px"><span style="font-family:'JetBrains Mono';font-size:11px;padding:2px 8px;border-radius:5px;background:oklch(0.8 0.13 75);color:#1b160d;font-weight:700">LOOP</span></div><div style="position:relative"><sc-for list="{{ ticks }}" as="t" hint-placeholder-count="12"><div style="position:absolute;left:{{ t.left }};top:0;bottom:0;border-left:1px solid #2e2a22;padding-left:5px;font-family:'JetBrains Mono';font-size:11.5px;color:#9d9486;display:flex;align-items:center">{{ t.label }}</div></sc-for><div style="position:absolute;left:1%;width:0.4%;top:0;height:4px;background:oklch(0.8 0.13 75)"></div></div></div>
+<sc-for list="{{ groups }}" as="g" hint-placeholder-count="6">
+<div style="display:grid;grid-template-columns:132px minmax(0,1fr);border-bottom:1px solid #26231d">
+<div style="display:flex;align-items:center;gap:8px;padding-left:16px"><span style="font-weight:600;color:{{ g.dot }}">{{ g.label }}</span><span style="font-family:'JetBrains Mono';font-size:11px;color:#7d7568">{{ g.levels }}</span></div>
+<div style="display:flex;flex-direction:column;gap:2px;padding:4px 0">
+<sc-for list="{{ g.rows }}" as="r" hint-placeholder-count="1"><div style="position:relative;height:{{ r.hB }}"><sc-for list="{{ r.clips }}" as="c" hint-placeholder-count="2"><div style="position:absolute;left:{{ c.left }};width:{{ c.width }};top:0;bottom:0;background:{{ c.b.bg }};border-radius:5px;outline:{{ c.ol }};outline-offset:1px;color:{{ c.b.fg }};font-size:12px;padding:0 8px;display:flex;align-items:center;white-space:nowrap;overflow:hidden">{{ c.name }}</div></sc-for></div></sc-for>
+</div>
+</div>
+</sc-for>
+<div style="position:absolute;left:calc(132px + (100% - 132px) * 0.303);top:0;bottom:0;width:2px;background:#efe9df"></div>
+</div>
+<div style="display:flex;align-items:center;gap:18px;padding:0 20px;border-top:1px solid #2b2720;background:#1b1914">
+<div style="width:44px;height:44px;border-radius:22px;background:#efe9df;color:#15130f;display:flex;align-items:center;justify-content:center">▶</div>
+<span style="font-family:'JetBrains Mono';font-size:26px;font-weight:500">06:40.00</span>
+<span style="font-family:'JetBrains Mono';font-size:12.5px;color:#9d9486">кадр 24000 из 79199 · 22:00.00</span>
+<div style="flex:1"></div>
+<span style="font-size:13px;color:#9d9486">колесо — зум · средняя — плейхед · ? — клавиши</span>
+</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1c">
+<div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a>«Лист». Светлый интерфейс для офиса и дневного света; тёмной остаётся только картинка. Источники — таблица из шести колонок сверху. Golos Text + IBM Plex Mono.</div>
+<div class="dv-card" style="width:1440px;display:flex;flex-direction:column">
+
+<div data-screen-label="1c Превью" style="width:1440px;height:900px;background:#f3f2ee;color:#1d1f23;font-family:'Golos Text',sans-serif;font-size:13.5px;display:grid;grid-template-rows:52px 132px minmax(0,1fr) 76px">
+<div style="display:flex;align-items:center;gap:18px;padding:0 20px;background:#fbfaf7;border-bottom:1px solid #dfddd6">
+<span style="font-weight:600;font-size:15px">Matreshka Viewer</span>
+<div style="display:flex;border:1px solid #d3d0c7;border-radius:7px;overflow:hidden"><div style="padding:6px 16px;background:#1d1f23;color:#fff;font-weight:500">Просмотр</div><div style="padding:6px 16px;color:#50545c">Шоу</div></div>
+<div style="display:flex;gap:18px;color:#6b6f77"><span style="color:#1d1f23;font-weight:600;border-bottom:2px solid oklch(0.55 0.15 255);padding-bottom:2px">Превью</span><span>Flat</span><span>ReBake</span><span>Inspection</span></div>
+<div style="flex:1"></div>
+<span style="font-size:12.5px;color:#6b6f77"><b style="color:#1d1f23">RU</b> · EN</span>
+<span style="padding:6px 12px;border:1px solid #d3d0c7;border-radius:6px;background:#fff">Лог</span>
+<span style="padding:6px 12px;border:1px solid #d3d0c7;border-radius:6px;background:#fff">Проверка машины</span>
+</div>
+<div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:1px;background:#dfddd6;border-bottom:1px solid #dfddd6">
+<sc-for list="{{ sources }}" as="s" hint-placeholder-count="6">
+<div style="background:#fbfaf7;padding:12px 14px;display:flex;flex-direction:column;gap:5px;min-width:0">
+<div style="display:flex;align-items:center;gap:7px"><span style="width:10px;height:10px;border-radius:5px;background:{{ s.dotC }}"></span><span style="font-weight:600">{{ s.key }}</span><span style="color:#6b6f77;font-size:12px">{{ s.ru }}</span></div>
+<sc-if value="{{ s.loaded }}" hint-placeholder-val="{{ true }}">
+<div style="font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.file }}</div>
+<div style="font-family:'IBM Plex Mono';font-size:11.5px;color:#4d7a55;line-height:1.35">{{ s.meta }}</div>
+</sc-if>
+<sc-if value="{{ s.empty }}" hint-placeholder-val="{{ false }}"><div style="flex:1;border:1px dashed #c9c6bd;border-radius:5px;display:flex;align-items:center;justify-content:center;color:#8a8d94;font-size:12px">Перетащите файл</div></sc-if>
+<sc-if value="{{ s.slider }}" hint-placeholder-val="{{ true }}"><div style="display:flex;align-items:center;gap:8px;margin-top:auto"><div style="flex:1;height:4px;background:#e2e0da;border-radius:2px;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ s.pct }};background:oklch(0.55 0.15 255);border-radius:2px"></div><div style="position:absolute;left:{{ s.pct }};top:-5px;width:14px;height:14px;margin-left:-7px;border-radius:7px;background:#fff;border:1px solid #b9b6ad"></div></div><span style="font-family:'IBM Plex Mono';font-size:12px">{{ s.gain }}</span></div></sc-if>
+</div>
+</sc-for>
+</div>
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 250px;min-height:0">
+<div style="background:#0b0b0c;position:relative;overflow:hidden;display:flex;justify-content:center"><img src="assets/building.png" alt="" style="height:100%;display:block"></div>
+<div style="background:#fbfaf7;border-left:1px solid #dfddd6;padding:16px 18px;display:flex;flex-direction:column;gap:14px">
+<span style="font-weight:600;font-size:14px">Вид</span>
+<div style="display:flex;flex-direction:column;gap:7px"><span style="font-size:12px;color:#6b6f77">Геометрия</span><div style="display:flex;flex-wrap:wrap;gap:5px"><span style="padding:4px 9px;border-radius:12px;background:#1d1f23;color:#fff;font-size:12px">Body</span><span style="padding:4px 9px;border-radius:12px;background:#1d1f23;color:#fff;font-size:12px">Shell</span><span style="padding:4px 9px;border-radius:12px;background:#1d1f23;color:#fff;font-size:12px">Bottom</span><span style="padding:4px 9px;border-radius:12px;background:#1d1f23;color:#fff;font-size:12px">Top</span><span style="padding:4px 9px;border-radius:12px;background:#1d1f23;color:#fff;font-size:12px">Lamels</span></div></div>
+<div style="display:flex;justify-content:space-between"><span>Match</span><span style="width:32px;height:18px;border-radius:9px;background:#d3d0c7;position:relative"><span style="position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:7px;background:#fff"></span></span></div>
+<div style="display:flex;justify-content:space-between"><span>Solid top</span><span style="width:32px;height:18px;border-radius:9px;background:oklch(0.55 0.15 255);position:relative"><span style="position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:7px;background:#fff"></span></span></div>
+<div style="display:flex;justify-content:space-between"><span>Связь Top + Bottom</span><span style="width:32px;height:18px;border-radius:9px;background:oklch(0.55 0.15 255);position:relative"><span style="position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:7px;background:#fff"></span></span></div>
+<div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:12px;color:#6b6f77">Alpha</span><span style="padding:6px 10px;border:1px solid #d3d0c7;border-radius:6px;background:#fff">Premultiplied ▾</span></div>
+<div style="display:flex;flex-direction:column;gap:5px"><span style="font-size:12px;color:#6b6f77">Под картинкой</span><span style="padding:6px 10px;border:1px solid #d3d0c7;border-radius:6px;background:#fff">Black ▾</span></div>
+<div style="margin-top:auto;display:flex;flex-direction:column;gap:3px;font-family:'IBM Plex Mono';font-size:11.5px;color:#6b6f77;border-top:1px solid #e6e4de;padding-top:12px"><span><span style="color:#4d7a55">●</span> RTX 3080 · Vulkan</span><span>кадр 2.01 ms · 0 пропусков</span></div>
+</div>
+</div>
+<div style="display:flex;align-items:center;gap:16px;padding:0 20px;background:#fbfaf7;border-top:1px solid #dfddd6">
+<div style="display:flex;gap:4px"><div style="width:32px;height:32px;border-radius:6px;border:1px solid #d3d0c7;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px">◀|</div><div style="width:44px;height:32px;border-radius:6px;background:#1d1f23;color:#fff;display:flex;align-items:center;justify-content:center">▶</div><div style="width:32px;height:32px;border-radius:6px;border:1px solid #d3d0c7;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px">|▶</div></div>
+<div style="display:flex;flex-direction:column"><span style="font-family:'IBM Plex Mono';font-size:20px;font-weight:500;line-height:1.1">01:59.37</span><span style="font-family:'IBM Plex Mono';font-size:11.5px;color:#6b6f77">7162 / 25397 · 60 fps</span></div>
+<div style="flex:1;height:28px;position:relative"><div style="position:absolute;left:0;right:0;top:11px;height:6px;border-radius:3px;background:#e2e0da"></div><div style="position:absolute;left:0;width:28.2%;top:11px;height:6px;border-radius:3px;background:oklch(0.55 0.15 255)"></div><div style="position:absolute;left:28.2%;top:2px;width:2px;height:24px;background:#1d1f23"></div></div>
+<div style="width:1px;height:40px;background:#dfddd6"></div>
+<div style="display:flex;flex-direction:column;gap:2px;font-size:12px"><span style="color:#6b6f77">Рендер · 1080×1920 · 30 fps · H.264</span><span style="font-family:'IBM Plex Mono'">OUT\Matreshka_preview.mp4</span></div>
+<span style="padding:6px 12px;border:1px solid #d3d0c7;border-radius:6px;background:#fff">Настроить</span>
+<span style="padding:9px 20px;border-radius:7px;background:oklch(0.55 0.15 255);color:#fff;font-weight:600">Рендер</span>
+</div>
+</div>
+
+<div data-screen-label="1c Шоу редактор" style="width:1440px;height:900px;background:#f3f2ee;color:#1d1f23;font-family:'Golos Text',sans-serif;font-size:13.5px;display:grid;grid-template-rows:52px 50px 340px minmax(0,1fr) 60px;border-top:8px solid #e9e7e2">
+<div style="display:flex;align-items:center;gap:18px;padding:0 20px;background:#fbfaf7;border-bottom:1px solid #dfddd6">
+<span style="font-weight:600;font-size:15px">Matreshka Viewer</span>
+<div style="display:flex;border:1px solid #d3d0c7;border-radius:7px;overflow:hidden"><div style="padding:6px 16px;color:#50545c">Просмотр</div><div style="padding:6px 16px;background:#1d1f23;color:#fff;font-weight:500">Шоу</div></div>
+<div style="display:flex;gap:18px;color:#6b6f77"><span style="color:#1d1f23;font-weight:600;border-bottom:2px solid oklch(0.55 0.15 255);padding-bottom:2px">Превью</span><span>Flat</span><span>Inspection</span></div>
+<div style="flex:1"></div>
+<span style="font-size:12.5px;color:#6b6f77"><b style="color:#1d1f23">RU</b> · EN</span>
+</div>
+<div style="display:flex;align-items:center;gap:12px;padding:0 20px;background:#fff;border-bottom:1px solid #dfddd6">
+<span style="font-weight:600;white-space:nowrap">2026-Daily-RusDay-STD150-Matreshka_Day-MuzeyTransporta</span>
+<span style="font-family:'IBM Plex Mono';font-size:12px;color:#6b6f77">17 video · 6 audio · 5 kinetic · 3 cue · 1 loop</span>
+<span style="padding:3px 10px;border-radius:12px;background:oklch(0.93 0.05 80);color:oklch(0.42 0.08 70);font-size:12px">черновик · 18 правок</span>
+<div style="flex:1"></div>
+<span style="padding:5px 11px;border:1px solid #d3d0c7;border-radius:6px">Открыть…</span>
+<span style="padding:5px 11px;border:1px solid #d3d0c7;border-radius:6px">↶</span><span style="padding:5px 11px;border:1px solid #d3d0c7;border-radius:6px">↷</span>
+<span style="padding:5px 11px;border:1px solid #d3d0c7;border-radius:6px">+ кью</span>
+<span style="padding:5px 11px;border:1px solid #d3d0c7;border-radius:6px">Удалить</span>
+<span style="padding:6px 14px;border-radius:6px;background:#1d1f23;color:#fff;font-weight:500">✎ Редактор</span>
+</div>
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 250px 330px;min-height:0">
+<div style="background:#0b0b0c;overflow:hidden;display:flex;justify-content:center"><img src="assets/building.png" alt="" style="height:100%;display:block"></div>
+<div style="background:#fbfaf7;border-left:1px solid #dfddd6;padding:16px 18px;display:flex;flex-direction:column;gap:12px">
+<span style="font-weight:600;font-size:14px">Экраны</span>
+<sc-for list="{{ screens }}" as="s" hint-placeholder-count="4"><div style="display:flex;flex-direction:column;gap:5px"><div style="display:flex;justify-content:space-between"><span>{{ s.key }}</span><span style="font-family:'IBM Plex Mono';font-size:12px">{{ s.gain }}</span></div><div style="height:4px;background:#e2e0da;border-radius:2px;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ s.pct }};background:oklch(0.55 0.15 255);border-radius:2px"></div></div></div></sc-for>
+<div style="margin-top:auto;border-top:1px solid #e6e4de;padding-top:12px;display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between"><b>Лупы</b><span style="font-family:'IBM Plex Mono';font-size:12px;color:oklch(0.5 0.1 70)">800 – 1099</span></div><div style="display:flex;gap:5px;font-size:12px"><span style="padding:3px 8px;border:1px solid #d3d0c7;border-radius:5px">+</span><span style="padding:3px 8px;border:1px solid #d3d0c7;border-radius:5px">−</span><span style="padding:3px 8px;border:1px solid #d3d0c7;border-radius:5px">по клипу</span><span style="padding:3px 8px;border:1px solid #d3d0c7;border-radius:5px">из файла</span></div></div>
+</div>
+<div style="background:#fff;border-left:1px solid #dfddd6;padding:16px 18px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;align-items:center;gap:8px"><span style="width:10px;height:10px;border-radius:5px;background:oklch(0.6 0.13 250)"></span><b style="font-size:14px">RusDay_SHOW_Top_v02</b></div>
+<span style="font-family:'IBM Plex Mono';font-size:11.5px;color:#6b6f77">D:\Content\2026-dates\RusDay\…_2026-06-09.mov</span>
+<sc-for list="{{ fields }}" as="f" hint-placeholder-count="8"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><span style="color:#50545c">{{ f.k }}</span><span style="font-family:'IBM Plex Mono';font-size:12px;padding:4px 9px;border:1px solid #d3d0c7;border-radius:5px;min-width:96px;text-align:right">{{ f.v }}</span></div></sc-for>
+</div>
+</div>
+<div style="background:#fff;border-top:1px solid #dfddd6;display:flex;flex-direction:column;min-height:0;position:relative;overflow:hidden">
+<div style="display:grid;grid-template-columns:124px minmax(0,1fr);height:28px;border-bottom:1px solid #e6e4de;background:#fbfaf7"><div style="display:flex;align-items:center;padding-left:18px;font-family:'IBM Plex Mono';font-size:11px;color:oklch(0.5 0.1 70);font-weight:500">LOOP</div><div style="position:relative"><sc-for list="{{ ticks }}" as="t" hint-placeholder-count="12"><div style="position:absolute;left:{{ t.left }};top:0;bottom:0;border-left:1px solid #e2e0da;padding-left:5px;font-family:'IBM Plex Mono';font-size:11px;color:#6b6f77;display:flex;align-items:center">{{ t.label }}</div></sc-for></div></div>
+<sc-for list="{{ rows }}" as="r" hint-placeholder-count="9">
+<div style="display:grid;grid-template-columns:124px minmax(0,1fr);height:{{ r.hA }};border-bottom:1px solid #f0eee9">
+<div style="display:flex;align-items:center;gap:6px;padding-left:18px;font-size:12.5px"><span style="font-weight:500">{{ r.label }}</span><span style="font-family:'IBM Plex Mono';font-size:11px;color:#8a8d94">{{ r.lvl }}</span></div>
+<div style="position:relative"><sc-for list="{{ r.clips }}" as="c" hint-placeholder-count="2"><div style="position:absolute;left:{{ c.left }};width:{{ c.width }};top:3px;bottom:3px;background:{{ c.c.bg }};border:1px solid {{ c.c.bd }};outline:{{ c.olC }};outline-offset:1px;border-radius:4px;color:{{ c.c.fg }};font-size:11.5px;padding:0 7px;display:flex;align-items:center;white-space:nowrap;overflow:hidden">{{ c.name }}</div></sc-for></div>
+</div>
+</sc-for>
+<div style="position:absolute;left:calc(124px + (100% - 124px) * 0.303);top:0;bottom:0;width:2px;background:oklch(0.55 0.15 255)"></div>
+</div>
+<div style="display:flex;align-items:center;gap:16px;padding:0 20px;background:#fbfaf7;border-top:1px solid #dfddd6">
+<div style="display:flex;gap:4px"><div style="width:32px;height:30px;border-radius:6px;border:1px solid #d3d0c7;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px">◀|</div><div style="width:44px;height:30px;border-radius:6px;background:#1d1f23;color:#fff;display:flex;align-items:center;justify-content:center">▶</div><div style="width:32px;height:30px;border-radius:6px;border:1px solid #d3d0c7;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px">|▶</div></div>
+<span style="font-family:'IBM Plex Mono';font-size:20px;font-weight:500">06:40.00</span>
+<span style="font-family:'IBM Plex Mono';font-size:12px;color:#6b6f77">24000 / 79199 · 60 fps</span>
+<div style="flex:1"></div>
+<span style="padding:8px 18px;border-radius:7px;background:oklch(0.55 0.15 255);color:#fff;font-weight:600">Рендер шоу</span>
+</div>
+</div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Дальше: «беру <a class="dv-oid" href="#1a">1a</a>, но правую панель из <a class="dv-oid" href="#1b">1b</a>» · «<a class="dv-oid" href="#1c">1c</a>, остальные экраны» · «сделай <a class="dv-oid" href="#1b">1b</a> светлым»</p>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const H = { top: 250, bottom: 160, lamels: 80, kinetic: 25, sound: 300, cue: 0, frame: 330 };
+    const pal = (h, k) => k === 'cue'
+      ? { a: { bg: 'transparent', bd: '#4a4d54', fg: '#9aa0a9' }, b: { bg: '#2a261f', fg: '#bdb4a5' }, c: { bg: '#f3f2ee', bd: '#c9c6bd', fg: '#50545c' } }
+      : { a: { bg: `oklch(0.34 0.07 ${h})`, bd: `oklch(0.58 0.11 ${h})`, fg: `oklch(0.92 0.03 ${h})` },
+          b: { bg: `oklch(0.44 0.08 ${h})`, fg: `oklch(0.96 0.02 ${h})` },
+          c: { bg: `oklch(0.93 0.045 ${h})`, bd: `oklch(0.7 0.1 ${h})`, fg: `oklch(0.3 0.07 ${h})` } };
+    const T = 22;
+    const clip = (k, s, e, name, sel) => ({ name, left: (s / T * 100) + '%', width: ((e - s) / T * 100) + '%', ...pal(H[k], k),
+      ol: sel ? '2px solid #fff' : 'none', olC: sel ? '2px solid oklch(0.55 0.15 255)' : 'none' });
+    const row = (k, label, lvl, clips, small) => ({ label, lvl, dot: `oklch(0.7 0.12 ${H[k]})`, hA: small ? '26px' : '28px', hB: small ? '18px' : '22px', clips });
+    const R = {
+      cue: row('cue', 'Cue', '', [clip('cue', 0.2, 2.9, 'u2-ch1-v255'), clip('cue', 3.2, 6, 'u2-ch45-v255'), clip('cue', 10, 12.8, 'u2-ch44-v255')], true),
+      kin: row('kinetic', 'Kinetic', '', [clip('kinetic', 3.2, 10, 'Rus_Day.v6.2026.06.09_1_of_1.json'), clip('kinetic', 10, 15.5, '7Sisters_060_KIN_v004_1_of_1.json')]),
+      t0: row('top', 'Top', 'L0', [clip('top', 3.2, 10, 'RusDay_SHOW_Top_v02_2026-06-09.mov', true), clip('top', 15.2, 15.7, '')]),
+      t1: row('top', 'Top', 'L1', [clip('top', 0.2, 3.2, 'kinetic_screen_out_-100px.mov'), clip('top', 10, 15.2, '7Sisters_Top_Canvas_OUT_60fps_v004.mov'), clip('top', 15.8, 16.5, 'Ma…ov')]),
+      b0: row('bottom', 'Bottom', 'L0', [clip('bottom', 3.2, 10, 'RusDay_SHOW_Bottom_v02_2026-06-09.mov'), clip('bottom', 15.2, 15.7, ''), clip('bottom', 16.5, 20.5, 'STD_HISTORY_OUT.mov')]),
+      b1: row('bottom', 'Bottom', 'L1', [clip('bottom', 0.2, 3.2, 'intro_main screen.mov'), clip('bottom', 10, 15.2, '7Sisters_Main_Canvas_OUT_60fps_v004.mov'), clip('bottom', 15.8, 16.5, 'Ma…ov')]),
+      l0: row('lamels', 'Lamels', 'L0', [clip('lamels', 3.2, 10, 'RusDay_SHOW_Lameli_v02_2026-06-09.mov'), clip('lamels', 15.2, 15.7, ''), clip('lamels', 16.5, 20.5, 'LAMELI_OUT.mov')]),
+      l1: row('lamels', 'Lamels', 'L1', [clip('lamels', 0.2, 3.2, 'intro_lamel.mov')]),
+      s0: row('sound', 'Sound', '1', [clip('sound', 0.2, 3.2, 'intro_mix.wav'), clip('sound', 3.2, 10, 'RusDay_Mix_STEREO.wav'), clip('sound', 10, 15.5, '7Sisters_mix.wav')])
+    };
+    const rows = [R.cue, R.kin, R.t0, R.t1, R.b0, R.b1, R.l0, R.l1, R.s0];
+    const grp = (k, label, rs) => ({ label, dot: `oklch(0.75 0.11 ${H[k]})`, levels: rs.length > 1 ? `L0–L${rs.length - 1}` : '', rows: rs });
+    const groups = [grp('cue', 'Cue', [R.cue]), grp('kinetic', 'Kinetic', [R.kin]), grp('top', 'Top', [R.t0, R.t1]), grp('bottom', 'Bottom', [R.b0, R.b1]), grp('lamels', 'Lamels', [R.l0, R.l1]), grp('sound', 'Sound', [R.s0])];
+    const ticks = Array.from({ length: 11 }, (_, i) => ({ label: String(i * 2).padStart(2, '0') + ':00', left: (i * 2 / T * 100) + '%' }));
+    const src = (k, key, ru, file, meta, gain, pct, o = {}) => ({ key, ru, file, meta, gain, pct, loaded: !!file, empty: !file, slider: o.slider !== false, gainLabel: o.gl || 'Яркость',
+      dot: `oklch(0.72 0.12 ${H[k]})`, dotC: `oklch(0.6 0.13 ${H[k]})` });
+    const sources = [
+      src('top', 'Top', 'верхний экран', 'RusDay_SHOW_Top_v02_2026-06-09.mov', '2500×1150 · HAP Q · 60 fps · 07:03', '1.00', '50%'),
+      src('bottom', 'Bottom', 'нижний экран', 'RusDay_SHOW_Bottom_v02_2026-06-09.mov', '4608×1584 · HAP Q · 60 fps · 07:03', '1.00', '50%'),
+      src('lamels', 'Lamels', 'ламели', 'RusDay_SHOW_Lameli_v02_2026-06-09.mov', '536×110 · HAP Q · 60 fps · 07:03', '1.00', '50%'),
+      src('frame', 'Frame', 'накладка', '', '', '1.00', '50%'),
+      src('sound', 'Sound', 'звук', 'RusDay_Mix_STEREO.wav', '48 kHz · стерео · 07:03', '0.20', '20%', { gl: 'Громкость' }),
+      src('kinetic', 'Kinetic', 'моторы', 'Rus_Day.v6.2026.06.09_1_of_1.json', '1829 моторов · 25 334 кадра · 60 fps', '', '0%', { slider: false })
+    ];
+    const screens = [{ key: 'Top', gain: '1.00', pct: '50%' }, { key: 'Bottom', gain: '1.00', pct: '50%' }, { key: 'Lamels', gain: '1.00', pct: '50%' }, { key: 'Звук', gain: '0.20', pct: '20%' }];
+    const fields = [
+      { k: 'Уровень', v: '0' }, { k: 'Кадр начала', v: '11 520' }, { k: 'Длина', v: '25 397' },
+      { k: 'Подрезка с головы', v: '0' }, { k: 'Подрезка с хвоста', v: '0' },
+      { k: 'Фейд с головы', v: '30' }, { k: 'Фейд с хвоста', v: '60' }, { k: 'Занимает', v: '03:12–10:15' }
+    ];
+    const FPS = 60, PLAY = 36042 / FPS;
+    const tc = (s, short) => { const f = Math.round(s * FPS), ff = f % FPS, t = Math.floor(f / FPS); const p = [Math.floor(t / 3600), Math.floor(t / 60) % 60, t % 60, ff].map(n => String(n).padStart(2, '0')); return short ? p.slice(1).join(':') : p.join(':'); };
+    const dur = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(2).padStart(5, '0')}`;
+    const nf = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    const D = [
+      { k: 'cue', label: 'Cue', h: 22, clips: [[12, 0, 'u2·ch1·v255'], [192, 0, 'u2·ch45·v255'], [600, 0, 'u2·ch44·v255']] },
+      { k: 'kinetic', label: 'Kinetic', h: 30, clips: [[192, 600, 'Rus_Day.v6.2026.06.09_1_of_1.json'], [600, 915, '7Sisters_060_KIN_v004_1_of_1.json']] },
+      { k: 'top', label: 'Top', lvl: 'L0', h: 38, clips: [[192, 602, 'RusDay_SHOW_Top_v02_2026-06-09.mov', { fo: 2, sel: 1 }], [915, 945, 'Ma_Top_OUT.mov']] },
+      { k: 'top', label: 'Top', lvl: 'L1', h: 38, clips: [[6, 192, 'kinetic_screen_out_-100px.mov'], [600, 915, '7Sisters_Top_Canvas_OUT_60fps_v004.mov']] },
+      { k: 'top', label: 'Top', lvl: 'L2', h: 12, clips: [] },
+      { k: 'bottom', label: 'Bottom', lvl: 'L0', h: 38, clips: [[192, 602, 'RusDay_SHOW_Bottom_v02_2026-06-09.mov', { fo: 2 }], [915, 945, 'Ma_Bottom_OUT.mov'], [990, 1230, 'STD_HISTORY_OUT.mov']] },
+      { k: 'bottom', label: 'Bottom', lvl: 'L1', h: 38, clips: [[6, 192, 'intro_main screen.mov'], [600, 915, '7Sisters_Main_Canvas_OUT_60fps_v004.mov']] },
+      { k: 'bottom', label: 'Bottom', lvl: 'L2', h: 12, clips: [] },
+      { k: 'lamels', label: 'Lamels', lvl: 'L0', h: 38, clips: [[192, 602, 'RusDay_SHOW_Lameli_v02_2026-06-09.mov', { fo: 2 }], [915, 945, 'Ma_Lameli_OUT.mov'], [990, 1230, 'LAMELI_OUT.mov']] },
+      { k: 'lamels', label: 'Lamels', lvl: 'L1', h: 38, clips: [[6, 192, 'intro_lamel.mov'], [600, 915, '7Sisters_Lameli_Canvas_OUT_60fps_v004.mov']] },
+      { k: 'sound', label: 'Sound', lvl: '1', h: 30, clips: [[192, 603, 'RusDay_Mix_STEREO.wav', { fo: 3 }]] },
+      { k: 'sound', label: 'Sound', lvl: '2', h: 30, clips: [[598, 930, '7Sisters_Mix.wav', { fi: 2 }]] }
+    ];
+    const grpBg = { cue: '#16171a', kinetic: '#191a1d', top: '#16171a', bottom: '#191a1d', lamels: '#16171a', sound: '#191a1d' };
+    const lay = (ws, we, defs, cueW) => defs.map(r => {
+      const h = H[r.k], W = we - ws, clips = [];
+      r.clips.forEach(([s, e, name, o = {}]) => {
+        const cue = r.k === 'cue'; if (cue) e = s + cueW;
+        const cs = Math.max(s, ws), ce = Math.min(e, we); if (ce <= cs) return;
+        const cw = ce - cs;
+        const foW = o.fo ? Math.max(0, Math.min(e, ce) - Math.max(e - o.fo, cs)) / cw * 100 : 0;
+        const fiW = o.fi ? Math.max(0, Math.min(s + o.fi, ce) - Math.max(s, cs)) / cw * 100 : 0;
+        const under = !cue && PLAY >= s && PLAY < e;
+        const fadeTxt = o.fo ? ` · фейд ${o.fo.toFixed(1)} с` : o.fi ? ` · фейд вход ${o.fi.toFixed(1)} с` : '';
+        clips.push({ name, left: (cs - ws) / W * 100 + '%', width: cw / W * 100 + '%', fiW: fiW + '%', foW: foW + '%',
+          meta: cue ? '' : `${tc(s, 1)} → ${tc(e, 1)} · ${dur(e - s)}${fadeTxt}`,
+          metaF: cue ? '' : `${nf(Math.round(s * FPS))} → ${nf(Math.round(e * FPS))} · ${nf(Math.round((e - s) * FPS))} кадров${fadeTxt}`,
+          twoLine: !cue && r.h >= 36, under, bl: under ? (PLAY - cs) / cw * 100 + '%' : '0%', local: under ? 'кадр ' + nf(Math.floor((PLAY - s) * FPS)) : '',
+          olA: o.sel ? '2px solid #fff' : 'none',
+          a: cue ? { bg: 'transparent', bd: 'transparent', edge: '#c6cad1', fg: '#c6cad1', meta: '' } : { bg: `oklch(0.42 0.08 ${h})`, bd: `oklch(0.56 0.1 ${h})`, edge: `oklch(0.78 0.12 ${h})`, fg: '#fff', meta: `oklch(0.88 0.04 ${h})` },
+          b: cue ? { bg: 'transparent', bd: 'transparent', band: '#c6cad1' } : { bg: `oklch(0.25 0.025 ${h})`, bd: `oklch(0.42 0.07 ${h})`, band: `oklch(0.72 0.13 ${h})` } });
+      });
+      const tiny = r.h < 12;
+      return { label: tiny ? '' : r.label, lvl: tiny ? '' : (r.lvl || ''), h: r.h + 'px', dot: `oklch(0.72 0.12 ${h})`, lane: grpBg[r.k], headFg: r.lvl && r.lvl !== 'L0' && r.lvl !== '1' ? '#9aa0a9' : '#e6e7ea', clips };
+    });
+    const rowsMid = lay(480, 660, D, 22);
+    const rowsAll = lay(0, 1320, D, 110);
+    const rowsThin = lay(480, 660, D.map(r => ({ ...r, h: r.clips.length ? (r.k === 'cue' ? 20 : 26) : 8 })), 22);
+    const rowsTape = lay(480, 660, D.map(r => ({ ...r, h: r.clips.length ? (r.k === 'cue' ? 20 : 30) : 8 })), 22);
+    const rowsFrThin = lay(600, 601.5, [D[0], D[1], D[2], D[3], D[5], D[6]].map(r => ({ ...r, h: r.k === 'cue' ? 20 : 26 })), 0.4);
+    const rowsFr = lay(600, 601.5, [D[0], D[1], D[2], D[3], D[5], D[6]].map(r => ({ ...r, h: r.k === 'cue' ? 22 : 30 })), 0.4);
+    const tkMid = [], tkMidF = [];
+    for (let s = 480; s <= 660; s += 5) { const m = s % 15 === 0; if (m) { const l = (s - 480) / 180 * 100 + '%'; tkMid.push({ left: l, h: '10px', label: tc(s) }); tkMidF.push({ left: l, h: '10px', label: nf(s * FPS) }); } }
+    const tkAll = []; for (let s = 0; s < 1320; s += 120) tkAll.push({ left: s / 1320 * 100 + '%', h: '10px', label: tc(s, 1).slice(0, 5) });
+    const tkFr = []; for (let f = 36000; f < 36090; f++) { const m10 = f % 10 === 0; tkFr.push({ left: (f - 36000) / 90 * 100 + '%', h: m10 ? '14px' : f % 5 === 0 ? '8px' : '5px', c: m10 ? '#6a6e76' : '#3a3d44', lab: m10, label: '00:10:00:' + String(f - 36000).padStart(2, '0'), labelF: nf(f) }); }
+    const tkLens = []; for (let f = 35994; f < 36090; f++) { const m6 = f % 6 === 0; tkLens.push({ left: (f - 35994) / 96 * 100 + '%', h: m6 ? '14px' : '6px', c: m6 ? '#5a5e66' : '#2e3035', lab: f % 12 === 0, labelF: String(f) }); }
+    const fields2 = [
+      { k: 'Уровень', v: '0' }, { k: 'Кадр начала', v: '11 520' }, { k: 'Подрезка с головы', v: '0' }, { k: 'Подрезка с хвоста', v: '0' },
+      { k: 'Фейд с головы', v: '0' }, { k: 'Фейд с хвоста', v: '120' }, { k: 'Длина', v: '24 600' }, { k: 'Занимает', v: '03:12–10:02' }
+    ];
+    return { sources, screens, fields, rows, groups, ticks, rowsMid, rowsAll, rowsFr, rowsThin, rowsTape, rowsFrThin, tkMid, tkMidF, tkAll, tkFr, tkLens, fields2,
+      pMid: String((PLAY - 480) / 180), pAll: String(PLAY / 1320), pFr: String(42 / 90), cellFr: String(1 / 90),
+      lensCut: (36000 - 35994) / 96 * 100 + '%', lensPh: (36042 - 35994) / 96 * 100 + '%', lensCell: 100 / 96 + '%' };
+  }
+}
+</script>
+</body>
+</html>

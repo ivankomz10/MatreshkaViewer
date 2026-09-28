@@ -62,6 +62,15 @@ datas += [(os.path.join(icons, name), "icons")
           for name in sorted(os.listdir(icons))
           if name.endswith(".png")]
 
+# The design's faces, IBM Plex, when they have been put in tool/fonts. Without
+# them the window is set in Segoe UI and Cascadia Mono, and nothing breaks.
+fonts = os.path.join(TOOL, "fonts")
+if os.path.isdir(fonts):
+    datas += [(os.path.join(fonts, name), "fonts")
+              for name in sorted(os.listdir(fonts))
+              if name.lower().endswith((".ttf", ".otf"))
+              or name.lower().startswith(("ofl", "license"))]
+
 # An ffmpeg carried inside the build, when one is provided. depends.py normally
 # finds ffmpeg on the machine or offers to download it; the note at the top of
 # that module explains why shipping one is usually left alone -- it is large and

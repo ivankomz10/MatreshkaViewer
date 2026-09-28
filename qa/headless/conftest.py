@@ -120,6 +120,7 @@ def window(clips):
     import main as viewer
 
     app = QApplication.instance() or QApplication([])
+    app.setFont(viewer.theme.app_font())
     app.setStyleSheet(viewer.STYLESHEET)
     logfile.start(viewer.APP_NAME, viewer.APP_VERSION)
     one = viewer.Viewer()
