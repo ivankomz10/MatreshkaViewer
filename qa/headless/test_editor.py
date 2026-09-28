@@ -113,6 +113,58 @@ def test_a_clip_dragged_on_the_tracks_moves_and_plays_from_there(editor, tick):
         "the screen still plays the clip where it was")
 
 
+def test_the_right_hand_moves_the_lanes_up_and_down_and_the_time_across(
+        editor, tick):
+    """A drag with the right button carries the field of lanes both ways, and
+    changes nothing in the show."""
+    window = editor
+    pane = window.show_pane
+    tracks, bar = pane.tracks, pane.scroller.verticalScrollBar()
+    pane.scroller.setFixedHeight(80)          # fewer lanes fit than there are
+    tick(0.3)
+    try:
+        assert bar.maximum() > 40, f"nothing to scroll: {bar.maximum()}"
+        bar.setValue(0)
+        # A second of show fits whole at any zoom; a longer axis has room to
+        # slide along.
+        axis = window.show_view.axis
+        axis.stretch(6000)
+        axis.fit()
+        axis.zoom_at(tracks.width() / 2, 8.0)
+        left_was = axis.left
+        right = Qt.MouseButton.RightButton
+        still = pane.scroller.viewport()      # what does not move as it scrolls
+
+        def hand(kind, x, y, button, held):
+            # Where a real hand is: on the screen. The lanes slide under it,
+            # so where that is on them changes as they scroll.
+            spot = still.mapToGlobal(QPointF(x, y))
+            QApplication.sendEvent(tracks, QMouseEvent(
+                kind, tracks.mapFromGlobal(spot), spot, button, held,
+                Qt.KeyboardModifier.NoModifier))
+
+        x = tracks.width() * 0.6
+        hand(QEvent.Type.MouseButtonPress, x, 60, right, right)
+        for step in range(1, 9):
+            # Up by forty and left by eighty, in steps.
+            hand(QEvent.Type.MouseMove, x - 10 * step, 60 - 5 * step,
+                 Qt.MouseButton.NoButton, right)
+        hand(QEvent.Type.MouseButtonRelease, x - 80, 20, right,
+             Qt.MouseButton.NoButton)
+        tick(0.1)
+        assert 30 <= bar.value() <= 50, f"the lanes moved by {bar.value()}"
+        assert window.show_view.axis.left > left_was, "the time did not move"
+        assert tracks.panning is None
+        assert not window.history.back, "a look around became a change"
+    finally:
+        pane.scroller.setMinimumHeight(60)
+        pane.scroller.setMaximumHeight(16777215)
+        bar.setValue(0)
+        window.show_view.axis.stretch(window.show_open.length)
+        window.show_view.axis.fit()
+        tick(0.2)
+
+
 def test_a_click_on_a_clip_is_not_a_change(editor, tick):
     window = editor
     tracks = window.show_pane.tracks

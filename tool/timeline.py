@@ -561,7 +561,10 @@ class _Strip(QWidget):
     def __init__(self, view: ShowView) -> None:
         super().__init__()
         self.view = view
-        self.panning = None
+        self.panning = None              # where the right hand last was, on screen
+        self._panned_y = 0.0             # up and down not yet a whole pixel
+        self._cursor_was = None
+        self.lanes_bar = None            # the lanes' scroll bar, once laid out
         self._drawn_at = None
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         view.changed.connect(self.update)
@@ -594,7 +597,12 @@ class _Strip(QWidget):
             self.view.go_to(int(self.axis.frame_of(x)))
             return True
         if event.button() == Qt.MouseButton.RightButton:
-            self.panning = x
+            # On the screen, not in the strip: the lanes move under the hand
+            # as they scroll, and the strip's own numbers would move with them.
+            self.panning = event.globalPosition()
+            self._panned_y = 0.0
+            self._cursor_was = (self.cursor() if self.testAttribute(
+                Qt.WidgetAttribute.WA_SetCursor) else None)
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             return True
         return False
@@ -602,16 +610,28 @@ class _Strip(QWidget):
     def _common_move(self, event) -> bool:
         if self.panning is None:
             return False
-        x = event.position().x()
-        self.axis.slide(x - self.panning)
-        self.panning = x
+        now = event.globalPosition()
+        moved = now - self.panning
+        self.panning = now
+        self.axis.slide(moved.x())
+        # And the lanes up and down, when there are more of them than fit.
+        bar = self.lanes_bar
+        if bar is not None:
+            self._panned_y += moved.y()
+            whole = int(self._panned_y)
+            if whole:
+                self._panned_y -= whole
+                bar.setValue(bar.value() - whole)
         self.view.changed.emit()
         return True
 
     def _common_release(self) -> None:
         if self.panning is not None:
             self.panning = None
-            self.unsetCursor()
+            if self._cursor_was is not None:
+                self.setCursor(self._cursor_was)
+            else:
+                self.unsetCursor()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         self._common_release()
@@ -1413,6 +1433,11 @@ class TimelinePane(QWidget):
         scroller.setMinimumHeight(60)
         scroller.setStyleSheet(f"QScrollArea {{ background:{theme.LANE_A}; }}")
         whole.addWidget(scroller, 1)
+        self.scroller = scroller
+        # The right hand's drag moves the lanes up and down as well as the
+        # time across, from whichever strip it starts on.
+        for strip in (self.ruler, self.loopbar, self.tracks):
+            strip.lanes_bar = scroller.verticalScrollBar()
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Expanding)
         self._said = None
