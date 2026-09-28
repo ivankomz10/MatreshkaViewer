@@ -1213,8 +1213,16 @@ class Tracks(_Strip):
                            faded.right(), faded.top() + 4)
             brush.drawLine(faded.right(), faded.bottom() - 4,
                            faded.right(), faded.bottom() - 1)
+        # A motor file's commands, as keys along the foot of its clip, the
+        # way the show editor draws them; the name goes up to make room.
+        keyed = (clip.kind == "kinetic" and not clip.missing
+                 and band.height() >= 20)
+        if keyed:
+            self._draw_keys(brush, clip, band, colours)
         # The name, and after it how long and how it ends, on one line.
         room = band.adjusted(8, 0, -6, 0)
+        if keyed:
+            room = band.adjusted(8, 1, -6, -(band.height() // 2) + 1)
         room.setLeft(max(room.left(), HEAD + 4))
         if room.width() > 16 and band.height() >= 12:
             name = clip.name + (tr("  — нет файла") if clip.missing else "")
@@ -1239,6 +1247,36 @@ class Tracks(_Strip):
             brush.setPen(QPen(QColor("#ffffff"), 2))
             brush.setBrush(Qt.BrushStyle.NoBrush)
             brush.drawRoundedRect(rect.adjusted(-1.5, -1.5, 1.5, 1.5), 3, 3)
+
+    def _draw_keys(self, brush: QPainter, clip, band: QRect, colours) -> None:
+        """A diamond on every frame a command begins on, those on screen.
+
+        One to a couple of pixels: a show's file gives commands on a few
+        thousand frames, and on the whole show many of them land on the same
+        pixel, which is drawn once -- a run of them reads as a run, as it
+        does in the show editor.
+        """
+        from bisect import bisect_left, bisect_right
+        keys = showfile.motor_keys(clip.path)
+        if not keys:
+            return
+        axis = self.axis
+        first = axis.frame_of(max(band.left(), HEAD)) - clip.tx
+        last = axis.frame_of(band.right()) - clip.tx
+        low, high = bisect_left(keys, int(first) - 1), bisect_right(keys, int(last) + 1)
+        middle = band.bottom() - 6.0
+        half = 4.0
+        brush.setPen(QPen(QColor(0, 0, 0, 150), 1))
+        brush.setBrush(QColor(colours["edge"]))
+        drawn = None
+        for key in keys[low:high]:
+            x = axis.x_of(clip.tx + key)
+            if drawn is not None and x - drawn < 2.0:
+                continue
+            drawn = x
+            brush.drawPolygon(QPolygonF([
+                QPointF(x, middle - half), QPointF(x + half, middle),
+                QPointF(x, middle + half), QPointF(x - half, middle)]))
 
     def draw_overlaps(self, brush: QPainter) -> None:
         """Two clips on one level at once: the engine plays one of them, so
@@ -1633,7 +1671,7 @@ class Inspector(QWidget):
              ("Фейд с хвоста", "fade_end", True, -1_000_000, 0),
              ("Длина", "frames", False, 0, 0),
              ("Занимает", "range", False, 0, 0),
-             ("Доезд моторов", "tail", False, 0, 0),
+             ("Команды", "keys", False, 0, 0),
              ("Начинается", "at", False, 0, 0)]
     CUE = [("Кадр", "tx", True, 0, 10_000_000),
            ("Время", "range", False, 0, 0),
@@ -1788,7 +1826,9 @@ class Inspector(QWidget):
             length = f"{clip.frames}"
         said = {
             "frames": length,
-            "tail": f"+{clip.tail}" if clip.tail else "—",
+            # How many frames a motor file gives commands on: its keys.
+            "keys": (str(len(showfile.motor_keys(clip.path)))
+                     if clip.kind == "kinetic" and not clip.missing else "—"),
             "range": (showfile.timecode(clip.tx) if clip.kind == "cue"
                       else f"{_clock(clip.first)}–"
                            f"{_clock(min(clip.last, self.view.show.length))}"),

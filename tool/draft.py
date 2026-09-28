@@ -253,6 +253,13 @@ class Draft:
         for clip in show.clips:
             if clip.kind != "cue":
                 clip.missing = not Path(clip.path).exists()
+            # A motor file's length asked of the file again, the way the show
+            # editor counts it: a draft begun before that was the count holds
+            # the exporter's range and a run-on after it.
+            if clip.kind == "kinetic" and not clip.missing:
+                frames, tail = showfile.motor_frames(clip.path)
+                if frames is not None:
+                    clip.frames, clip.tail = frames, tail
         return draft, show
 
     def source_changed(self) -> bool:

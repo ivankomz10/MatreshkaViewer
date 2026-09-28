@@ -264,43 +264,21 @@ def sound_frames(path: str) -> int | None:
 _MOTOR_FRAMES: dict = {}
 
 
-def motor_frames(path: str) -> tuple:
-    """A motor file's declared length, and how far past it a motor keeps going.
+def commands_of(data) -> tuple:
+    """(length, keys) of a motor file's `data`: how long it is, and the
+    frames its commands begin on.
 
-    Off the JSON itself rather than by building the motors: sampling 1829
-    tracks to learn a length is a second per file, and a show has a handful.
-    None for the length when the file is not here.
-
-    Kept by the file's size and time: reading five of them was two thirds of
-    a second of opening a show, every time the show mode was gone into.
+    The length is how the show editor counts it -- to the end of the last
+    command, the last frame included: the largest `frame + length` of any
+    segment, plus one. Measured in TouchDesigner on sixteen files, from 613
+    frames to 29 699, and not one frame out on any of them. It is not the
+    exporter's `export_range`, which runs on about thirty frames past the
+    last command, and a show places the next file at this length: part two
+    of BrendMT stands 3755 frames after part one, which is where part one's
+    last pusher arrives.
     """
-    where = Path(path)
-    if not where.exists():
-        return None, 0
-    try:
-        facts = where.stat()
-        key = (str(where), facts.st_size, facts.st_mtime_ns)
-    except OSError:
-        return None, 0
-    if key not in _MOTOR_FRAMES:
-        _MOTOR_FRAMES[key] = _motor_frames(where)
-    return _MOTOR_FRAMES[key]
-
-
-def _motor_frames(where: Path) -> tuple:
-    try:
-        raw = json.loads(where.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return None, 0
-    info = raw.get("info", {})
-    start = int(info.get("export_range", {}).get("start", 0))
-    end = info.get("export_range", {}).get("end")
-    total = int(info.get("total_frames") or 0)
-    declared = int(end) - start if end is not None else total
-    if declared <= 0:
-        declared = total or 1
-    furthest = 0
-    for groups in (raw.get("data") or {}).values():
+    furthest, keys = 0, set()
+    for groups in (data or {}).values():
         if not isinstance(groups, dict):
             continue
         for ids in groups.values():
@@ -309,10 +287,59 @@ def _motor_frames(where: Path) -> tuple:
             for segments in ids.values():
                 for one in segments or []:
                     if isinstance(one, dict):
-                        furthest = max(furthest, int(one.get("frame", 0))
-                                       + max(0, int(one.get("length", 0))))
-    # The last frame counts as a whole frame, as it does for the motors.
-    return declared + 1, max(0, furthest - declared)
+                        at = int(one.get("frame", 0))
+                        keys.add(at)
+                        furthest = max(furthest,
+                                       at + max(0, int(one.get("length", 0))))
+    return furthest + 1, tuple(sorted(keys))
+
+
+def motor_frames(path: str) -> tuple:
+    """A motor file's length, as the show editor counts it (see
+    `commands_of`), and a run-on past it, which is always nothing now.
+
+    The run-on was the part of a clip after the exporter's range where a
+    motor was still arriving. Counted the show editor's way, the length
+    already goes to the end of the last command, and there is none; it is
+    kept as a number so a clip and a draft keep the shape they had.
+
+    Off the JSON itself rather than by building the motors: sampling 1829
+    tracks to learn a length is a second per file, and a show has a handful.
+    None for the length when the file is not here. Kept by the file's size
+    and time: reading five of them was two thirds of a second of opening a
+    show, every time the show mode was gone into.
+    """
+    found = _motor_facts(path)
+    return (None, 0) if found is None else (found[0], 0)
+
+
+def motor_keys(path: str) -> tuple:
+    """The frames a motor file's commands begin on, from its own start --
+    drawn on its clip as keys, the way the show editor draws them."""
+    found = _motor_facts(path)
+    return () if found is None else found[1]
+
+
+def _motor_facts(path: str):
+    where = Path(path)
+    if not where.exists():
+        return None
+    try:
+        facts = where.stat()
+        key = (str(where), facts.st_size, facts.st_mtime_ns)
+    except OSError:
+        return None
+    if key not in _MOTOR_FRAMES:
+        try:
+            raw = json.loads(where.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            raw = None
+        data = raw.get("data") if isinstance(raw, dict) else None
+        # A JSON with no motor data in it is not a motor file, whatever it
+        # is called.
+        _MOTOR_FRAMES[key] = (commands_of(data) if isinstance(data, dict)
+                              and data else None)
+    return _MOTOR_FRAMES[key]
 
 
 # -- reading a show file -----------------------------------------------------
@@ -480,9 +507,9 @@ def chained(rows: dict) -> Show:
                     clip.until = (FOREVER if len(entries) == 1
                                   else at + max(1, int(round(times * FPS))))
                     at = clip.until
-                elif kind == "kinetic":
-                    at += max(1, (got or 1) - 1)
                 else:
+                    # A motor file's length is where the show editor puts the
+                    # next one (see commands_of), so it chains like the rest.
                     at += max(1, got or 0)
     show.length = max([one.last for one in show.clips
                        if one.frames or (one.still and one.until < FOREVER)]

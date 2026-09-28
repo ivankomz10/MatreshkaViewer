@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import show as showfile
 from lang import tr
 
 # -- what a unit of each motor is worth --------------------------------------
@@ -193,11 +194,11 @@ class Part:
             raise KineticError(f"{path.name} has no motor data in it")
         self.fps = float(info.get("fps") or 60.0)
         start = int(info.get("export_range", {}).get("start", 0))
-        end = info.get("export_range", {}).get("end")
-        total = int(info.get("total_frames") or 0)
-        self.length = int(end) - start if end is not None else total
-        if self.length <= 0:
-            self.length = total or 1
+        # As long as the show editor counts it: to the end of the last
+        # command, not the exporter's range, which runs on some thirty frames
+        # past it -- see show.commands_of. It is also where a show puts the
+        # next part, so the chain below lays them end to end by it.
+        self.length, _ = showfile.commands_of(self.data)
         # Where the exporter thinks this part sits, and which of how many it
         # is. Both are what it says about itself, not what the chain decides.
         self.declared_at = start
@@ -288,11 +289,12 @@ class Motors:
             part.repeats = max(1, int(over))
             part.first = at
             at += part.length * part.repeats
-        # The last frame counts as a whole frame, the same as for one file.
-        # `reach` samples on past it, for the frames the last commands take
-        # to carry out: a show plays a file at its own place and the motors
-        # finish what they were told after the file has run out.
-        self.frames = at + 1 + max(0, int(reach))
+        # A part's length already counts its last frame and every command in
+        # it to its end, so the chain is as long as its parts together.
+        # `reach` samples on past that, which nothing asks for any more: it
+        # was the run-on past the exporter's range, and there is none past
+        # the last command.
+        self.frames = at + max(0, int(reach))
         self.path = self.parts[0].path
 
         # Row and id are numbers, not names: everything downstream indexes.
@@ -519,9 +521,9 @@ class Placed:
 
     Each file starts at its own frame and is in charge until the next one
     starts; before the first the cells are at rest, and after the last they
-    stay where it left them. A file is sampled on past its own end for as
-    long as its last commands take to carry out -- that is the part of the
-    clip on the timeline that is hatched -- and holds from there.
+    stay where it left them. A file runs to the end of its last command --
+    the length the show editor gives it, and its clip on the timeline -- and
+    holds from there.
 
     `placed` is a list of (frame, Motors).
     """

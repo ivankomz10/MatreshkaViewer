@@ -29,7 +29,8 @@ def test_seven_blocks_are_one_timeline():
     for part in motors.parts:
         assert part.first == at, f"{part.name} starts at {part.first}, not {at}"
         at += part.length
-    assert motors.frames == at + 1
+    # Each part counts its own last frame: the chain is the parts together.
+    assert motors.frames == at
     assert len(motors.boundaries) == len(blocks) - 1
 
 

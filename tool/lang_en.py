@@ -428,7 +428,7 @@ EN: dict = {
     'Фейд с хвоста': 'Fade out',
     'Длина': 'Length',
     'Занимает': 'Occupies',
-    'Доезд моторов': 'Motors run on',
+    'Команды': 'Commands',
     'Начинается': 'Begins',
     'Кадр': 'Frame',
     'Время': 'Time',

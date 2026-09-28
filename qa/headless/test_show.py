@@ -58,20 +58,82 @@ def test_levels_are_rows_zero_to_two(every_show):
                     f"{path.name}: {clip.name} on level {clip.level}")
 
 
+# How long each motor file is, measured in TouchDesigner, where the show
+# editor lives: the length it gives each file on its timeline.
+TOUCHDESIGNER = {
+    "7Sisters_060_KIN_v004_1_of_1.json": 18470,
+    "EDINSTVO_ALL_SHOW.v3.2025.12.26_1_of_1.json": 29699,
+    "MosMetro_5798 Frames.json": 4754,
+    "BrendMT_1_of_2.json": 3755,
+    "BrendMT_2_of_2.json": 1831,
+    "Carshering_all_animation_5_v1_2026_07_24_1_of_1.json": 1809,
+    "CharCity_kinetic.json": 2325,
+    "CosmoDay.v3.2026.04.11_1_of_1.json": 1979,
+    "Den_Detei_060_sc_V001_1_of_1.json": 613,
+    "DenGoroda.v1.2026.09.01_1_of_1.json": 5033,
+    "znaniya.v2.2026.09.01_1_of_1.json": 4707,
+    "Moscow_trans.v1.2026.07.06_1_of_1.json": 5865,
+    "Easter.v1.2026.04.03_1_of_1.json": 2087,
+    "Examples.v1.2026.06.17_1_of_1.json": 1197,
+    "Electrobus.v1.2026.08.26_1_of_1.json": 1991,
+    "Rus_Day.v6.2026.06.09_1_of_1.json": 25305,
+}
+# Where the ones no show here points at are.
+ELSEWHERE = [
+    r"D:\Content\DNE-daily\DNE_daily_kinetic\EDINSTVO_ALL_SHOW.v3.2025.12.26_1_of_1.json",
+    r"D:\Content\2026-dates\BDmetro\MosMetro_5798 Frames.json",
+    r"D:\Content\2026-dates\Cosmo\CosmoDay.v3.2026.04.11_1_of_1.json",
+    r"D:\Content\2026-dates\Den_Detei\Den_Detei_060_sc_V001_1_of_1.json",
+    r"D:\Content\2026-dates\Easter\Easter.v1.2026.04.03_1_of_1.json",
+    r"D:\Content\2026-dates\Electro\Examples.v1.2026.06.17_1_of_1.json",
+]
+
+
 @needs_shows
-def test_the_motors_keep_moving_past_their_range(every_show):
-    """A pusher told to move two frames from the end takes 154 more."""
-    tails = {}
+def test_a_motor_file_is_as_long_as_the_show_editor_counts_it(every_show):
+    """To the end of its last command, not the exporter's range -- and
+    nothing hatched past it, because nothing moves past it."""
+    found = {}
     for one in every_show:
         for clip in one.clips:
             if clip.kind == "kinetic" and not clip.missing:
-                tails[clip.name] = clip.tail
-    assert tails.get("BrendMT_1_of_2.json") == 154, tails.get("BrendMT_1_of_2.json")
-    assert tails.get("7Sisters_060_KIN_v004_1_of_1.json") == 125
-    # And the clip is that much longer for it.
-    brend = next(clip for one in every_show for clip in one.clips
-                 if clip.name == "BrendMT_1_of_2.json")
-    assert brend.last == brend.tx + brend.frames + 154
+                found[clip.name] = (clip.frames, clip.tail)
+    for path in ELSEWHERE:
+        if Path(path).exists():
+            found[Path(path).name] = showfile.motor_frames(path)
+    measured = {name: found[name] for name in TOUCHDESIGNER if name in found}
+    assert len(measured) >= 10, f"only {sorted(measured)} are on this machine"
+    wrong = {name: (got, TOUCHDESIGNER[name])
+             for name, (got, _) in measured.items() if got != TOUCHDESIGNER[name]}
+    assert not wrong, f"not the show editor's length (ours, its): {wrong}"
+    assert all(tail == 0 for _, tail in found.values())
+
+
+@needs_shows
+def test_a_show_puts_part_two_where_part_one_ends(every_show):
+    """The show files themselves say the same: BrendMT's second part stands
+    exactly its first part's length after it."""
+    checked = 0
+    for one in every_show:
+        parts = {clip.name: clip for clip in one.clips if clip.kind == "kinetic"}
+        first = parts.get("BrendMT_1_of_2.json")
+        second = parts.get("BrendMT_2_of_2.json")
+        if first is None or second is None or first.missing:
+            continue
+        assert second.tx - first.tx == first.frames == 3755
+        checked += 1
+    assert checked, "no show here has both parts of BrendMT on this machine"
+
+
+def test_the_keys_are_the_frames_the_commands_begin_on():
+    path = Path(r"D:\Content\2026-dates\BrendMT\BrendMT_2_of_2.json")
+    if not path.exists():
+        pytest.skip("the two-part show is not on this machine")
+    keys = showfile.motor_keys(str(path))
+    assert keys and list(keys) == sorted(set(keys))
+    assert keys[0] == 4, keys[:5]
+    assert keys[-1] < showfile.motor_frames(str(path))[0]
+    assert showfile.motor_keys(str(path.with_name("no_such.json"))) == ()
 
 
 @needs_shows

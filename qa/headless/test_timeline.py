@@ -109,8 +109,8 @@ def test_a_picture_in_a_chain_stands_its_count_in_seconds(tmp_path, clips):
 def test_motor_parts_follow_where_the_one_before_ends():
     show = showfile.chained({"Kinetic": [(str(one), 1) for one in PARTS]})
     first, second = show.on("Kinetic")
-    # Where the chain of motors puts the second part: the first part's own
-    # length on, which is its frames less the one that closes it.
+    # Where the chain of motors puts the second part, and where a show does:
+    # the first part's length on, to the end of its last command.
     import kinetic
     assert second.tx == kinetic.Motors([str(one) for one in PARTS]).parts[1].first
-    assert second.tx == first.frames - 1
+    assert second.tx == first.frames == 3755
