@@ -5852,6 +5852,15 @@ class Viewer(QMainWindow):
     # -- drawing -------------------------------------------------------------
 
     def _draw(self) -> None:
+        # Not while a render or a re-bake has the drawer. It draws on a thread
+        # of its own through the same camera and the same targets, and a
+        # frame for the window in the middle of that -- asked for by Qt when
+        # something laid over the picture repaints -- opens the camera out to
+        # the window's shape under the render, which then wrote the building
+        # narrow, one run in two. A download of ffmpeg draws nothing and does
+        # not count.
+        if self.job is not None and not isinstance(self.job, jobs.DownloadJob):
+            return
         started = time.perf_counter()
         seconds = self.clock.tick()
         if self.level == "show" and self.show_open is not None:
@@ -6626,9 +6635,12 @@ def main() -> int:
     app = QApplication(sys.argv)
     # The design's own faces when they travel with the program, then the
     # window's type and its sheet: see theme.py.
-    theme.load_fonts(logfile.bundled("fonts")
-                     or (Path(__file__).resolve().parent / "fonts"))
+    faces = theme.load_fonts(logfile.bundled("fonts")
+                             or (Path(__file__).resolve().parent / "fonts"))
     app.setFont(theme.app_font())
+    logfile.write(f"type: {theme.ui_family()} and {theme.mono_family()}"
+                  + (f" ({', '.join(faces)})" if faces else
+                     ", the design's faces not found"))
     app.setStyleSheet(STYLESHEET)
     # Before the window is built, because building it is what takes the time.
     logfile.raise_splash(app)
