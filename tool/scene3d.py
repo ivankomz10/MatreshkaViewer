@@ -467,9 +467,9 @@ class Orbit:
         return frustum(fov_x, fov_y, self.near, self.far)
 
     def describe(self) -> str:
-        return (f"{self.distance:.1f} m out, "
-                f"{math.degrees(self.yaw) % 360:.0f} deg round, "
-                f"{math.degrees(self.pitch):+.0f} deg up")
+        return (f"{self.distance:.1f} м, "
+                f"{math.degrees(self.yaw) % 360:.0f}° по кругу, "
+                f"{math.degrees(self.pitch):+.0f}° вверх")
 
 
 class Piece:

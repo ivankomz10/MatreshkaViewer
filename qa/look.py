@@ -8,12 +8,16 @@ from pathlib import Path
 
 
 def frame_now(app) -> tuple[int, int]:
-    """Where the timeline stands, off the label beside it: (here, last)."""
+    """Where the timeline stands, off the label beside it: (here, last).
+
+    The label says "кадр 3600 из 10800" -- how many frames there are, which
+    is one past the last of them.
+    """
     said = app.says("qa_frame_label")
     numbers = re.findall(r"-?\d+", said)
     if len(numbers) < 2:
         raise AssertionError(f"the frame label says {said!r}")
-    return int(numbers[0]), int(numbers[1])
+    return int(numbers[0]), int(numbers[1]) - 1
 
 
 def _grey(picture):

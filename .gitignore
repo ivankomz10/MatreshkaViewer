@@ -262,3 +262,6 @@ qa/media/
 # ignores *.spec because for most projects a script writes it; here it is
 # source.
 !*.spec
+
+# The editor's working files, beside the program.
+drafts/

@@ -33,7 +33,7 @@ def test_leaving_flat_puts_everything_back(app):
     app.choose("qa_mode", PREVIEW)
     sizes = app.offered("qa_size")
     assert sizes[0] == "1080x1920", sizes
-    assert "Full 4096x4096" in sizes, sizes
+    assert "Полный 4096x4096" in sizes, sizes
     formats = app.offered("qa_format")
     for one in ALPHA_FORMATS:
         assert one not in formats, f"{one} is a Flat format: {formats}"
@@ -48,7 +48,7 @@ def test_rebake_brings_its_own_bar(app):
                "qa_rebake_before", "qa_rebake_after"):
         assert app.wait_for(qa, within=10).showing, f"{qa} is not up"
     # Nothing about the building applies to a file, and it all goes away.
-    for qa in ("qa_match", "qa_alpha", "qa_solid_top", "qa_layer_top"):
+    for qa in ("qa_match", "qa_alpha", "qa_solid_top", "qa_layers"):
         assert app.maybe(qa) is None, f"{qa} is still up in ReBake"
     # The link ties the two sliders, which are there in every mode.
     assert app.at("qa_link").showing, "the link went away with the scene bar"

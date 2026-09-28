@@ -115,7 +115,7 @@ def test_it_writes_the_size_and_the_range_asked_for(window, tick):
     window.mode.setCurrentText(PREVIEW)
     window.size_choice.setCurrentText("1080x1920")
     window.format_choice.setCurrentText("H.264 mp4")
-    window.fps_choice.setCurrentText("60 fps")
+    window.fps_choice.setCurrentText("60 к/с")
     window.first_frame.setValue(0)
     window.last_frame.setValue(11)
     window.out_name.setText("quiet_render.mp4")
@@ -123,7 +123,7 @@ def test_it_writes_the_size_and_the_range_asked_for(window, tick):
     tick(0.3)
 
     said = render_and_wait(window, tick)
-    assert "frames in" in said, said
+    assert "Записано" in said, said
     facts = look.probe(out(window) / "quiet_render.mp4")
     assert (facts["width"], facts["height"]) == (1080, 1920), facts
     assert facts["frames"] == 12, facts
@@ -133,7 +133,7 @@ def test_it_refuses_to_write_over_a_file(window, tick):
     made = out(window) / "quiet_render.mp4"
     stamp = made.stat().st_mtime
     said = render_and_wait(window, tick, within=30)
-    assert "exists" in said, said
+    assert "уже есть" in said, said
     assert made.stat().st_mtime == stamp
 
 
@@ -159,7 +159,7 @@ def test_the_snapshot_is_the_frame_the_render_writes(window, tick):
     else:
         made.unlink(missing_ok=True)
     tick(0.3)
-    assert "frames in" in render_and_wait(window, tick)
+    assert "Записано" in render_and_wait(window, tick)
     written = (sorted(made.glob("*.png")) if made.is_dir()
                else [made] if made.exists() else [])
     assert written, "the render wrote no still"
@@ -170,7 +170,7 @@ def test_the_snapshot_is_the_frame_the_render_writes(window, tick):
     fresh = wait_for(tick,
                      lambda: sorted(set(folder.glob("*.png")) - was),
                      "the snapshot wrote nothing", within=60)
-    assert "failed" not in window.eta.text(), window.eta.text()
+    assert "не записан" not in window.eta.text(), window.eta.text()
 
     from PIL import Image
     rendered = Image.open(written[0]).convert("RGB")
@@ -216,7 +216,7 @@ def test_flat_writes_one_file_per_screen_at_the_screen_size(window, tick):
     window.mode.setCurrentText("Flat")
     window.size_choice.setCurrentText("Четверть")
     window.format_choice.setCurrentText("H.264 mp4")
-    window.fps_choice.setCurrentText("60 fps")
+    window.fps_choice.setCurrentText("60 к/с")
     window.first_frame.setValue(0)
     window.last_frame.setValue(3)
     tick(0.4)
@@ -224,7 +224,7 @@ def test_flat_writes_one_file_per_screen_at_the_screen_size(window, tick):
         (out(window) / media.CLIPS[row][0].replace(".mov", "_flat.mp4")).unlink(
             missing_ok=True)
 
-    assert "frames in" in render_and_wait(window, tick)
+    assert "Записано" in render_and_wait(window, tick)
     for row in media.CLIPS:
         made = out(window) / media.CLIPS[row][0].replace(".mov", "_flat.mp4")
         facts = look.probe(made)
@@ -247,12 +247,12 @@ def test_flat_alpha_carries_the_alpha(window, tick):
         (out(window) / media.CLIPS[row][0].replace(".mov", "_flat.mov")).unlink(
             missing_ok=True)
 
-    assert "frames in" in render_and_wait(window, tick)
+    assert "Записано" in render_and_wait(window, tick)
     facts = look.probe(made)
     assert "yuva" in facts["pix_fmt"], facts
     share = look.clear_share(made)
     assert 0.15 < share < 0.35, f"{share * 100:.0f}% transparent"
-    assert window.backing.currentText() == "Calibration", (
+    assert window.backing.currentData() == "Calibration", (
         "the backing was left off after an alpha render")
     window.mode.setCurrentText(PREVIEW)
     tick(0.3)
@@ -343,7 +343,7 @@ def test_a_file_that_will_not_open_says_why(window, clips, tick):
     window._load()
     tick(0.3)
     said = window.row_for("Top").note.text()
-    assert "at_all.mov" in said and "not there" in said, said
+    assert "at_all.mov" in said and "такого файла нет" in said, said
     assert "Screen_Top" not in window.feeding
     put_back(window, clips, tick)
 
@@ -441,24 +441,12 @@ def test_the_rows_fold_away(window, clips, tick):
     tick(0.2)
 
 
-def test_the_link_stands_in_the_panel_heading(window, tick):
-    """A widget in a layout, beside the fold and not inside it.
-
-    It used to float over the rows, placed by hand, and that cost three bugs.
-    Now the layout owns it: it is in the heading's strip, beside the button
-    that folds the panel -- a button within that button would be a click
-    landing on the wrong one -- and it stays on show while the rows are
-    folded, because it goes on tying the sliders whether or not anybody can
-    see them.
-    """
-    window._fold_sources(True)
+def test_the_link_stands_in_the_screens_panel(window, tick):
+    """With the sliders it ties, over the picture -- not in the rows."""
+    window._fold_levels(True)
     tick(0.2)
-    strip = window.sources_head.parentWidget()
-    assert strip.objectName() == "qa_sources_strip"
-    assert strip.isAncestorOf(window.linked), "the link is not in the heading"
-    assert not window.sources_body.isAncestorOf(window.linked)
-    assert not window.sources_head.isAncestorOf(window.linked)
-
+    assert window.levels_panel.isAncestorOf(window.linked)
+    assert not window.sources.isAncestorOf(window.linked)
     window._fold_sources(False)
     tick(0.2)
     assert window.linked.isVisible(), "the link went away with the rows"
@@ -480,3 +468,109 @@ def test_the_link_still_ties_the_two_sliders(window, tick):
     top.gain.setValue(129)
     bottom.gain.setValue(129)
     tick(0.2)
+
+
+# -- the reviewed interface ---------------------------------------------------
+
+def test_the_modes_are_tabs_that_answer_like_the_list(window, tick):
+    from conftest import PREVIEW
+    assert [window.mode.itemText(i) for i in range(window.mode.count())] == [
+        PREVIEW, "Flat", "Inspection", "ReBake"]
+    labels = [window.mode.buttons[window.mode.itemText(i)].text()
+              for i in range(window.mode.count())]
+    assert labels == ["Превью", "Развертка", "Инспектор", "Перепечка"]
+    window.mode.buttons["Flat"].click()
+    tick(0.2)
+    assert window.mode.currentText() == "Flat" and window.flat_mode()
+    window.mode.setCurrentText(PREVIEW)
+    tick(0.2)
+    assert window.mode.buttons[PREVIEW].isChecked()
+
+
+def test_the_layers_are_in_a_menu(window, tick):
+    bar = window.mode.parentWidget()
+    assert window.layers_button.menu() is not None
+    boxes = [box.text() for box in window.toggles.values()]
+    assert "Корпус" in boxes and "Оболочка" in boxes, boxes
+    for box in window.toggles.values():
+        assert not box.isVisible(), "a layer box is still on the bar"
+
+
+def test_the_screens_panel_is_there_in_the_quick_look(window, tick):
+    window._fold_levels(True)
+    tick(0.2)
+    assert window.level == "view" and window.levels_panel.isVisible()
+    for widget in (window.matching, window.solid_top, window.alpha,
+                   window.backing, window.linked):
+        assert window.levels_panel.isAncestorOf(widget), widget.objectName()
+    assert window.levels_lines["Frame"][2].isVisible(), \
+        "the frame's brightness is not there in the quick look"
+    window.levels_sliders["Top"].setValue(140)
+    assert window.row_for("Top").gain.value() == 140
+    assert not window.row_for("Top").gain.isVisible(), "the row still has one"
+    window.levels_sliders["Top"].setValue(100)
+
+
+def test_one_reading_of_time_and_it_counts_frames_of_the_whole(window, tick):
+    window._move(0.5)
+    tick(0.3)
+    at, last = window._frame_now()
+    assert window.frame_label.text() == f"кадр {at} из {last + 1}"
+    assert window.time_label.text().count(":") == 3
+
+
+def test_shift_i_and_o_set_the_range_from_the_playhead(window, tick):
+    window._move(10 / 60.0)
+    window._range_here(False)
+    window._move(40 / 60.0)
+    window._range_here(True)
+    assert (window.first_frame.value(), window.last_frame.value()) == (10, 40)
+    assert window.slider._range is not None
+    window._reset_range()
+    assert window.slider._range is None
+
+
+def test_an_empty_quick_look_offers_to_be_given_files(window, clips, tick):
+    for row in window.rows:
+        row.field.setText("")
+    window._load()
+    tick(0.3)
+    assert window.empty_card.isVisible(), "nothing loaded and nothing offered"
+    placed = window.put_files([str(clips["bottom"]), str(clips["top"]),
+                               str(clips["lamels"])])
+    assert placed == {"Bottom": str(clips["bottom"]), "Top": str(clips["top"]),
+                      "Lamels": str(clips["lamels"])}, placed
+    tick(0.3)
+    assert not window.empty_card.isVisible()
+    put_back(window, clips, tick)
+
+
+def test_files_go_to_rows_by_their_names():
+    import main
+    got = main.assign_files(
+        ["x/Show_top.mov", "x/Show_main.mov", "x/Show_lameli.mov",
+         "x/music.wav", "x/motors.json", "x/other.mov"], {})
+    assert got == {"Top": "x/Show_top.mov", "Bottom": "x/Show_main.mov",
+                   "Lamels": "x/Show_lameli.mov", "Sound": "x/music.wav",
+                   "Kinetic": "x/motors.json"}, got
+    assert main.assign_files(["x/a.mov"], {"Top": "busy"}) == {"Bottom": "x/a.mov"}
+
+
+def test_old_english_settings_still_open_on_what_they_say(window):
+    import main
+    main.choose_saved(window.backing, "Black")
+    assert window.backing.currentData() == "Black"
+    main.choose_saved(window.backing, "Калибровка")
+    assert window.backing.currentData() == "Calibration"
+    main.choose_saved(window.sync, "30 fps")
+    assert window.sync.currentData() == 30.0
+    main.choose_saved(window.sync, "60 fps")
+    frame = window.row_for("Frame")
+    main.choose_saved(frame.how, "Stretch")
+    assert frame.how.currentData() == "Stretch"
+    main.choose_saved(frame.how, "Fit")
+
+
+def test_the_version_is_the_one_with_the_show_mode():
+    import main
+    assert main.APP_VERSION == "0.4"

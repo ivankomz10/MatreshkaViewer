@@ -61,7 +61,7 @@ def wait_for_the_bake(app, within: float = 300.0) -> str:
 
 
 def test_it_comes_up_in_rebake_with_both_halves(baker):
-    assert baker.at("qa_mode").value == "ReBake"
+    assert baker.at("qa_mode_rebake").checked
     assert baker.at("qa_rebake_left").value == "Premultiplied"
     assert baker.at("qa_rebake_right").value == "Premultiplied"
     assert baker.at("qa_rebake").enabled, "there is nothing to press"

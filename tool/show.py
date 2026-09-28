@@ -204,12 +204,13 @@ class Show:
         kinds = {}
         for one in self.clips:
             kinds[one.kind] = kinds.get(one.kind, 0) + 1
-        said = "  ".join(f"{kinds[k]} {k}" for k in
-                         ("video", "audio", "kinetic", "cue") if k in kinds)
+        words = {"video": "видео", "audio": "звук", "kinetic": "моторы",
+                 "cue": "кью"}
+        said = " · ".join(f"{words[k]} {kinds[k]}" for k in
+                          ("video", "audio", "kinetic", "cue") if k in kinds)
         lost = len(self.missing())
-        return (f"{self.name}  {said}  {len(self.loops)} loop"
-                f"{'' if len(self.loops) == 1 else 's'}"
-                + (f"  {lost} missing" if lost else ""))
+        return (f"{self.name}  {said} · лупы {len(self.loops)}"
+                + (f" · нет на машине {lost}" if lost else ""))
 
 
 # -- how long things are -----------------------------------------------------
@@ -227,7 +228,7 @@ def media_frames(path: str, strict: bool = False) -> int | None:
     where = Path(path)
     if not where.exists():
         if strict:
-            raise ShowError(f"{where.name} is not there")
+            raise ShowError(f"{where.name}: такого файла нет")
         return None
     if videofile.is_still(path):
         return 0
@@ -360,7 +361,7 @@ def read(path: str | Path) -> Show:
     except Exception as error:  # noqa: BLE001 -- said to whoever opened it
         raise ShowError(f"{path.name}: {error}") from error
     if not isinstance(raw, dict) or "video" not in raw:
-        raise ShowError(f"{path.name} is not a show file")
+        raise ShowError(f"{path.name} — это не файл шоу")
 
     project = raw.get("project") or {}
     show = Show(name=str(project.get("name") or path.stem),

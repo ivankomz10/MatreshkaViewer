@@ -37,20 +37,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QObject, QPoint, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout,
                                QWidget)
 
 import show as showfile
+import theme
 
-MONO = "Consolas, DejaVu Sans Mono, monospace"
+MONO = "Cascadia Mono, Consolas, DejaVu Sans Mono, monospace"
 
 # Top to bottom: what triggers first is highest.
 ROWS = ["Cue", "Kinetic", "Top", "Bottom", "Lamels", "Sound"]
-HUE = {"Top": "#4a7ea8", "Bottom": "#4a9c78", "Lamels": "#a88a4a",
-       "Sound": "#7a5aa8", "Kinetic": "#a85a5a", "Cue": "#c9a227"}
+# Each screen's colour: the same one it has everywhere in the window.
+HUE = theme.SCREEN
 # Three content levels per screen, two sounds. The black still on the level
 # behind every show is not a clip here: the viewer chooses its own backing.
 LEVELS = {"Top": 3, "Bottom": 3, "Lamels": 3, "Sound": 2, "Kinetic": 1,
@@ -77,6 +78,7 @@ KEYS = [
     ("I / O", "на начало / конец клипа"),
     ("L", "отпустить луп / держать"),
     ("F", "вся длина"),
+    ("Shift+I / O", "начало / конец рендера здесь"),
     ("?", "эта подсказка"),
     ("ЛКМ", "выбрать клип"),
     ("ПКМ", "прокрутка"),
@@ -96,7 +98,25 @@ EDIT_KEYS = [
 ]
 
 
-def keys_text(editing: bool = False) -> str:
+# And in the quick look, where there is no timeline but the picture.
+VIEW_KEYS = [
+    ("Пробел", "играть / пауза"),
+    ("← →", "кадр назад / вперёд"),
+    ("Ctrl+← →", "в начало / в конец"),
+    ("Shift+I / O", "начало / конец рендера здесь"),
+    ("F11 / Esc", "во весь экран и обратно"),
+    ("?", "эта подсказка"),
+    ("колесо", "приблизить кадр"),
+    ("тащить", "сдвинуть кадр; в Инспекторе — облёт"),
+    ("двойной щелчок", "вернуть вид"),
+]
+
+
+def keys_text(level: str = "show", editing: bool = False) -> str:
+    """The card of keys: the quick look's, or the show's, and the editor's."""
+    if level != "show":
+        width = max(len(key) for key, _ in VIEW_KEYS) + 2
+        return "\n".join(f"{key:<{width}}{what}" for key, what in VIEW_KEYS)
     listed = KEYS + (EDIT_KEYS if editing else [])
     width = max(len(key) for key, _ in listed) + 2
     said = "\n".join(f"{key:<{width}}{what}" for key, what in KEYS)
@@ -197,6 +217,7 @@ class ShowView(QObject):
     edited = Signal(object)         # a set of rows, "loops", "name"
     dropped = Signal(list, str, int, int)   # files, row, level, frame
     said = Signal(str)              # a word for the line over the strips
+    range_wanted = Signal(int, int)  # a clip's frames, for the render
 
     def __init__(self) -> None:
         super().__init__()
@@ -212,6 +233,13 @@ class ShowView(QObject):
         self.caught = None             # the loop that last caught it
         self.editing = False
         self.locked = True
+        self.render_range = None       # (from, to) in show frames, or None
+
+    def set_render_range(self, span) -> None:
+        """What the render will write, when that is not the whole show."""
+        if span != self.render_range:
+            self.render_range = span
+            self.changed.emit()
 
     def open(self, show, file_loops=None) -> None:
         self.show = show
@@ -586,24 +614,32 @@ class Ruler(_Strip):
         self.holding = False
 
     def _follow(self) -> None:
-        self.update()           # it says the time at its head, to the frame
+        self.update()           # the playhead's mark follows to the frame
 
     def paintEvent(self, event) -> None:      # noqa: N802
         brush = QPainter(self)
-        brush.fillRect(self.rect(), QColor("#171717"))
+        brush.fillRect(self.rect(), QColor(theme.NIGHT))
         brush.setFont(QFont(MONO, 8))
         for seconds in _nice_steps(self.axis):
             x = self.axis.x_of(seconds * showfile.FPS)
             if not HEAD - 10 <= x <= self.width() + 40:
                 continue
-            brush.setPen(QPen(QColor("#4a4a4a")))
+            brush.setPen(QPen(QColor(theme.SEAM)))
             brush.drawLine(int(x), 16, int(x), 24)
-            brush.setPen(QPen(QColor("#8a8a8a")))
+            brush.setPen(QPen(QColor(theme.QUIET)))
             brush.drawText(int(x) + 3, 14,
                            showfile.timecode(seconds * showfile.FPS)[3:])
-        brush.fillRect(QRect(0, 0, HEAD - 6, self.height()), QColor("#171717"))
-        brush.setPen(QPen(QColor("#6a6a6a")))
-        brush.drawText(6, 15, showfile.timecode(self.view.frame)[3:])
+        brush.fillRect(QRect(0, 0, HEAD - 6, self.height()), QColor(theme.NIGHT))
+        # The render's range, when it is not all of it: a band and its ends.
+        span = self.view.render_range
+        if span is not None:
+            left, right = (int(self.axis.x_of(one)) for one in span)
+            live = QColor(theme.LIVE)
+            live.setAlpha(55)
+            brush.fillRect(QRect(left, 16, max(2, right - left), 8), live)
+            brush.setPen(QPen(QColor(theme.LIVE), 2))
+            brush.drawLine(left, 14, left, 24)
+            brush.drawLine(right, 14, right, 24)
         x = int(self.axis.x_of(self.view.frame))
         brush.setPen(QPen(QColor("#4ec9e0"), 1))
         brush.drawLine(x, 6, x, self.height())
@@ -662,8 +698,8 @@ class LoopBar(_Strip):
             "дальше, до следующего лупа (L).")
         self.switch.setStyleSheet(
             "QPushButton { font-size:10px; padding:0px; }"
-            "QPushButton:checked { background:#c9a227; color:#1a1a1a;"
-            " border-color:#e0b830; }")
+            f"QPushButton:checked {{ background:{theme.LIVE}; color:#061318;"
+            f" border-color:{theme.LIVE}; }}")
         # By hand only: the playhead lighting it is told the other way round.
         self.switch.clicked.connect(lambda on: view.set_looping(on))
         view.looping_changed.connect(self._shown)
@@ -703,7 +739,7 @@ class LoopBar(_Strip):
 
     def paintEvent(self, event) -> None:      # noqa: N802
         brush = QPainter(self)
-        brush.fillRect(self.rect(), QColor("#141414"))
+        brush.fillRect(self.rect(), QColor(theme.NIGHT))
         right_end = self.width() - (34 if self.lock.isVisible() else 0)
         brush.setClipRect(QRect(HEAD - 6, 0, right_end - HEAD + 6,
                                 self.height()))
@@ -714,15 +750,16 @@ class LoopBar(_Strip):
             picked = index == self.view.loop_at
             brush.fillRect(
                 QRect(left, 3, max(3, right - left), self.height() - 6),
-                QColor("#f0c040") if running
-                else QColor("#8a7630") if picked else QColor("#4a411c"))
+                QColor(theme.LIVE) if running
+                else QColor(theme.LIVE_EDGE) if picked
+                else QColor(theme.LIVE_DIM))
             for x in (left, right):
                 brush.fillRect(QRect(x - 2, 0, 4, self.height()),
-                               QColor("#ffe9a0") if picked
-                               else QColor("#6a5c2a"))
+                               QColor("#a9ecf6") if picked
+                               else QColor(theme.LIVE_EDGE))
             if right - left > 70:
                 brush.setFont(QFont(MONO, 7, QFont.Weight.Bold))
-                brush.setPen(QPen(QColor("#1a1a1a" if running else "#c8b878")))
+                brush.setPen(QPen(QColor("#061318" if running else theme.TEXT)))
                 brush.drawText(left + 7, self.height() - 6,
                                f"{index + 1}  "
                                f"{(high - low) / showfile.FPS:.1f}с")
@@ -993,7 +1030,7 @@ class Tracks(_Strip):
                   head: bool = False) -> None:
         """Make a fade legible: a notch where it starts, and the ramp drawn."""
         edge = band.left() + int(wide) if head else band.right() - int(wide)
-        pale = QColor("#ffe9a0")
+        pale = QColor(theme.TEXT)
         brush.setPen(QPen(pale, 1))
         if head:
             brush.drawLine(band.left(), band.bottom() - 1, edge, band.top() + 1)
@@ -1019,7 +1056,8 @@ class Tracks(_Strip):
                 brush.drawLine(x, band.top(), x, band.bottom())
 
     def draw_clip(self, brush: QPainter, clip, band: QRect) -> None:
-        colour = QColor("#a03030") if clip.missing else QColor(HUE[clip.row])
+        colour = QColor(theme.ERROR).darker(160) if clip.missing \
+            else QColor(HUE[clip.row])
         chosen = clip is self.view.chosen
         body = QColor(colour)
         body.setAlpha(215 if chosen else 130)
@@ -1051,10 +1089,10 @@ class Tracks(_Strip):
                 self.mark_fade(brush, band, wide, clip.fade_start, head=True)
         if clip.crop_end:
             cut = int(abs(clip.crop_end) * self.axis.scale)
-            brush.setPen(QPen(QColor("#d06060"), 1, Qt.PenStyle.DotLine))
+            brush.setPen(QPen(QColor(theme.QUIET), 1, Qt.PenStyle.DotLine))
             brush.drawLine(faded.right(), faded.center().y(),
                            faded.right() + cut, faded.center().y())
-            brush.setPen(QPen(QColor("#d06060"), 2))
+            brush.setPen(QPen(QColor(theme.TEXT), 2))
             brush.drawLine(faded.right(), faded.top() + 1,
                            faded.right(), faded.top() + 4)
             brush.drawLine(faded.right(), faded.bottom() - 4,
@@ -1086,7 +1124,7 @@ class Tracks(_Strip):
                     left = int(self.axis.x_of(after.first))
                     right = int(self.axis.x_of(min(before.last, after.last)))
                     brush.fillRect(QRect(left, y, max(2, right - left), 3),
-                                   QColor("#e04040"))
+                                   QColor(theme.WARN))
 
     def draw_cues(self, brush: QPainter, band: QRect) -> None:
         for clip in self.view.show.clips:
@@ -1094,12 +1132,12 @@ class Tracks(_Strip):
                 continue
             x = int(self.axis.x_of(clip.tx))
             chosen = clip is self.view.chosen
-            brush.setPen(QPen(QColor("#f5dd70" if chosen else HUE["Cue"]),
+            brush.setPen(QPen(QColor("#f5e39a" if chosen else HUE["Cue"]),
                               3 if chosen else 1))
             brush.drawLine(x, band.top(), x, band.bottom())
             if self.axis.scale > 0.015:
                 brush.setFont(QFont(MONO, 7))
-                brush.setPen(QPen(QColor("#f5dd70" if chosen else "#9a8420")))
+                brush.setPen(QPen(QColor("#f5e39a" if chosen else theme.QUIET)))
                 brush.drawText(x + 4, band.top() + 10,
                                f"u{clip.universe}·ch{clip.channel}·v{clip.value}")
 
@@ -1109,27 +1147,32 @@ class Tracks(_Strip):
             left, right = int(self.axis.x_of(low)), int(self.axis.x_of(high))
             running = self.view.looping and here == (low, high)
             brush.fillRect(QRect(left, 0, max(2, right - left), self.height()),
-                           QColor(201, 162, 39, 34 if running else 12))
-            brush.setPen(QPen(QColor("#f0c040" if running else "#5a5030"),
+                           QColor(78, 201, 224, 34 if running else 12))
+            brush.setPen(QPen(QColor(theme.LIVE if running else theme.LIVE_EDGE),
                               2 if running else 1))
             brush.drawLine(left, 0, left, self.height())
             brush.drawLine(right, 0, right, self.height())
 
     def paintEvent(self, event) -> None:       # noqa: N802
         brush = QPainter(self)
-        brush.fillRect(self.rect(), QColor("#191919"))
+        brush.fillRect(self.rect(), QColor(theme.NIGHT))
         for row, level, y in self.lanes():
             lit = (self.landing is not None
                    and self.landing[:2] == (row, level))
             brush.fillRect(QRect(0, y, self.width(), self.LANE - 2),
-                           QColor("#2d3a2d") if lit
-                           else QColor("#202020" if level % 2 else "#1c1c1c"))
+                           QColor(theme.LIVE_DIM) if lit
+                           else QColor("#161b21" if level % 2 else "#13171c"))
+            # The screen's mark before its name, on its first lane: the same
+            # cell and colour as on its row and its slider.
+            if level == 0:
+                theme.paint_cell(brush, QRectF(3, y + 2.5, 13, self.LANE - 7),
+                                 HUE[row])
             brush.setFont(QFont(MONO, 8))
-            brush.setPen(QPen(QColor(HUE[row]) if level == 0
-                              else QColor("#5a5a5a")))
-            brush.drawText(6, y + self.LANE - 7,
+            brush.setPen(QPen(QColor(theme.TEXT) if level == 0
+                              else QColor(theme.FAINT)))
+            brush.drawText(18, y + self.LANE - 7,
                            f"{row} L{level}" if LEVELS[row] > 1 else row)
-        brush.setPen(QPen(QColor("#2a2a2a")))
+        brush.setPen(QPen(QColor(theme.SEAM)))
         brush.drawLine(HEAD - 6, 0, HEAD - 6, self.height())
         brush.setClipRect(QRect(HEAD - 6, 0,
                                 self.width() - HEAD + 6, self.height()))
@@ -1176,10 +1219,18 @@ class TimelinePane(QWidget):
 
         line = QHBoxLayout()
         line.setSpacing(12)
+        # The window's transport comes to stand at the head of this line in
+        # the show mode, beside the one reading of the time.
+        self.header = line
+        self.clock = QLabel()
+        self.clock.setObjectName("qa_show_clock")
+        self.clock.setFont(theme.mono(11, bold=True))
+        self.clock.setTextFormat(Qt.TextFormat.PlainText)
+        line.addWidget(self.clock)
         self.state = QLabel()
         self.state.setObjectName("qa_show_state")
         self.state.setFont(QFont(MONO, 9))
-        self.state.setStyleSheet("color:#8fbf8f;")
+        self.state.setStyleSheet(f"color:{theme.QUIET};")
         self.state.setTextFormat(Qt.TextFormat.PlainText)
         # Ignored across: this line lists whatever is on the screens, and a
         # label is otherwise as wide as its text -- the window grew by the
@@ -1192,7 +1243,7 @@ class TimelinePane(QWidget):
         self.note = QLabel()
         self.note.setObjectName("qa_show_note")
         self.note.setFont(QFont(MONO, 9))
-        self.note.setStyleSheet("color:#d9a441;")
+        self.note.setStyleSheet(f"color:{theme.WARN};")
         self.note.setTextFormat(Qt.TextFormat.PlainText)
         self.note.setAlignment(Qt.AlignmentFlag.AlignRight
                                | Qt.AlignmentFlag.AlignVCenter)
@@ -1232,13 +1283,14 @@ class TimelinePane(QWidget):
         at = int(view.frame)
         live = view.show.live_at(at)
         here = view.loop_here()
-        said = (f"{showfile.timecode(at)}   кадр {at} / {view.show.length}"
-                + ("   В ЛУПЕ" if here is not None and view.looping else "")
-                + "   на экранах: "
-                + ("  |  ".join(f"{one.row} L{one.level} {one.name[:24]}"
+        clock = f"{showfile.timecode(at)}   кадр {at} из {view.show.length}"
+        said = (("В ЛУПЕ   " if here is not None and view.looping else "")
+                + "на экранах: "
+                + ("  ·  ".join(f"{one.row} L{one.level} {one.name[:24]}"
                                 for one in live) or "ничего"))
-        if said != self._said:
-            self._said = said
+        if (clock, said) != self._said:
+            self._said = (clock, said)
+            self.clock.setText(clock)
             self.state.setText(said)
 
 
@@ -1272,12 +1324,13 @@ class LoopPanel(QWidget):
         whole.setContentsMargins(8, 6, 8, 8)
         whole.setSpacing(4)
         title = QLabel("Лупы")
-        title.setFont(QFont(MONO, 10, QFont.Weight.Bold))
+        title.setFont(theme.heading())
+        title.setStyleSheet(f"color:{theme.QUIET};")
         whole.addWidget(title)
         self.says = QLabel()
         self.says.setObjectName("qa_show_loop_says")
         self.says.setFont(QFont(MONO, 9))
-        self.says.setStyleSheet("color:#c9a227;")
+        self.says.setStyleSheet(f"color:{theme.LIVE};")
         self.says.setWordWrap(True)
         whole.addWidget(self.says)
 
@@ -1328,7 +1381,7 @@ class LoopPanel(QWidget):
         self.frames.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
         whole.addWidget(self.frames)
-        self.setStyleSheet("background:#282520;")
+        self.setStyleSheet(f"background:{theme.RAISED};")
         self._saying = False
         view.changed.connect(self.refresh)
         view.moved.connect(self.refresh)
@@ -1405,12 +1458,31 @@ class Inspector(QWidget):
         whole = QVBoxLayout(self)
         whole.setContentsMargins(0, 0, 0, 0)
         whole.setSpacing(2)
+        heading = QLabel("Клип")
+        heading.setFont(theme.heading())
+        heading.setStyleSheet(f"color:{theme.QUIET};")
+        heading.setContentsMargins(8, 8, 8, 0)
+        whole.addWidget(heading)
         self.title = QLabel("клип не выбран")
         self.title.setObjectName("qa_show_clip")
         self.title.setFont(QFont(MONO, 10, QFont.Weight.Bold))
         self.title.setWordWrap(True)
-        self.title.setContentsMargins(8, 6, 8, 0)
+        self.title.setContentsMargins(8, 0, 8, 0)
         whole.addWidget(self.title)
+        # The chosen clip as the render's range: the frames it occupies, in
+        # one press rather than copied out of the two fields below.
+        self.to_render = QPushButton("Диапазон рендера — этот клип")
+        self.to_render.setObjectName("qa_show_clip_range")
+        self.to_render.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.to_render.setToolTip("Поставить начало и конец рендера на края "
+                                  "выбранного клипа")
+        self.to_render.clicked.connect(self._to_render)
+        self.to_render.setEnabled(False)
+        shelf = QHBoxLayout()
+        shelf.setContentsMargins(8, 2, 8, 2)
+        shelf.addWidget(self.to_render)
+        shelf.addStretch(1)
+        whole.addLayout(shelf)
         holder = QWidget()
         self.grid = QGridLayout(holder)
         self.grid.setContentsMargins(8, 4, 8, 4)
@@ -1420,7 +1492,7 @@ class Inspector(QWidget):
         # The path gets a block of its own, across the whole column, because
         # it has to be readable in full and a grid row will not grow for it.
         tag = QLabel("Файл")
-        tag.setStyleSheet("color:#8a8a8a;")
+        tag.setStyleSheet(f"color:{theme.QUIET};")
         tag.setContentsMargins(8, 6, 8, 0)
         whole.addWidget(tag)
         self.path = QLabel("—")
@@ -1430,7 +1502,7 @@ class Inspector(QWidget):
         self.path.setContentsMargins(8, 0, 8, 6)
         self.path.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.path.setStyleSheet("color:#b4b4b4;")
+        self.path.setStyleSheet(f"color:{theme.TEXT};")
         whole.addWidget(self.path)
         whole.addStretch(1)
         self._lay_out(self.MEDIA)
@@ -1444,7 +1516,7 @@ class Inspector(QWidget):
         self.shown, self.body, self.aside = [], {}, {}
         for index, (label, key, editable, lowest, highest) in enumerate(names):
             tag = QLabel(label)
-            tag.setStyleSheet("color:#8a8a8a;")
+            tag.setStyleSheet(f"color:{theme.QUIET};")
             tag.setFixedWidth(118)
             if editable:
                 field = _number(lowest, highest, f"qa_show_field_{key}")
@@ -1461,7 +1533,7 @@ class Inspector(QWidget):
             if editable and key in self.SECONDS:
                 beside = QLabel()
                 beside.setFont(QFont(MONO, 8))
-                beside.setStyleSheet("color:#7a7a7a;")
+                beside.setStyleSheet(f"color:{theme.FAINT};")
                 self.grid.addWidget(beside, index, 2)
                 self.shown.append(beside)
                 self.aside[key] = beside
@@ -1470,6 +1542,13 @@ class Inspector(QWidget):
     def _typed(self, key: str, value: int) -> None:
         if not self._saying:
             self.view.set_field(self.view.chosen, key, value)
+
+    def _to_render(self) -> None:
+        clip = self.view.chosen
+        if clip is not None:
+            ends = clip.tx + 1 if clip.kind == "cue" else clip.last - clip.tail
+            self.view.range_wanted.emit(int(clip.first), int(max(clip.first + 1,
+                                                                 ends)))
 
     def refresh(self) -> None:
         clip = self.view.chosen
@@ -1485,6 +1564,7 @@ class Inspector(QWidget):
 
     def _show(self, clip) -> None:
         editing = self.view.editing and clip is not None
+        self.to_render.setEnabled(clip is not None)
         for key, field in self.body.items():
             if isinstance(field, QSpinBox):
                 _writable(field, editing)
@@ -1542,7 +1622,7 @@ class SidePane(QWidget):
         self.setObjectName("qa_show_side")
         self.setFixedWidth(SIDE)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet("#qa_show_side { background:#262626; }")
+        self.setStyleSheet(f"#qa_show_side {{ background:{theme.PANEL}; }}")
         stack = QVBoxLayout(self)
         stack.setContentsMargins(0, 0, 0, 0)
         stack.setSpacing(0)

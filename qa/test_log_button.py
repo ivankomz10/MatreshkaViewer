@@ -48,7 +48,7 @@ def test_the_log_button_freezes_nothing(app):
 def test_the_window_still_works_afterwards(app):
     """Answering is not the same as working: it must still do as it is told."""
     app.choose("qa_mode", "Flat")
-    assert app.at("qa_mode").value == "Flat"
+    assert app.at("qa_mode_flat").checked
     app.choose("qa_mode", PREVIEW)
-    assert app.at("qa_mode").value == PREVIEW
+    assert app.at("qa_mode_preview").checked
     assert not app.complaints(), app.complaints()

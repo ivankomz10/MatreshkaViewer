@@ -21,7 +21,8 @@ def set_range(app, first: int, last: int) -> None:
     app.type_into("qa_frame_last", str(last))
 
 
-ENDINGS = ("frames in", "exists", "failed", "missing", "nothing")
+ENDINGS = ("Записано", "уже есть", "Не записано", "нечем", "Нечего",
+           "Остановлено")
 
 
 def render(app, within: float = 180.0) -> str:
@@ -47,13 +48,13 @@ def test_it_writes_the_size_it_was_asked_for(app):
     app.choose("qa_mode", PREVIEW)
     app.choose("qa_size", "1080x1920")
     app.choose("qa_format", "H.264 mp4")
-    app.choose("qa_fps", "60 fps")          # the grid the range is counted on
+    app.choose("qa_fps", "60 к/с")          # the grid the range is counted on
     set_range(app, 0, 11)
     app.type_into("qa_out_name", "qa_render.mp4")
     (app.out / "qa_render.mp4").unlink(missing_ok=True)
 
     said = render(app)
-    assert "frames in" in said, f"the render said {said!r}"
+    assert "Записано" in said, f"the render said {said!r}"
 
     made = app.out / "qa_render.mp4"
     assert made.exists(), f"nothing at {made}"
@@ -70,15 +71,15 @@ def test_writing_at_half_the_grid_writes_half_the_frames(app):
     of a second at thirty is three frames. Worth pinning down: it is the one
     place where the number typed in and the number written differ on purpose.
     """
-    app.choose("qa_sync", "60 fps")
-    app.choose("qa_fps", "30 fps")
+    app.choose("qa_sync", "60 к/с")
+    app.choose("qa_fps", "30 к/с")
     set_range(app, 0, 5)
     app.type_into("qa_out_name", "qa_half_rate.mp4")
     (app.out / "qa_half_rate.mp4").unlink(missing_ok=True)
-    assert "frames in" in render(app)
+    assert "Записано" in render(app)
     facts = look.probe(app.out / "qa_half_rate.mp4")
     assert facts["frames"] == 3, f"six frames at half the rate gave {facts}"
-    app.choose("qa_fps", "60 fps")
+    app.choose("qa_fps", "60 к/с")
 
 
 def test_it_refuses_to_write_over_a_file(app):
@@ -87,7 +88,7 @@ def test_it_refuses_to_write_over_a_file(app):
     assert made.exists(), "the test before this one should have written it"
     stamp = made.stat().st_mtime
     said = render(app, within=30)
-    assert "exists" in said, f"it did not refuse; it said {said!r}"
+    assert "уже есть" in said, f"it did not refuse; it said {said!r}"
     assert made.stat().st_mtime == stamp, "it wrote over the file anyway"
 
 
@@ -106,11 +107,10 @@ def test_a_snapshot_writes_one_frame(app):
     folder = app.out / "snapshots"
     was = set(folder.glob("*.png")) if folder.exists() else set()
     app.click("qa_snapshot")
-    app.wait_until(lambda one: "->" in one.says("qa_eta")
-                   or "failed" in one.says("qa_eta"),
+    app.wait_until(lambda one: "Снимок" in one.says("qa_eta"),
                    "the snapshot said nothing", within=60)
     said = app.says("qa_eta")
-    assert "failed" not in said, said
+    assert "не записан" not in said, said
     now = set(folder.glob("*.png"))
     fresh = now - was
     assert fresh, f"no new picture in {folder}"
@@ -120,13 +120,13 @@ def test_a_snapshot_writes_one_frame(app):
 
 
 def test_a_smaller_size_is_written_smaller(app):
-    app.choose("qa_size", "Quarter 1024x1024")
+    app.choose("qa_size", "Четверть 1024x1024")
     app.choose("qa_format", "H.264 mp4")
     set_range(app, 0, 1)
     app.type_into("qa_out_name", "qa_quarter.mp4")
     (app.out / "qa_quarter.mp4").unlink(missing_ok=True)
     said = render(app)
-    assert "frames in" in said, said
+    assert "Записано" in said, said
     facts = look.probe(app.out / "qa_quarter.mp4")
     assert (facts["width"], facts["height"]) == (1024, 1024), facts
     app.choose("qa_size", "1080x1920")
@@ -136,7 +136,8 @@ def test_the_picture_comes_back_after_a_render(app):
     """The render takes the view to the whole frame; it must not stay off."""
     assert app.answering(), "the window is not answering after a render"
     assert app.at("qa_render").enabled, "the render button is still down"
-    assert not app.at("qa_cancel").enabled, "the cancel button is still live"
+    stop = app.maybe("qa_cancel")
+    assert stop is None or not stop.showing, "Stop is still up after the render"
     picture = app.picture_of("qa_canvas")
     assert look.spread(picture) > 6, "the picture is blank after a render"
 
@@ -157,11 +158,11 @@ def test_a_six_frame_range_is_six_frames(app):
     app.choose("qa_mode", PREVIEW)
     app.choose("qa_size", "1080x1920")
     app.choose("qa_format", "H.264 mp4")
-    app.choose("qa_fps", "60 fps")
+    app.choose("qa_fps", "60 к/с")
     set_range(app, 0, 5)
     app.type_into("qa_out_name", "qa_six.mp4")
     (app.out / "qa_six.mp4").unlink(missing_ok=True)
-    assert "frames in" in render(app)
+    assert "Записано" in render(app)
     facts = look.probe(app.out / "qa_six.mp4")
     assert facts["frames"] == 6, (
         f"six frames were asked for and {facts['frames']} were written "
@@ -192,7 +193,7 @@ def test_a_snapshot_is_the_frame_the_render_writes(app):
     else:
         made.unlink(missing_ok=True)
     app.choose("qa_format", "PNG sequence")
-    assert "frames in" in render(app)
+    assert "Записано" in render(app)
     # One frame of a sequence is written as the file itself rather than as a
     # folder with one still in it.
     written = (sorted(made.glob("*.png")) if made.is_dir()
@@ -202,8 +203,7 @@ def test_a_snapshot_is_the_frame_the_render_writes(app):
     folder = app.out / "snapshots"
     was = set(folder.glob("*.png")) if folder.exists() else set()
     app.click("qa_snapshot")
-    app.wait_until(lambda one: "->" in one.says("qa_eta")
-                   or "failed" in one.says("qa_eta"),
+    app.wait_until(lambda one: "Снимок" in one.says("qa_eta"),
                    "the snapshot said nothing", within=60)
     fresh = sorted(set(folder.glob("*.png")) - was)
     assert fresh, "the snapshot wrote nothing"

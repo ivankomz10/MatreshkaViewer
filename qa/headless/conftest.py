@@ -171,7 +171,8 @@ def render_and_wait(window, tick, within: float = 180.0) -> str:
     if window.job is None:              # refused before it started
         tick(0.2)
         return window.eta.text()
-    endings = ("frames in", "exists", "failed", "missing", "nothing")
+    endings = ("Записано", "уже есть", "Не записано", "нечем", "Нечего",
+               "Остановлено")
     return wait_for(
         tick,
         lambda: (window.eta.text()

@@ -31,13 +31,13 @@ def test_the_checks_come_up_on_a_first_run(fresh):
     assert app.checks_up(), f"windows up: {app.other_windows()}"
     for row in ("qa_check_gpu", "qa_check_ffmpeg"):
         assert app.at(row).showing, f"{row} is not in the list"
-    assert app.at("qa_check_gpu").name == "found", (
+    assert app.at("qa_check_gpu").name == "есть", (
         f"the GPU line says {app.at('qa_check_gpu').name!r}")
     app.click("qa_checks_close")
     app.wait_gone("qa_checks_close", within=15)
     # And with the window out of the way, the application works.
     app.choose("qa_mode", "Flat")
-    assert app.at("qa_mode").value == "Flat"
+    assert app.at("qa_mode_flat").checked, "the Развертка tab did not come on"
 
 
 def test_a_second_run_does_not_ask_again(fresh):
@@ -50,7 +50,7 @@ def test_without_ffmpeg_the_checks_say_so_and_offer_it(bare):
     app = bare
     app.wait_for("qa_checks_close", within=30)
     said = app.at("qa_check_ffmpeg").name
-    assert said in ("MISSING", "absent"), f"the ffmpeg line says {said!r}"
+    assert said in ("НЕТ — нужно", "нет"), f"the ffmpeg line says {said!r}"
     getter = app.maybe("qa_checks_get")
     assert getter is not None and getter.showing, (
         "no way offered to fetch it from the window that noticed it is gone")

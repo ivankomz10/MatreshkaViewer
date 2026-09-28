@@ -377,12 +377,12 @@ class Motors:
         if numbered:
             want = [one.number for one in numbered]
             if want != sorted(want):
-                said.append("parts are out of order: "
+                said.append("части не по порядку: "
                             + ", ".join(f"{one.number}/{one.of}" for one in numbered))
             missing = [n for n in range(1, numbered[0].of + 1) if n not in want]
             if missing and len(numbered) < numbered[0].of:
-                said.append(f"part {numbered[0].number} of {numbered[0].of}; "
-                            f"missing {', '.join(str(n) for n in missing)}")
+                said.append(f"часть {numbered[0].number} из {numbered[0].of}; "
+                            f"нет {', '.join(str(n) for n in missing)}")
         return said
 
     @property
@@ -394,11 +394,11 @@ class Motors:
 
     def describe(self) -> str:
         passes = sum(one.repeats for one in self.parts)
-        many = (f"{len(self.parts)} files  " if len(self.parts) > 1 else "")
+        many = (f"файлов {len(self.parts)}  " if len(self.parts) > 1 else "")
         if passes > len(self.parts):
-            many += f"{passes} passes  "
-        return (f"{many}{self.motors} motors  {self.frames - 1} frames  "
-                f"{self.fps:g} fps  {self.duration:.2f} s")
+            many += f"проходов {passes}  "
+        return (f"{many}моторов {self.motors}  кадров {self.frames - 1}  "
+                f"{self.fps:g} к/с  {self.duration:.2f} с")
 
     # -- what the drawing side asks for --------------------------------------
 

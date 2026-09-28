@@ -46,7 +46,7 @@ def test_full_screen_takes_the_monitor_and_gives_it_back(app):
         f"full screen is {right - left}x{bottom - top}, the monitor is "
         f"{wide}x{tall}")
     # Everything the window laid out goes away; the picture keeps its own bar.
-    assert app.maybe("qa_mode") is None, "the mode box is still up"
+    assert app.maybe("qa_mode_preview") is None, "the mode tabs are still up"
     assert app.maybe("qa_timeline") is None, "the window's timeline is still up"
     assert app.at("qa_full_bar").showing, "no timeline on the picture"
     for qa in ("qa_full_play", "qa_full_slider", "qa_full_time"):
@@ -57,7 +57,7 @@ def test_full_screen_takes_the_monitor_and_gives_it_back(app):
     app.key("escape")
     time.sleep(0.8)
     assert winput.rect_of(app.hwnd) == was, "it came back to a different place"
-    assert app.at("qa_mode").showing, "the bars did not come back"
+    assert app.at("qa_mode_preview").showing, "the bars did not come back"
     assert app.at("qa_link").showing, "the link did not come back"
     assert app.maybe("qa_full_bar") is None, "the picture's bar stayed up"
 
@@ -124,21 +124,18 @@ def test_only_geometry_has_a_framing_line(app):
 # -- the link between the two sliders ----------------------------------------
 
 def test_the_link_says_whether_it_is_on(app):
+    """A box in the Экраны panel now, and a box says so by its tick."""
     link = app.at("qa_link")
     was = link.checked
-    before = app.picture_of("qa_link")
     app.click("qa_link")
     time.sleep(0.3)
     now = app.at("qa_link")
     assert now.checked is not was, f"the link did not change: {was} -> {now.checked}"
-    after = app.picture_of("qa_link")
-    assert look.difference(before, after) > 4, (
-        "the button looks the same on as off")
     app.click("qa_link")
 
 
 def test_the_link_covers_nothing_and_nothing_covers_it(app):
-    """It shares the panel heading with the button that folds the rows."""
+    """It stands in the Экраны panel, with the sliders it ties."""
     link = app.at("qa_link")
     landed = app.desk.under(*link.middle)
     assert landed is not None and landed.qa == "qa_link", (
@@ -161,7 +158,7 @@ def test_the_link_moves_with_the_window(app):
     assert landed is not None and landed.qa == "qa_link", (
         f"after the resize a click on the link lands on {landed}")
     assert not link.overlaps(app.at("qa_sources_header")), (
-        "after the resize the link sits on the heading that folds the rows")
+        "after the resize the link sits on the heading of the rows")
     left, top, right, _ = winput.rect_of(app.hwnd)
     winput.click(min(left + 200, right - 20), top + 8, count=2)   # and back
     time.sleep(1.0)

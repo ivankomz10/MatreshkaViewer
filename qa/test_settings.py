@@ -13,15 +13,15 @@ import viewer
 from conftest import PREVIEW
 
 CHANGED = {
-    "qa_mode": "Inspection",
     "qa_alpha": "Straight",
-    "qa_behind": "Black",
-    "qa_sync": "30 fps",
+    "qa_behind": "Чёрный",
+    "qa_sync": "30 к/с",
 }
 
 
 def test_the_window_comes_back_as_it_was_left(fresh):
     app = fresh()
+    app.choose("qa_mode", "Inspection")
     for qa, wanted in CHANGED.items():
         app.choose(qa, wanted)
     app.type_into("qa_out_name", "kept_name.mp4")
@@ -38,6 +38,8 @@ def test_the_window_comes_back_as_it_was_left(fresh):
     again = viewer.Viewer(settings=None, clean=False, name="settings_again")
     try:
         again.start()
+        assert again.at("qa_mode_inspection").checked, (
+            "it did not come back in the Инспектор")
         for qa, wanted in CHANGED.items():
             assert again.at(qa).value == wanted, (
                 f"{qa} came back as {again.at(qa).value!r}, not {wanted!r}")
@@ -56,7 +58,7 @@ def test_a_folder_with_no_settings_starts_anyway(fresh):
     app.wait_for("qa_checks_close", within=30)
     app.click("qa_checks_close")
     app.wait_gone("qa_checks_close", within=15)
-    assert app.at("qa_mode").showing
+    assert app.at("qa_mode_preview").showing
     assert app.answering()
 
 
@@ -68,7 +70,6 @@ def test_a_settings_file_from_before_the_rename_still_opens(fresh):
     first in the list.
     """
     app = fresh(mode="Geometry")
-    assert app.at("qa_mode").value == PREVIEW, (
-        f"it opened in {app.at('qa_mode').value!r}")
+    assert app.at("qa_mode_preview").checked, "it did not open in the Превью"
     assert app.at("qa_frame_edge").showing, (
         "the framing line belongs to this mode and is not up")

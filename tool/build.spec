@@ -193,8 +193,8 @@ if MAC:
         info_plist={
             "CFBundleName": "Matreshka Viewer",
             "CFBundleDisplayName": "Matreshka Viewer",
-            "CFBundleShortVersionString": "0.3",
-            "CFBundleVersion": "0.3",
+            "CFBundleShortVersionString": "0.4",
+            "CFBundleVersion": "0.4",
             "LSMinimumSystemVersion": "11.0",
             # Otherwise the window is drawn at half resolution and upscaled,
             # which on a preview tool is the one thing that must not happen.

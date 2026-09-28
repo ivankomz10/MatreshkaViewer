@@ -44,7 +44,7 @@ DOWNLOADS = {
 
 # Where there is no single archive worth hard-coding, say so instead.
 ADVICE = {
-    "linux": "install ffmpeg with the package manager, e.g. apt install ffmpeg",
+    "linux": "поставьте ffmpeg менеджером пакетов, например apt install ffmpeg",
 }
 
 
@@ -251,22 +251,23 @@ def check() -> list[Requirement]:
     # about half a millisecond a frame. Apple silicon is the case in practice.
     found.append(Requirement(
         "Compressed textures", True,
-        "texture-compression-bc -- blocks go straight to the sampler" if blocks
-        else f"not on this GPU ({why or 'no such feature'}), so the blocks are "
-             f"unpacked by a compute pass instead -- under a millisecond a frame",
+        "texture-compression-bc — блоки идут прямо в сэмплер" if blocks
+        else f"этой видеокарте недоступно ({why or 'нет такой возможности'}), "
+             f"поэтому блоки распаковывает вычислительный проход — меньше "
+             f"миллисекунды на кадр",
         required=False))
 
     command = ffmpeg_command()
     version = ffmpeg_version(command)
     if version:
         if command == bundled_ffmpeg():
-            where = "bundled"
+            where = "в комплекте"
         elif command != "ffmpeg" and str(tools_dir()) in command:
-            where = "beside the application"
+            where = "рядом с программой"
         else:
             where = command
         found.append(Requirement("ffmpeg", True, f"{version[:70]}   [{where}]",
-                                 when_absent="nothing can be written out"))
+                                 when_absent="ничего нельзя записать"))
         # Whether it can write Hap is a second question, and the answer is no
         # more than half the time: hap needs snappy, and the usual Homebrew
         # build is made without it. Its own line, because "ffmpeg is here" and
@@ -274,16 +275,16 @@ def check() -> list[Requirement]:
         if not can_encode("hap"):
             found.append(Requirement(
                 "ffmpeg with hap", False,
-                "this one has no hap encoder -- it wants a build made with "
-                "snappy. Watching and rendering are unaffected; re-baking to "
-                "Hap Q Alpha needs one. Download fetches a build that has it.",
+                "в этом нет кодировщика hap — ему нужна сборка со snappy. "
+                "Смотреть и рендерить это не мешает, а перепечке в Hap Q Alpha "
+                "он нужен. «Скачать» принесёт сборку, в которой он есть.",
                 required=False, fixable=can_download(),
-                when_absent="ReBake can only write ProRes"))
+                when_absent="перепечка сможет писать только ProRes"))
     else:
         found.append(Requirement(
             "ffmpeg", False,
-            ADVICE.get(sys.platform, "only RENDER and Snap to video need it; "
-                                     "watching does not"),
+            ADVICE.get(sys.platform, "он нужен только чтобы записывать "
+                                     "видео; смотреть можно и без него"),
             required=False, fixable=can_download()))
 
     return found

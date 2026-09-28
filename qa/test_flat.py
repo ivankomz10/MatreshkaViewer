@@ -109,7 +109,7 @@ def test_an_alpha_format_carries_the_alpha(app):
 
 def test_the_backing_comes_back_after_an_alpha_render(app):
     """Writing an alpha takes the backing off the strips; it must go back on."""
-    assert app.at("qa_behind").value == "Calibration", (
+    assert app.at("qa_behind").value == "Калибровка", (
         f"the backing was left on {app.at('qa_behind').value!r}")
 
 

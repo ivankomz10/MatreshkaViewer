@@ -136,7 +136,7 @@ class Viewer:
         self.started_in = time.time() - began
         # Up is not the same as ready: the picture, the machine checks and the
         # files all arrive after the window itself does.
-        self.wait_until(lambda one: one.maybe("qa_mode") is not None,
+        self.wait_until(lambda one: one.maybe("qa_mode_preview") is not None,
                         "the window came up with nothing in it", within=90)
         return self
 
@@ -311,6 +311,14 @@ class Viewer:
             winput.key("enter")
         time.sleep(0.25)
 
+    # The ways of drawing the building are tabs now, not a list: choosing one
+    # is pressing its tab. By the key the code knows the mode by, or by what
+    # the tab says.
+    MODE_TABS = {"Превью": "qa_mode_preview", "Flat": "qa_mode_flat",
+                 "Развертка": "qa_mode_flat", "Inspection": "qa_mode_inspection",
+                 "Инспектор": "qa_mode_inspection", "ReBake": "qa_mode_rebake",
+                 "Перепечка": "qa_mode_rebake"}
+
     def choose(self, qa: str, text: str, within: float = 8.0) -> None:
         """Pick a line out of a drop-down, by opening it and clicking the line.
 
@@ -318,6 +326,9 @@ class Viewer:
         up as a native menu with the styled list beside it, and a test that
         never opened one would not have seen it.
         """
+        if qa == "qa_mode":
+            self.click(self.MODE_TABS[text], settle=0.4)
+            return
         self.click(qa, settle=0.4)
         deadline = time.time() + within
         while time.time() < deadline:
@@ -333,6 +344,11 @@ class Viewer:
 
     def offered(self, qa: str, within: float = 8.0) -> list[str]:
         """Every line a drop-down offers, read by opening it and looking."""
+        if qa == "qa_mode":
+            keys = ("Превью", "Flat", "Inspection", "ReBake")
+            return [key for key in keys
+                    if (tab := self.maybe(self.MODE_TABS[key])) is not None
+                    and tab.showing]
         self.click(qa, settle=0.4)
         deadline = time.time() + within
         lines: list[str] = []

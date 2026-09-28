@@ -144,15 +144,12 @@ def test_rebake_is_not_offered_in_a_show(quick_look, tick):
     window._set_level("show")
     tick(0.3)
     assert window.mode.currentText() == PREVIEW
-    model, listed = window.mode.model(), window.mode.view()
     for index in range(window.mode.count()):
         name = window.mode.itemText(index)
-        offered = name != "ReBake"
-        assert model.item(index).isEnabled() == offered, name
-        assert listed.isRowHidden(index) == (not offered), name
+        assert window.mode.is_offered(name) == (name != "ReBake"), name
     window._set_level("view")
     tick(0.3)
-    assert all(model.item(index).isEnabled() and not listed.isRowHidden(index)
+    assert all(window.mode.is_offered(window.mode.itemText(index))
                for index in range(window.mode.count()))
 
 
@@ -221,7 +218,6 @@ def test_the_switch_is_small_and_the_show_line_is_the_show_s(quick_look, tick):
 
 def test_the_screens_panel_moves_the_rows_own_sliders(quick_look, tick):
     window = quick_look
-    assert not window.levels_panel.isVisible() and not window.levels_tab.isVisible()
     window._set_level("show")
     window._fold_levels(True)
     tick(0.3)
@@ -234,10 +230,9 @@ def test_the_screens_panel_moves_the_rows_own_sliders(quick_look, tick):
     assert window.row_for("Top").gain.value() == 150
     window.row_for("Bottom").gain.setValue(80)
     assert window.levels_sliders["Bottom"].value() == 80
-    was = window.matching.isChecked()
-    window.levels_panel.findChild(type(window.matching), "qa_show_match").click()
-    assert window.matching.isChecked() != was
-    window.matching.setChecked(was)
+    assert window.levels_panel.isAncestorOf(window.matching)
+    assert not window.levels_lines["Frame"][2].isVisible(), \
+        "a frame's brightness in a show, which has no frame"
     window._fold_levels(False)
     tick(0.2)
     assert not window.levels_panel.isVisible() and window.levels_tab.isVisible()
@@ -272,15 +267,21 @@ def test_full_screen_keeps_the_picture(quick_look, tick):
 
 
 def test_the_keys_come_up_over_the_picture(quick_look, tick):
+    """In both levels, each with its own keys."""
     window = quick_look
-    assert not window.keys_button.isVisible(), "the keys of Шоу in Просмотр"
+    assert window.keys_button.isVisible(), "no keys in the quick look"
+    window._toggle_keys()
+    tick(0.1)
+    assert window.keys_card.isVisible()
+    assert "F11" in window.keys_card.text() and "луп" not in window.keys_card.text()
+    window._toggle_keys()
     window._set_level("show")
     tick(0.3)
     assert window.keys_button.isVisible() and not window.keys_card.isVisible()
     window._toggle_keys()
     tick(0.1)
     assert window.keys_card.isVisible()
-    assert "играть" in window.keys_card.text()
+    assert "играть" in window.keys_card.text() and "луп" in window.keys_card.text()
     window._toggle_keys()
     tick(0.1)
     assert not window.keys_card.isVisible()
@@ -423,7 +424,7 @@ def test_a_render_goes_through_the_gaps(quick_look, tick):
     window.first_frame.setValue(1080)
     window.last_frame.setValue(1139)
     said = render_and_wait(window, tick, within=240)
-    assert "frames in" in said, said
+    assert "Записано" in said, said
     written = look.probe(target)
     rate = float(window.fps_choice.currentData())
     assert written["frames"] == round(60 / 60.0 * rate), written
@@ -443,7 +444,7 @@ def test_the_counts_under_the_picture_fold_away(quick_look, tick):
     assert not window.stats.isVisible(), "the counts stayed up"
     assert window.stats_head.isVisible()
     assert window.stats_head.text().startswith("\u25b8")
-    assert "3 файлов" in window.stats_head.text()
+    assert "файлы: 3" in window.stats_head.text()
     assert window._settings_now()["stats_open"] is False
     window._fold_stats(True)
     tick(0.2)

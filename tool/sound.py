@@ -47,8 +47,9 @@ class Track:
         return self.frames / self.rate if self.rate else 0.0
 
     def describe(self) -> str:
-        kind = {1: "mono", 2: "stereo"}.get(self.channels, f"{self.channels} ch")
-        return f"{self.rate / 1000:g} kHz  {kind}  {self.duration:.2f} s"
+        kind = {1: "моно", 2: "стерео"}.get(self.channels,
+                                            f"{self.channels} кан.")
+        return f"{self.rate / 1000:g} кГц  {kind}  {self.duration:.2f} с"
 
     @property
     def size(self) -> int:
@@ -145,9 +146,10 @@ class Mix:
         return self.total * self.block
 
     def describe(self) -> str:
-        kind = {1: "mono", 2: "stereo"}.get(self.channels, f"{self.channels} ch")
-        return (f"{len(self._pieces)} sounds added  {self.rate / 1000:g} kHz  "
-                f"{kind}  {self.duration:.2f} s")
+        kind = {1: "моно", 2: "стерео"}.get(self.channels,
+                                            f"{self.channels} кан.")
+        return (f"звуков в смеси {len(self._pieces)}  {self.rate / 1000:g} кГц  "
+                f"{kind}  {self.duration:.2f} с")
 
     def samples(self, first: int, count: int) -> np.ndarray:
         """Frames `first` to `first + count` of the mix, as Int16."""

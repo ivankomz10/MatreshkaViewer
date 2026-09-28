@@ -8,6 +8,7 @@ is doing costs more than any feature it might have instead.
 """
 from __future__ import annotations
 
+import html
 import math
 import subprocess
 import sys
@@ -15,16 +16,16 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, QTimer
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (QColor, QFont, QIcon, QImage, QKeySequence,
                            QPainter, QPen, QPixmap, QShortcut)
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox,
                                QComboBox, QDialog, QFileDialog, QFrame,
                                QMessageBox,
                                QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-                               QMainWindow, QProgressBar, QListView,
+                               QMainWindow, QMenu, QProgressBar, QListView,
                                QPushButton, QSizePolicy, QSlider, QSpinBox,
-                               QSplitter,
+                               QSplitter, QToolButton, QWidgetAction,
                                QStyleFactory, QToolTip, QVBoxLayout, QWidget)
 from rendercanvas.pyside6 import RenderCanvas
 
@@ -44,6 +45,7 @@ import kinetic
 import show as showfile
 import screen_gpu
 import sound
+import theme
 import timeline
 
 BAKED = "baked"
@@ -72,8 +74,64 @@ SHOW_SCREENS = (("Top", "Screen_Top"), ("Bottom", "Screen_Bottom"),
 SHOW_MODES = (PREVIEW, "Flat", "Inspection")
 
 APP_NAME = "Matreshka Viewer"
-APP_VERSION = "0.3"
-MONO = "Consolas, DejaVu Sans Mono, Menlo, monospace"
+APP_VERSION = "0.4"
+MONO = "Cascadia Mono, Consolas, DejaVu Sans Mono, Menlo, monospace"
+
+# How the building is drawn: the key each mode is known by in the code and
+# in a settings file, and what the tab says. Named by what is on the screen.
+MODE_LABEL = {PREVIEW: "Превью", "Flat": "Развертка",
+              "Inspection": "Инспектор", "ReBake": "Перепечка"}
+MODE_TAG = {PREVIEW: "preview", "Flat": "flat", "Inspection": "inspection",
+            "ReBake": "rebake"}
+# The pieces of the building, as the Слои menu calls them.
+LAYER_LABEL = {"Body": "Корпус", "Shell": "Оболочка", "Blank": "Заглушка"}
+# Lines of the lists as they were called before they were Russian, so that a
+# settings file written then still opens on what it says.
+OLD_WORDS = {"Fit": "Вписать", "Stretch": "Растянуть",
+             "Calibration": "Калибровка", "Black": "Чёрный",
+             "Clean": "Чистка", "Dither": "Дизер", "Multiply": "Умножить",
+             "Keep": "Оставить", "Clamp": "Прижать",
+             "60 fps": "60 к/с", "30 fps": "30 к/с"}
+
+
+def choose_saved(box, value) -> None:
+    """Put a list back on what a settings file says, in either language."""
+    value = str(value)
+    wanted = {value, OLD_WORDS.get(value, value)}
+    for index in range(box.count()):
+        if box.itemText(index) in wanted or str(box.itemData(index)) == value:
+            box.setCurrentIndex(index)
+            return
+
+
+def assign_files(paths, taken: dict) -> dict:
+    """Which row each of several files goes to, by its ending and its name.
+
+    What the exporters name things: `_top`, `_bottom` or `main`, `lamel`. A
+    movie that says nothing goes to the first screen with nothing on it.
+    `taken` is what each row holds already.
+    """
+    wanted: dict = {}
+    for path in paths:
+        name, ending = Path(path).stem.lower(), Path(path).suffix.lower()
+        if ending == ".wav":
+            title = "Sound"
+        elif ending == ".json":
+            title = "Kinetic"
+        elif "lamel" in name:
+            title = "Lamels"
+        elif "top" in name or "tiles" in name:
+            title = "Top"
+        elif "bottom" in name or "main" in name or "scene" in name:
+            title = "Bottom"
+        elif "frame" in name:
+            title = "Frame"
+        else:
+            title = next((one for one in ("Top", "Bottom", "Lamels")
+                          if one not in wanted and not taken.get(one)), None)
+        if title is not None and title not in wanted:
+            wanted[title] = str(path)
+    return wanted
 
 # Where the window opens on a machine that has never run it. After that the
 # last session is restored over the top of these, so they are the starting
@@ -121,6 +179,10 @@ def icon(name: str) -> QIcon:
     icons/WHERE_THESE_CAME_FROM.txt -- so nothing here needs Houdini
     installed, or a renderer for SVG inside the executable.
     """
+    if name in theme.DRAWN:
+        # The ones that were coloured pictures from four different sets --
+        # a broom, a bread roll, a red push button -- redrawn in one line.
+        return theme.drawn_icon(name)
     if name not in _drawn:
         folder = (logfile.bundled(ICONS)
                   or (Path(__file__).resolve().parent / ICONS))
@@ -174,6 +236,97 @@ def iconed(button: QPushButton, picture: str, says: str, story: str = "",
     return button
 
 
+def labeled(button: QPushButton, picture: str, text: str, says: str,
+            story: str = "", name: str = "") -> QPushButton:
+    """A button that keeps its words: for the few that are the point of a bar.
+
+    Everything else on a bar is a picture with its name in the hover; the
+    thing a bar is for says what it does, so it can be found without one.
+    """
+    if name:
+        button.setObjectName(name)
+    button.setText(text)
+    if picture:
+        button.setIcon(icon(picture))
+        button.setIconSize(QSize(16, 16))
+    button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    button.setToolTip("")
+    HINTS[button] = (says, story)
+    return button
+
+
+class ResetSlider(QSlider):
+    """A brightness: a double click puts it back at 1.00."""
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        self.setValue(100)
+
+
+class ModeTabs(QWidget):
+    """How the building is drawn, as tabs rather than a list to open.
+
+    Four ways, always the same four, one always on: a list that has to be
+    opened to be read hides what the choice is between. It answers the same
+    few questions a QComboBox does -- currentText, setCurrentText,
+    currentIndexChanged -- with each tab's key as its text, so everything
+    that asked the list which mode it was in asks this the same way.
+    """
+
+    currentIndexChanged = Signal(int)
+
+    def __init__(self, items) -> None:
+        super().__init__()
+        self._keys = [key for key, _label, _story in items]
+        self._index = 0
+        line = QHBoxLayout(self)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(0)
+        self.group = QButtonGroup(self)
+        self.group.setExclusive(True)
+        self.buttons = {}
+        for index, (key, label, story) in enumerate(items):
+            button = QPushButton(label)
+            button.setObjectName(f"qa_mode_{MODE_TAG.get(key, key.lower())}")
+            button.setCheckable(True)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setStyleSheet(LEVEL_BUTTON)
+            button.setToolTip(story)
+            button.clicked.connect(lambda _=False, at=index: self.setCurrentIndex(at))
+            self.group.addButton(button)
+            line.addWidget(button)
+            self.buttons[key] = button
+        self.buttons[self._keys[0]].setChecked(True)
+
+    def count(self) -> int:
+        return len(self._keys)
+
+    def itemText(self, index: int) -> str:  # noqa: N802 -- as the list's
+        return self._keys[index]
+
+    def currentIndex(self) -> int:  # noqa: N802
+        return self._index
+
+    def currentText(self) -> str:  # noqa: N802
+        return self._keys[self._index]
+
+    def setCurrentIndex(self, index: int) -> None:  # noqa: N802
+        index = max(0, min(int(index), len(self._keys) - 1))
+        self.buttons[self._keys[index]].setChecked(True)
+        if index != self._index:
+            self._index = index
+            self.currentIndexChanged.emit(index)
+
+    def setCurrentText(self, key: str) -> None:  # noqa: N802
+        if key in self._keys:
+            self.setCurrentIndex(self._keys.index(key))
+
+    def set_offered(self, key: str, on: bool) -> None:
+        self.buttons[key].setVisible(bool(on))
+
+    def is_offered(self, key: str) -> bool:
+        return not self.buttons[key].isHidden()
+
+
 def _small(button: QPushButton, width: int) -> QPushButton:
     """A narrow button that still shows its label.
 
@@ -209,16 +362,16 @@ class DependencyDialog(QDialog):
 
     def __init__(self, found, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("What this machine has")
+        self.setWindowTitle("Что есть на этой машине")
         self.setMinimumWidth(700)
         self.job = None
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         intro = QLabel(
-            "Checked once, on the first run. Nothing is installed and nothing "
-            "goes on PATH: a downloaded copy lands in a folder beside this "
-            "application, and deleting that folder undoes it.")
+            "Проверяется один раз, при первом запуске. Ничего не "
+            "устанавливается и не прописывается в PATH: скачанное ложится в "
+            "папку рядом с программой, и удалить её — значит отменить всё.")
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
@@ -245,7 +398,7 @@ class DependencyDialog(QDialog):
         self.get_button.clicked.connect(self._start_download)
         buttons.addWidget(self.get_button)
         buttons.addStretch(1)
-        self.close_button = QPushButton("Continue")
+        self.close_button = QPushButton("Продолжить")
         self.close_button.setObjectName("qa_checks_close")
         self.close_button.setDefault(True)
         self.close_button.clicked.connect(self.accept)
@@ -256,6 +409,11 @@ class DependencyDialog(QDialog):
 
     # -- the list ------------------------------------------------------------
 
+    # What each check is called on the screen. The log keeps the English, and
+    # so do the names the tests find each line by.
+    CALLED = {"GPU": "Видеокарта", "Compressed textures": "Сжатые текстуры",
+              "ffmpeg": "ffmpeg", "ffmpeg with hap": "ffmpeg с Hap"}
+
     def _show(self, found) -> None:
         while self.grid.count():
             item = self.grid.takeAt(0)
@@ -263,21 +421,21 @@ class DependencyDialog(QDialog):
                 item.widget().deleteLater()
 
         for row, item in enumerate(found):
-            name = QLabel(item.name)
+            name = QLabel(self.CALLED.get(item.name, item.name))
             name.setFont(QFont("", -1, QFont.Weight.Bold))
             if item.ok:
-                mark, colour = "found", "#8fbf8f"
+                mark, colour = "есть", theme.TEXT
             elif item.required:
-                mark, colour = "MISSING", "#e06c6c"
+                mark, colour = "НЕТ — нужно", theme.ERROR
             else:
-                mark, colour = "absent", "#d9a441"
+                mark, colour = "нет", theme.WARN
             status = QLabel(mark)
             status.setObjectName(
                 "qa_check_" + item.name.lower().replace(" ", "_"))
             status.setStyleSheet(f"color:{colour};")
             detail = QLabel(item.detail)
             detail.setWordWrap(True)
-            detail.setStyleSheet("color:#9a9a9a;")
+            detail.setStyleSheet("color:#8d97a5;")
             for column, widget in enumerate((name, status, detail)):
                 self.grid.addWidget(widget, row, column)
 
@@ -286,28 +444,33 @@ class DependencyDialog(QDialog):
         self.get_button.setVisible(wanted is not None)
         if wanted is not None:
             self.get_button.setText(
-                f"Download {wanted.name} ({depends.download_size_mb()} MB)")
+                f"Скачать {self.CALLED.get(wanted.name, wanted.name)} "
+                f"({depends.download_size_mb()} МБ)")
 
-        stopped = [i.name for i in found if i.required and not i.ok]
-        limping = [i.name for i in found if not i.required and not i.ok]
+        stopped = [self.CALLED.get(i.name, i.name)
+                   for i in found if i.required and not i.ok]
+        limping = [self.CALLED.get(i.name, i.name)
+                   for i in found if not i.required and not i.ok]
         if stopped:
-            self._note(f"This machine cannot run the viewer: {', '.join(stopped)}.",
-                       "error")
+            self._note("На этой машине вьювер работать не сможет: нет "
+                       f"{', '.join(stopped)}.", "error")
         elif limping:
-            says = [f"without {item.name}, {item.when_absent}"
+            says = [f"без {self.CALLED.get(item.name, item.name)} "
+                    f"{item.when_absent}"
                     for item in found
                     if not item.required and not item.ok and item.when_absent]
             spoken = "; ".join(says)
-            self._note("Everything needed to watch is here. "
+            self._note("Смотреть можно — всё нужное для этого есть. "
                        + (spoken[:1].upper() + spoken[1:] + "." if says
-                          else f"Missing: {', '.join(limping)}."), "warn")
+                          else f"Нет: {', '.join(limping)}."), "warn")
         else:
-            self._note("Everything is here.")
+            self._note("Всё на месте.")
 
     def _note(self, text: str, level: str = "") -> None:
-        colours = {"error": "color:#e06c6c;", "warn": "color:#d9a441;"}
+        colours = {"error": f"color:{theme.ERROR};",
+                   "warn": f"color:{theme.WARN};"}
         self.note.setText(text)
-        self.note.setStyleSheet(colours.get(level, "color:#8fbf8f;"))
+        self.note.setStyleSheet(colours.get(level, f"color:{theme.TEXT};"))
 
     # -- fetching ------------------------------------------------------------
 
@@ -315,7 +478,7 @@ class DependencyDialog(QDialog):
         if self.job is not None:
             return
         url = depends.DOWNLOADS[sys.platform][0]
-        self._note(f"downloading from {url.split('/')[2]} ...")
+        self._note(f"качаю с {url.split('/')[2]}…")
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setVisible(True)
@@ -332,15 +495,15 @@ class DependencyDialog(QDialog):
         if total > 0:
             self.progress.setValue(int(100 * done / total))
         self.progress.setFormat(
-            f"{done / 1e6:.0f} / {total / 1e6:.0f} MB" if total
-            else f"{done / 1e6:.0f} MB")
+            f"{done / 1e6:.0f} из {total / 1e6:.0f} МБ" if total
+            else f"{done / 1e6:.0f} МБ")
 
     def _on_failed(self, message: str) -> None:
         self.job = None
         self.progress.setVisible(False)
         self.get_button.setEnabled(True)
         self.close_button.setEnabled(True)
-        self._note(f"could not fetch it: {message}", "error")
+        self._note(f"Не скачалось: {message}", "error")
 
     def _on_finished(self, path: str) -> None:
         self.job = None
@@ -370,6 +533,12 @@ class Timeline(QSlider):
         super().__init__(orientation, parent)
         self._marks: list = []          # (seconds, name)
         self._span = 0.0
+        self._range = None              # (from, to) as parts of the whole
+
+    def set_range(self, part) -> None:
+        """The part the render will write, when it is not the whole."""
+        self._range = part
+        self.update()
 
     def set_marks(self, marks, span: float = 0.0) -> None:
         self._marks = list(marks or [])
@@ -393,10 +562,22 @@ class Timeline(QSlider):
 
     def paintEvent(self, event) -> None:  # noqa: N802 -- Qt naming
         super().paintEvent(event)
+        if self._range is not None:
+            brush = QPainter(self)
+            room = self.width() - 12
+            left = 6 + round(self._range[0] * room)
+            right = 6 + round(self._range[1] * room)
+            live = QColor(theme.LIVE)
+            live.setAlpha(60)
+            brush.fillRect(left, 2, max(2, right - left), self.height() - 4, live)
+            brush.setPen(QPen(QColor(theme.LIVE), 2))
+            brush.drawLine(left, 2, left, self.height() - 3)
+            brush.drawLine(right, 2, right, self.height() - 3)
+            brush.end()
         if not self._marks or self._span <= 0:
             return
         brush = QPainter(self)
-        pen = QPen(QColor("#d9a441"))
+        pen = QPen(QColor(theme.WARN))
         pen.setWidth(1)
         brush.setPen(pen)
         # Along the groove the handle travels, which is the width less the
@@ -439,6 +620,11 @@ class Row(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
+        # The screen's mark, in the colour it has everywhere in the window.
+        mark = QLabel()
+        mark.setPixmap(theme.cell(title, 15))
+        mark.setFixedWidth(17)
+        layout.addWidget(mark)
         self.label = QLabel(title)
         self.label.setFixedWidth(52)
         layout.addWidget(self.label)
@@ -446,9 +632,9 @@ class Row(QWidget):
         self.field = QLineEdit()
         self.field.setObjectName(f"qa_path_{tag}")
         self.field.setPlaceholderText(
-            "drop a WAV here, or browse" if sound
-            else "drop a motor JSON here, or browse" if motors
-            else "drop a movie or a picture here, or browse")
+            "перетащите сюда WAV или выберите файл" if sound
+            else "перетащите сюда JSON моторов или выберите файл" if motors
+            else "перетащите сюда ролик или картинку, или выберите файл")
         self.field.setAcceptDrops(False)     # the row handles it for the whole strip
         layout.addWidget(self.field, 3)
 
@@ -468,12 +654,13 @@ class Row(QWidget):
         if overlay:
             self.how = QComboBox()
             self.how.setObjectName(f"qa_how_{tag}")
-            self.how.addItems(["Fit", "Stretch"])
-            self.how.setFixedWidth(78)
+            self.how.addItem("Вписать", "Fit")
+            self.how.addItem("Растянуть", "Stretch")
+            self.how.setFixedWidth(96)
             self.how.setToolTip(
-                "Fit сохраняет пропорции кадра и ставит его по центру, а "
-                "экран остаётся виден по бокам. Stretch тянет кадр к углам "
-                "экрана, какой бы формы кадр ни был.")
+                "«Вписать» сохраняет пропорции кадра и ставит его по центру, "
+                "а экран остаётся виден по бокам. «Растянуть» тянет кадр к "
+                "углам экрана, какой бы формы кадр ни был.")
             # Not a reload: the file has not changed, only where it sits, and
             # reloading would throw away the clock and start again from zero.
             self.how.currentIndexChanged.connect(lambda _: on_place())
@@ -491,11 +678,15 @@ class Row(QWidget):
         if motors:
             beside = QWidget()
             beside.setObjectName(f"qa_gap_{tag}")
-            beside.setFixedWidth(96 + 6 + 36)
+            beside.setVisible(False)
             layout.addWidget(beside)
         else:
+            # The value lives here; the slider a hand moves is in the Экраны
+            # panel over the picture, which is where the rest of how a screen
+            # looks lives too. Kept on the row, out of sight, because the row
+            # is what a screen's brightness belongs to and is saved with.
             self.gain = QSlider(Qt.Orientation.Horizontal)
-            self.gain.setObjectName(f"qa_gain_{tag}")
+            self.gain.setObjectName(f"qa_rowgain_{tag}")
             self.gain.setRange(0, 200)
             self.gain.setValue(100)
             self.gain.setFixedWidth(96)
@@ -507,21 +698,22 @@ class Row(QWidget):
             else:
                 self.gain.setToolTip(
                     "Яркость этого экрана, на глаз. 1.00 оставляет её такой, "
-                    "какой её делают геометрия и переключатель Match. "
+                    "какой её делают геометрия и «Сравнять яркость». "
                     "Двойной щелчок возвращает обратно.")
             self.gain.valueChanged.connect(self._gain_moved)
+            self.gain.setVisible(False)
             layout.addWidget(self.gain)
 
             self.gain_shown = QLabel("1.00")
-            self.gain_shown.setObjectName(f"qa_gainvalue_{tag}")
+            self.gain_shown.setObjectName(f"qa_rowgainvalue_{tag}")
             self.gain_shown.setFont(QFont(MONO, 9))
-            self.gain_shown.setFixedWidth(36)
+            self.gain_shown.setVisible(False)
             layout.addWidget(self.gain_shown)
 
         self.note = QLabel()
         self.note.setObjectName(f"qa_note_{tag}")
         self.note.setMinimumWidth(160)
-        self.note.setStyleSheet("color:#8fbf8f;")
+        self.note.setStyleSheet(f"color:{theme.QUIET};")
         layout.addWidget(self.note, 2)
 
         self._quiet = self.styleSheet()
@@ -569,7 +761,7 @@ class Row(QWidget):
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802 -- Qt naming
         if event.mimeData().hasUrls() and self._movie_in(event):
-            self.setStyleSheet("background:#2c3d4a;")
+            self.setStyleSheet(f"background:{theme.LIVE_DIM};")
             event.acceptProposedAction()
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802
@@ -590,14 +782,14 @@ class Row(QWidget):
 
 
 FOLD_HEADER = ("QPushButton { text-align:left; padding:2px 6px; border:none; "
-               "color:#9a9a9a; } QPushButton:hover { color:#dcdcdc; }")
-LEVEL_BUTTON = ("QPushButton { padding:2px 10px; } "
-                "QPushButton:checked { background:#3d5a72; "
-                "border-color:#4a7ea8; color:#f0f0f0; }")
-SHOW_PANEL = ("QFrame#qa_show_levels { background:rgba(24,24,24,225); "
-              "border:1px solid #3a3a3a; border-radius:4px; } "
-              "QFrame#qa_show_levels QLabel, QFrame#qa_show_levels QCheckBox, "
-              "QFrame#qa_show_levels QSlider { background:transparent; }")
+               f"background:transparent; color:{theme.QUIET}; }} "
+               f"QPushButton:hover {{ color:{theme.TEXT}; }}")
+FOLD_HEADER_WARN = FOLD_HEADER.replace(f"color:{theme.QUIET}", f"color:{theme.WARN}", 1)
+LEVEL_BUTTON = "QPushButton { padding:2px 10px; }"
+SCREENS_PANEL = ("QFrame#qa_screens { background:rgba(23,28,35,235); "
+                 f"border:1px solid {theme.SEAM}; border-radius:4px; }} "
+                 "QFrame#qa_screens QLabel, QFrame#qa_screens QCheckBox, "
+                 "QFrame#qa_screens QSlider { background:transparent; }")
 
 
 class Viewer(QMainWindow):
@@ -775,38 +967,19 @@ class Viewer(QMainWindow):
         stacked.addWidget(self.sources_body)
         layout.addWidget(self.sources)
 
-        # In the heading of the panel, rather than off in the bar below with
-        # the switches that are about the building, and rather than floating
-        # over the rows where it once was. Floating cost it three bugs: it
-        # moved when the rows changed parent, it had to be put back by hand
-        # after every resize, and it went on hanging over rows that had been
-        # folded away. In the heading it is an ordinary widget -- it appears,
-        # moves and disappears because the layout says so -- and it stays on
-        # show while the rows are folded, because it goes on tying the two
-        # sliders whether or not anybody can see them.
-        self.linked = iconed(
-            QPushButton(), "link", "Связать Top и Bottom",
+        # Tying Top and Bottom together. In the Экраны panel with the two
+        # sliders it ties, which is where somebody looking at them looks; it
+        # is laid there when the panel is built.
+        self.linked = QCheckBox("Связать Top и Bottom")
+        self.linked.setObjectName("qa_link")
+        self.linked.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.linked.setToolTip(
             "Связывает ползунки Top и Bottom в том отношении, в каком они "
             "стоят на момент включения. Выставьте каждый так, чтобы экраны "
-            "читались одинаково, нажмите это — и дальше любой из ползунков "
+            "читались одинаково, поставьте галку — и дальше любой из ползунков "
             "поднимает и опускает оба, не теряя баланса. Если одному упереться "
-            "в край, останавливаются оба.",
-            side=LINK_SIDE, name="qa_link")
-        self.linked.setCheckable(True)
-        self.linked.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.linked.setStyleSheet(self.LINK_BUTTON)
-        # Two ways of saying which it is, because one was not enough: the
-        # chain is faint while the sliders are loose and solid while they are
-        # tied, and the button behind it fills in.
-        self.linked.toggled.connect(
-            lambda on: self.linked.setIcon(icon("link") if on
-                                           else faded("link")))
+            "в край, останавливаются оба.")
         self.linked.toggled.connect(self._link_changed)
-        self.linked.setIcon(faded("link"))
-        self.sources_strip.addWidget(self.linked)
-        # Not among the scene-only ones. It used to sit in the bar with the
-        # switches about the building and went away with them; the two sliders
-        # it ties are on show in every mode.
 
         # max_fps defaults to 30 in rendercanvas, which is not a thing to
         # discover by wondering why sixty frames a second look like thirty.
@@ -890,9 +1063,14 @@ class Viewer(QMainWindow):
         self.show_view.edited.connect(self._after_change)
         self.show_view.dropped.connect(self._drop_files)
         self.show_view.editing_changed.connect(self._editing_shown)
+        self.show_view.range_wanted.connect(self._range_from_show)
         layout.addWidget(self.split, 1)
 
-        layout.addLayout(self._transport())
+        # A widget rather than a bare row, so that in Шоу it can move up to
+        # stand beside the show's time, over the loops, and come back.
+        self.transport_bar = self._transport()
+        layout.addWidget(self.transport_bar)
+        self._transport_at = layout.indexOf(self.transport_bar)
 
         self.export_bar = QWidget()
         self.export_bar.setLayout(self._export_controls())
@@ -921,7 +1099,10 @@ class Viewer(QMainWindow):
         # file counts under it. They fold away the same way the rows do: the
         # counts are for when something stutters, and the rest of the time
         # they are six lines of the window given to numbers.
-        self.stats_open = True
+        # Folded to begin with: the counts are for when something stutters.
+        self.stats_open = False
+        self._dropped_seen = 0
+        self._dropped_grew = 0.0
         self.stats_head = QPushButton()
         self.stats_head.setObjectName("qa_stats_header")
         self.stats_head.setFlat(True)
@@ -935,12 +1116,23 @@ class Viewer(QMainWindow):
                                    "строка. Состояние запоминается.")
         # Through a lambda: `clicked` would hand its bool to `open_it`.
         self.stats_head.clicked.connect(lambda: self._fold_stats())
-        layout.addWidget(self.stats_head)
+        counts = QHBoxLayout()
+        counts.setSpacing(6)
+        counts.addWidget(self.stats_head, 1)
+        # The log is about the same thing the counts are: what the program is
+        # doing. It used to end the transport, among the buttons for time.
+        log = iconed(QPushButton(), "log", "Лог",
+                     "Открыть папку, в которую пишется эта сессия",
+                     side=24, name="qa_log")
+        log.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        log.clicked.connect(self._open_log)
+        counts.addWidget(log)
+        layout.addLayout(counts)
         self.stats = QLabel()
         self.stats.setObjectName("qa_stats")
         self.stats.setFont(QFont(MONO, 9))
-        self.stats.setStyleSheet("color:#9a9a9a;")
-        self.stats.setTextFormat(Qt.TextFormat.PlainText)
+        self.stats.setStyleSheet(f"color:{theme.QUIET};")
+        self.stats.setTextFormat(Qt.TextFormat.RichText)
         self.stats.setSizePolicy(QSizePolicy.Policy.Ignored,
                                  QSizePolicy.Policy.Preferred)
         layout.addWidget(self.stats)
@@ -1134,7 +1326,7 @@ class Viewer(QMainWindow):
         self.project_name.setReadOnly(not on)
         for widget in self.editor_only:
             widget.setVisible(on)
-        self.keys_card.setText(timeline.keys_text(on))
+        self.keys_card.setText(timeline.keys_text("show", on))
         self._say_undo()
         self._lay_overlays()
         logfile.write(f"show: editor {'on' if on else 'off'}")
@@ -1397,17 +1589,24 @@ class Viewer(QMainWindow):
         self.show_side.setVisible(showing)
         self.show_pane.setVisible(showing)
         self.show_bar.setVisible(showing)
+        # The transport stands beside the show's time, over the loops; in the
+        # quick look it goes back under the picture, where it was.
+        if showing:
+            self.show_pane.header.insertWidget(0, self.transport_bar)
+        else:
+            self.centralWidget().layout().insertWidget(self._transport_at,
+                                                       self.transport_bar)
+        self.frame_label.setVisible(not showing)
+        self.time_label.setVisible(not showing)
+        self.keys_card.setText(timeline.keys_text(level))
         # The strips need their three hundred pixels, and the picture can
         # spare them: the boundary gives them back.
         self.canvas.setMinimumHeight(240 if showing else 420)
-        model = self.mode.model()
-        listed = self.mode.view()
         for index in range(self.mode.count()):
-            if self.mode.itemText(index) not in SHOW_MODES:
+            key = self.mode.itemText(index)
+            if key not in SHOW_MODES:
                 # Not offered at all, rather than offered grey.
-                model.item(index).setEnabled(not showing)
-                if hasattr(listed, "setRowHidden"):
-                    listed.setRowHidden(index, showing)
+                self.mode.set_offered(key, not showing)
         if (showing and self.mode.isEnabled()
                 and self.mode.currentText() not in SHOW_MODES):
             self.mode.setCurrentText(PREVIEW)
@@ -1797,7 +1996,7 @@ class Viewer(QMainWindow):
         self.project_name.blockSignals(False)
         if trouble:
             said = f"{trouble}  —  показаны строки Просмотра"
-            self.project.setStyleSheet("color:#e06c6c;")
+            self.project.setStyleSheet("color:#e25c5c;")
         else:
             described = show.describe()
             said = (described[len(show.name):].strip()
@@ -1808,7 +2007,7 @@ class Viewer(QMainWindow):
             if self.draft is not None:
                 said += f"   \u270e черновик, правок {self.draft.changes}"
             self.project.setStyleSheet(
-                "color:#d9a441;" if show.missing() else "color:#9a9a9a;")
+                "color:#f08c4a;" if show.missing() else "color:#8d97a5;")
         self.project.setText(said)
         self.project.setToolTip(
             (f"черновик: {self.draft.where}\n" if self.draft else "")
@@ -1916,13 +2115,14 @@ class Viewer(QMainWindow):
         self.keys_button.setStyleSheet(
             self.OVERLAY_BUTTON
             + " QPushButton { padding:0px; font-weight:bold; }")
-        self.keys_button.setToolTip("Клавиши и мышь в Шоу (?)")
+        self.keys_button.setToolTip("Клавиши и мышь (?)")
         self.keys_button.clicked.connect(self._toggle_keys)
         self.keys_button.setVisible(False)
-        self.keys_card = QLabel(timeline.keys_text(), self.canvas)
+        self.keys_card = QLabel(timeline.keys_text("view"), self.canvas)
         self.keys_card.setObjectName("qa_keys")
         self.keys_card.setFont(QFont(MONO, 9))
         self.keys_card.setTextFormat(Qt.TextFormat.PlainText)
+        self._empty_card()
         self.keys_card.setStyleSheet(
             "QLabel { background:rgba(20,20,20,205); color:#c8c8c8; "
             "border:1px solid #3a3a3a; border-radius:4px; padding:8px 10px; }")
@@ -1935,28 +2135,31 @@ class Viewer(QMainWindow):
         logfile.write(f"show: loop{where} {'holds' if on else 'let go'}")
 
     def _levels_panel(self) -> None:
-        """Match, the screens' brightness and the sound, over the picture.
+        """The screens: how bright each is, how they are read and backed.
 
-        In Шоу the rows are put away, and with them the sliders that were the
-        only way to turn a screen up. So the same sliders -- the rows' own
-        values, moved from here -- float over the right-hand side of the
-        picture, where the file's frame never reaches, and fold away.
+        Over the right-hand side of the picture, where the file's frame never
+        reaches, in both levels and in every way of drawing, and folded away
+        with ›. One place for everything about how the screens look: before,
+        it was split between the rows, the top bar and, in the show, a panel
+        of its own -- with Match in two of them. The sliders here move the
+        rows' own values, which is what a session remembers.
         """
         panel = QFrame(self.canvas)
-        panel.setObjectName("qa_show_levels")
+        panel.setObjectName("qa_screens")
         panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        panel.setStyleSheet(SHOW_PANEL)
-        panel.setFixedWidth(250)
+        panel.setStyleSheet(SCREENS_PANEL)
+        panel.setFixedWidth(270)
         whole = QVBoxLayout(panel)
-        whole.setContentsMargins(10, 6, 8, 8)
-        whole.setSpacing(4)
+        whole.setContentsMargins(10, 6, 8, 10)
+        whole.setSpacing(5)
         head = QHBoxLayout()
         title = QLabel("Экраны")
-        title.setFont(QFont(MONO, 10, QFont.Weight.Bold))
+        title.setFont(theme.heading())
+        title.setStyleSheet(f"color:{theme.QUIET};")
         head.addWidget(title)
         head.addStretch(1)
         hide = QPushButton("\u203a")
-        hide.setObjectName("qa_show_levels_hide")
+        hide.setObjectName("qa_screens_hide")
         hide.setFixedSize(22, 20)
         hide.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         hide.setStyleSheet("QPushButton { padding:0px; }")
@@ -1965,42 +2168,33 @@ class Viewer(QMainWindow):
         head.addWidget(hide)
         whole.addLayout(head)
 
-        self.levels_mirrors = []          # (source, mirror): kept in step
-        for source, text, qa in ((self.matching, "Match", "qa_show_match"),
-                                 (self.linked, "Связать Top и Bottom",
-                                  "qa_show_link")):
-            box = QCheckBox(text)
-            box.setObjectName(qa)
-            box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            box.setToolTip(source.toolTip() or HINTS.get(source, ("", ""))[1])
-            box.setChecked(source.isChecked())
-            box.toggled.connect(source.setChecked)
-            source.toggled.connect(
-                lambda on, b=box: (b.blockSignals(True), b.setChecked(on),
-                                   b.blockSignals(False)))
-            whole.addWidget(box)
-
         grid = QGridLayout()
         grid.setHorizontalSpacing(6)
-        grid.setVerticalSpacing(2)
+        grid.setVerticalSpacing(3)
         self.levels_sliders = {}
-        for line, (title, said) in enumerate((("Top", "Top"),
-                                              ("Bottom", "Bottom"),
-                                              ("Lamels", "Lamels"),
-                                              ("Sound", "Звук"))):
-            row = self.row_for(title)
+        self.levels_lines = {}
+        for line, (title_, said) in enumerate((("Top", "Top"),
+                                               ("Bottom", "Bottom"),
+                                               ("Lamels", "Lamels"),
+                                               ("Frame", "Frame"),
+                                               ("Sound", "Звук"))):
+            row = self.row_for(title_)
             if row is None or row.gain is None:
                 continue
-            tag = QLabel(said)
-            tag.setFixedWidth(52)
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setObjectName(f"qa_show_gain_{title.lower()}")
+            tag = _tag(title_)
+            mark = QLabel()
+            mark.setPixmap(theme.cell(title_, 15))
+            mark.setFixedWidth(17)
+            name = QLabel(said)
+            name.setFixedWidth(52)
+            slider = ResetSlider(Qt.Orientation.Horizontal)
+            slider.setObjectName(f"qa_gain_{tag}")
             slider.setRange(row.gain.minimum(), row.gain.maximum())
             slider.setValue(row.gain.value())
             slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             slider.setToolTip(row.gain.toolTip())
             value = QLabel(f"{row.multiplier:.2f}")
-            value.setObjectName(f"qa_show_gainvalue_{title.lower()}")
+            value.setObjectName(f"qa_gainvalue_{tag}")
             value.setFont(QFont(MONO, 9))
             value.setFixedWidth(34)
             slider.valueChanged.connect(row.gain.setValue)
@@ -2008,21 +2202,36 @@ class Viewer(QMainWindow):
                 lambda amount, s=slider, v=value: (
                     s.blockSignals(True), s.setValue(amount),
                     s.blockSignals(False), v.setText(f"{amount / 100:.2f}")))
-            grid.addWidget(tag, line, 0)
-            grid.addWidget(slider, line, 1)
-            grid.addWidget(value, line, 2)
-            self.levels_sliders[title] = slider
+            for column, widget in enumerate((mark, name, slider, value)):
+                grid.addWidget(widget, line, column)
+            self.levels_sliders[title_] = slider
+            self.levels_lines[title_] = (mark, name, slider, value)
         whole.addLayout(grid)
+        whole.addWidget(self.linked)
+        rule = QFrame()
+        rule.setFrameShape(QFrame.Shape.HLine)
+        rule.setStyleSheet(f"color:{theme.SEAM};")
+        whole.addWidget(rule)
+        whole.addWidget(self.matching)
+        whole.addWidget(self.solid_top)
+        pair = QGridLayout()
+        pair.setHorizontalSpacing(8)
+        pair.setVerticalSpacing(4)
+        pair.addWidget(self.alpha_label, 0, 0)
+        pair.addWidget(self.alpha, 0, 1)
+        pair.addWidget(self.backing_label, 1, 0)
+        pair.addWidget(self.backing, 1, 1)
+        whole.addLayout(pair)
         panel.setVisible(False)
         self.levels_panel = panel
 
         self.levels_tab = QPushButton("\u2039", self.canvas)
-        self.levels_tab.setObjectName("qa_show_levels_open")
+        self.levels_tab.setObjectName("qa_screens_open")
         self.levels_tab.setFixedSize(22, 60)
         self.levels_tab.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.levels_tab.setStyleSheet(
             self.OVERLAY_BUTTON + " QPushButton { padding:0px; }")
-        self.levels_tab.setToolTip("Экраны: Match, яркость экранов, звук")
+        self.levels_tab.setToolTip("Экраны: яркость, сравнение, альфа, фон, звук")
         self.levels_tab.clicked.connect(lambda: self._fold_levels(True))
         self.levels_tab.setVisible(False)
 
@@ -2030,6 +2239,67 @@ class Viewer(QMainWindow):
         self._levels_open = bool(open_it)
         self._lay_overlays()
         self._remember()
+
+    def _empty_card(self) -> None:
+        """What an empty quick look offers: to be given something to show."""
+        card = QFrame(self.canvas)
+        card.setObjectName("qa_empty")
+        card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        card.setStyleSheet(
+            f"QFrame#qa_empty {{ background:rgba(23,28,35,235); "
+            f"border:1px solid {theme.SEAM}; border-radius:6px; }} "
+            "QFrame#qa_empty QLabel { background:transparent; }")
+        card.setFixedWidth(400)
+        whole = QVBoxLayout(card)
+        whole.setContentsMargins(18, 14, 18, 16)
+        whole.setSpacing(10)
+        title = QLabel("Ничего не загружено")
+        title.setFont(theme.heading())
+        title.setStyleSheet(f"color:{theme.QUIET};")
+        whole.addWidget(title)
+        said = QLabel("Перетащите ролики на строки сверху или выберите их "
+                      "здесь — по именам они разойдутся по экранам сами. "
+                      "Шоу из редактора площадки открывается как шоу.")
+        said.setWordWrap(True)
+        whole.addWidget(said)
+        line = QHBoxLayout()
+        pick = QPushButton("Выбрать файлы…")
+        pick.setObjectName("qa_empty_pick")
+        pick.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        pick.setStyleSheet(f"QPushButton {{ background:{theme.LIVE_DIM}; "
+                           f"border-color:{theme.LIVE_EDGE}; }}")
+        pick.clicked.connect(self._pick_many)
+        line.addWidget(pick)
+        show = QPushButton("Открыть шоу…")
+        show.setObjectName("qa_empty_show")
+        show.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        show.clicked.connect(self._open_show)
+        line.addWidget(show)
+        line.addStretch(1)
+        whole.addLayout(line)
+        card.setVisible(False)
+        self.empty_card = card
+
+    def _pick_many(self) -> None:
+        chosen, _ = QFileDialog.getOpenFileNames(
+            self, "Выбрать файлы для экранов", "",
+            "Ролики, картинки, звук и моторы (*.mov *.mp4 *.m4v *.mkv *.avi "
+            "*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp *.tga *.wav *.json);;"
+            "Все файлы (*)")
+        if chosen:
+            self.put_files(chosen)
+
+    def put_files(self, paths) -> dict:
+        """Several files onto the rows they belong on, and load them."""
+        taken = {row.title: row.field.text().strip() for row in self.rows}
+        wanted = assign_files(paths, taken)
+        for title, path in wanted.items():
+            self.row_for(title).field.setText(path)
+        if wanted:
+            logfile.write("files put on rows: " + ", ".join(
+                f"{title} {Path(path).name}" for title, path in wanted.items()))
+            self._load()
+        return wanted
 
     def _toggle_keys(self) -> None:
         self._keys_open = not self._keys_open
@@ -2075,21 +2345,21 @@ class Viewer(QMainWindow):
         bar.addLayout(self._level_switch())
         bar.addWidget(_divider())
 
-        self.mode = QComboBox()
+        self.mode = ModeTabs([
+            (PREVIEW, MODE_LABEL[PREVIEW],
+             "Здание через камеру из файла, кадрированное так, как оно будет "
+             "записано, — на нём и судят контент."),
+            ("Flat", MODE_LABEL["Flat"],
+             "Экраны развёрнуты в полосы и сложены стопкой: каждый видно "
+             "целиком. Рендер здесь пишет каждый экран отдельно."),
+            ("Inspection", MODE_LABEL["Inspection"],
+             "Камера отпущена с этого кадра и летает вокруг здания: тянуть — "
+             "вращать, колесо — ближе, правая кнопка или Shift — сдвинуть, "
+             "двойной щелчок — вернуться."),
+            ("ReBake", MODE_LABEL["ReBake"],
+             "Top и Bottom, каждая полоса разрезана посередине: слева файл, "
+             "справа то, что из него сделает перепечка.")])
         self.mode.setObjectName("qa_mode")
-        self.mode.addItems([PREVIEW, "Flat", "Inspection", "ReBake"])
-        self.mode.setFixedWidth(120)
-        self.mode.setToolTip(
-            f"{PREVIEW} рисует здание через камеру из файла, кадрированное "
-            "так, "
-            "как оно будет записано, — на нём и судят контент. Flat "
-            "раскладывает видео полосами рядом. Inspection отпускает камеру с "
-            "этого кадра и пускает вокруг здания: тянуть — вращать, колесо — "
-            "ближе, правая кнопка или Shift — сдвинуть, двойной щелчок — "
-            "вернуться. Больше в картинке не меняется ничего, так что смотрят "
-            "на тот же контент. ReBake показывает Top и Bottom, разрезав "
-            "каждую полосу посередине: слева файл, справа то, что из него "
-            "сделает перепечка.")
         if self.mesh is None:
             self.mode.setCurrentIndex(1)
             self.mode.setEnabled(False)
@@ -2098,32 +2368,50 @@ class Viewer(QMainWindow):
         bar.addWidget(self.mode)
         bar.addWidget(_divider())
 
-        # Everything on this bar that is about the building. ReBake is about a
-        # source file, and none of it applies there: no geometry to switch on
-        # or off, no screens to match against each other, and the reading of
-        # each half is chosen on the picture itself.
+        # Everything on this bar that is about the building. Перепечка is
+        # about a source file, and none of it applies there.
         self.scene_only = []
 
+        # The pieces of the building, in a menu: they are set once a week,
+        # and five boxes on the most visible line of the window were the
+        # most visible thing in it.
         self.toggles = {}
+        self.layers_button = QToolButton()
+        self.layers_button.setObjectName("qa_layers")
+        self.layers_button.setText("Слои")
+        # Qt draws the menu's arrow itself; a second one in the text was two.
+        self.layers_button.setStyleSheet(
+            "QToolButton { padding:4px 18px 4px 10px; }")
+        self.layers_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.layers_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.layers_button.setToolTip("Какие части здания рисовать")
+        menu = QMenu(self.layers_button)
         # One box for the top screen, not two. Its two geometries are the same
         # screen in two states, and which of them is drawn is decided by
         # whether there is a motor JSON, not by a box of its own.
         listed = [p.name for p in self.mesh.pieces
                   if p.name != scene3d.KINETIC_SCREEN] if self.mesh else []
         for name in listed:
-            box = QCheckBox(SHORT.get(name, name))
-            box.setObjectName("qa_layer_" + SHORT.get(name, name).lower())
+            short = SHORT.get(name, name)
+            box = QCheckBox(LAYER_LABEL.get(short, short))
+            box.setObjectName("qa_layer_" + short.lower())
             box.setChecked(True)
             box.setToolTip(name)
+            box.setStyleSheet("QCheckBox { padding:4px 10px; }")
             box.toggled.connect(lambda on, n=name: self._show_layer(n, on))
-            bar.addWidget(box)
-            self.scene_only.append(box)
+            holder = QWidgetAction(menu)
+            holder.setDefaultWidget(box)
+            menu.addAction(holder)
             self.toggles[name] = box
-
+        self.layers_button.setMenu(menu)
+        bar.addWidget(self.layers_button)
+        self.scene_only.append(self.layers_button)
         bar.addStretch(1)
-        bar.addWidget(_divider())
 
-        self.matching = QCheckBox("Match")
+        # How the screens look. Made here and laid in the Экраны panel over
+        # the picture, with the brightness they go together with.
+        self.matching = QCheckBox("Сравнять яркость")
         self.matching.setObjectName("qa_match")
         self.matching.setChecked(True)
         self.matching.setToolTip(
@@ -2133,10 +2421,9 @@ class Viewer(QMainWindow):
             "более тусклому, чтобы они совпадали на всех уровнях, включая "
             "максимум. Выключено — показывает так, как есть в геометрии.")
         self.matching.toggled.connect(self._matching_changed)
-        bar.addWidget(self.matching)
         self.scene_only.append(self.matching)
 
-        self.solid_top = QCheckBox("Solid top")
+        self.solid_top = QCheckBox("Без изнанки верха")
         self.solid_top.setObjectName("qa_solid_top")
         self.solid_top.setToolTip(
             "Убирает дальнюю сторону верхнего экрана, чтобы его собственная "
@@ -2145,18 +2432,14 @@ class Viewer(QMainWindow):
             "открытым с обеих сторон.")
         self.solid_top.toggled.connect(
             lambda on: (self.solid.cull(on) if self.solid else None, self.touch()))
-        bar.addWidget(self.solid_top)
         self.scene_only.append(self.solid_top)
 
-        bar.addWidget(_divider())
-
-        alpha_label = QLabel("Alpha")
-        bar.addWidget(alpha_label)
-        self.scene_only.append(alpha_label)
+        self.alpha_label = QLabel("Альфа")
+        self.scene_only.append(self.alpha_label)
         self.alpha = QComboBox()
         self.alpha.setObjectName("qa_alpha")
         self.alpha.addItems(["Premultiplied", "Straight"])
-        self.alpha.setFixedWidth(122)
+        self.alpha.setFixedWidth(132)
         self.alpha.setToolTip(
             "Premultiplied кладёт цвет целиком: то, что осталось под "
             "прозрачной альфой, видно, а не умножено на неё, и пиксель, чей "
@@ -2164,18 +2447,17 @@ class Viewer(QMainWindow):
             "контент. Straight умножает цвет на альфу — так контент и "
             "задуман, и так его покажет стена.")
         self.alpha.currentIndexChanged.connect(self._alpha_changed)
-        bar.addWidget(self.alpha)
         self.scene_only.append(self.alpha)
 
-        bar.addWidget(QLabel("Behind"))
+        self.backing_label = QLabel("Фон")
         self.backing = QComboBox()
         self.backing.setObjectName("qa_behind")
-        self.backing.addItems(["Calibration", "Black"])
-        self.backing.setFixedWidth(104)
+        self.backing.addItem("Калибровка", "Calibration")
+        self.backing.addItem("Чёрный", "Black")
+        self.backing.setFixedWidth(132)
         self.backing.setToolTip(
             "Что показывают экраны там, где контент прозрачен или его нет")
         self.backing.currentIndexChanged.connect(self._backing_changed)
-        bar.addWidget(self.backing)
 
         reset = iconed(QPushButton(), "home", "Сбросить вид",
                        "Назад к целому кадру. Двойной щелчок по картинке "
@@ -2275,7 +2557,7 @@ class Viewer(QMainWindow):
                         value = START_GAIN.get(row.title, 1.0) * 100
                     row.gain.setValue(int(round(float(value))))
                 if row.how is not None and kept.get("how"):
-                    row.how.setCurrentText(str(kept["how"]))
+                    choose_saved(row.how, kept["how"])
                 # A chain from 0.3: several files, or one played over. The
                 # quick look plays the first of them; the whole of it is put
                 # aside untouched for the show mode to open as it was.
@@ -2292,7 +2574,7 @@ class Viewer(QMainWindow):
                         logfile.write(f"{row.title}: {path} is no longer there")
 
             if saved.get("rebake"):
-                self.rebake_what.setCurrentText(str(saved["rebake"]))
+                choose_saved(self.rebake_what, saved["rebake"])
             if saved.get("rebake_below") is not None:
                 self.rebake_threshold.setValue(int(saved["rebake_below"]))
             if aside and not saved.get("chains_0_3"):
@@ -2302,6 +2584,8 @@ class Viewer(QMainWindow):
                 self.sources_body.setVisible(self.sources_open)
             if "stats_open" in saved:
                 self.stats_open = bool(saved["stats_open"])
+            if "show_panel" in saved:
+                self._levels_open = bool(saved["show_panel"])
             if "frame_edge" in saved:
                 self.frame_button.setChecked(bool(saved["frame_edge"]))
             if "tile_flat" in saved:
@@ -2309,7 +2593,7 @@ class Viewer(QMainWindow):
             if saved.get("rebake_format"):
                 self.rebake_format.setCurrentText(str(saved["rebake_format"]))
             if saved.get("rebake_colour"):
-                self.rebake_colour.setCurrentText(str(saved["rebake_colour"]))
+                choose_saved(self.rebake_colour, saved["rebake_colour"])
             if saved.get("rebake_left"):
                 self.rebake_left_alpha.setCurrentText(str(saved["rebake_left"]))
             if saved.get("rebake_right"):
@@ -2329,7 +2613,7 @@ class Viewer(QMainWindow):
                 self.mode.setCurrentText(WAS_CALLED.get(was, was))
                 self._mode_changed()
             if saved.get("sync"):
-                self.sync.setCurrentText(str(saved["sync"]))
+                choose_saved(self.sync, saved["sync"])
             self.clock.rate = float(self.sync.currentData() or 60.0)
             self.matching.setChecked(bool(saved.get("match", True)))
             self.solid_top.setChecked(bool(saved.get("solid_top",
@@ -2337,7 +2621,7 @@ class Viewer(QMainWindow):
             self.linked.setChecked(bool(saved.get("linked", START_LINKED)))
             for box, key in ((self.alpha, "alpha"), (self.backing, "behind")):
                 if saved.get(key):
-                    box.setCurrentText(str(saved[key]))
+                    choose_saved(box, saved[key])
         finally:
             self._restoring = False
 
@@ -2379,7 +2663,7 @@ class Viewer(QMainWindow):
             if row.gain is not None:
                 kept["gain"] = int(row.gain.value())
             if row.how is not None:
-                kept["how"] = row.how.currentText()
+                kept["how"] = row.how.currentData()
             rows[row.title] = kept
         return {
             "rows": rows,
@@ -2402,7 +2686,7 @@ class Viewer(QMainWindow):
             "solid_top": self.solid_top.isChecked(),
             "linked": self.linked.isChecked(),
             "alpha": self.alpha.currentText(),
-            "behind": self.backing.currentText(),
+            "behind": self.backing.currentData(),
             # Whether the rows are on show. Remembered because on a small
             # screen the picture wants that room and the rows are set once.
             "sources_open": self.sources_open,
@@ -2555,22 +2839,25 @@ class Viewer(QMainWindow):
 
     # -- the strip of controls ---------------------------------------------
 
-    def _transport(self) -> QHBoxLayout:
-        bar = QHBoxLayout()
+    def _transport(self) -> QWidget:
+        holder = QWidget()
+        holder.setObjectName("qa_transport")
+        bar = QHBoxLayout(holder)
+        bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(4)
 
         for picture, says, story, act in (
                 ("first", "В начало",
-                 "В начало таймлайна.  Ctrl со стрелкой влево делает то же.",
+                 "В начало.  Ctrl со стрелкой влево делает то же.",
                  lambda: self._move(0.0)),
                 ("back", "На кадр назад",
-                 "На кадр назад по сетке Sync.  Стрелка влево делает то же.",
+                 "На кадр назад по сетке просмотра.  Стрелка влево делает то же.",
                  lambda: self._step(-1)),
                 ("on", "На кадр вперёд",
-                 "На кадр вперёд по сетке Sync.  Стрелка вправо делает то же.",
+                 "На кадр вперёд по сетке просмотра.  Стрелка вправо делает то же.",
                  lambda: self._step(1)),
                 ("last", "В конец",
-                 "В конец таймлайна.  Ctrl со стрелкой вправо делает то же.",
+                 "В конец.  Ctrl со стрелкой вправо делает то же.",
                  lambda: self._move(self.clock.duration))):
             button = iconed(QPushButton(), picture, says, story,
                             name=f"qa_{picture}")
@@ -2586,16 +2873,20 @@ class Viewer(QMainWindow):
                 self.play_button.clicked.connect(self._toggle)
                 bar.addWidget(self.play_button)
 
+        bar.addSpacing(6)
+        watch = QLabel("Смотреть по")
+        watch.setStyleSheet(f"color:{theme.QUIET}; background:transparent;")
+        bar.addWidget(watch)
         self.sync = QComboBox()
         self.sync.setObjectName("qa_sync")
-        self.sync.setFixedWidth(74)
+        self.sync.setFixedWidth(76)
         for rate in (60, 30):
-            self.sync.addItem(f"{rate} fps", float(rate))
+            self.sync.addItem(f"{rate} к/с", float(rate))
         self.sync.setToolTip(
             "Сетка, по которой смотрят всю вещь. На неё разом ложится всё — "
             "экраны, счётчик кадров, моторы, — так что вещь на тридцати "
             "кадрах смотрится по кадру, а не выбирается дважды на каждый свой "
-            "кадр. Что писать на выходе, выбирается отдельно, справа.")
+            "кадр. С какой частотой писать, выбирается в строке рендера.")
         self.sync.currentIndexChanged.connect(self._sync_changed)
         bar.addWidget(self.sync)
 
@@ -2608,26 +2899,22 @@ class Viewer(QMainWindow):
         # it the buttons spread themselves across the whole width.
         bar.addStretch(0)
 
-        self.frame_label = QLabel("frame 0")
+        # One reading of where the piece is: the timecode, and the frame out
+        # of how many there are. Both on the grid it is watched on.
+        self.time_label = QLabel("00:00:00:00")
+        self.time_label.setObjectName("qa_time_label")
+        self.time_label.setFont(theme.mono(10, bold=True))
+        self.time_label.setStyleSheet("background:transparent;")
+        bar.addWidget(self.time_label)
+        self.frame_label = QLabel("кадр 0 из 0")
         self.frame_label.setObjectName("qa_frame_label")
         self.frame_label.setFont(QFont(MONO, 9))
-        self.frame_label.setFixedWidth(132)
-        self.frame_label.setToolTip("Где стоит таймлайн, в кадрах того "
-                                    "темпа, в котором идут исходники")
+        self.frame_label.setMinimumWidth(150)
+        self.frame_label.setStyleSheet(f"color:{theme.QUIET}; background:transparent;")
+        self.frame_label.setToolTip("Где стоит плейхед: кадр на сетке просмотра "
+                                    "и сколько их всего")
         bar.addWidget(self.frame_label)
-
-        self.time_label = QLabel("0.00 / 0.00 s")
-        self.time_label.setObjectName("qa_time_label")
-        self.time_label.setFont(QFont(MONO, 9))
-        self.time_label.setFixedWidth(118)
-        bar.addWidget(self.time_label)
-
-        log = iconed(QPushButton(), "log", "Лог",
-                     "Открыть папку, в которую пишется эта сессия",
-                     name="qa_log")
-        log.clicked.connect(self._open_log)
-        bar.addWidget(log)
-        return bar
+        return holder
 
     WRITE_SIZE_HINT = (
         "Камера сужается до центрального окна такой формы: всё, что она видит "
@@ -2638,20 +2925,25 @@ class Viewer(QMainWindow):
         bar = QHBoxLayout()
         bar.setSpacing(6)
 
-        bar.addWidget(QLabel("Write"))
+        def said(text: str) -> QLabel:
+            label = QLabel(text)
+            label.setStyleSheet(f"color:{theme.QUIET}; background:transparent;")
+            return label
+
+        bar.addWidget(said("Размер"))
         self.size_choice = QComboBox()
         self.size_choice.setObjectName("qa_size")
-        self.size_choice.setFixedWidth(140)
+        self.size_choice.setFixedWidth(150)
         self.size_choice.setToolTip(self.WRITE_SIZE_HINT)
         self._fill_sizes()
         self.size_choice.currentIndexChanged.connect(self._framing_changed)
         bar.addWidget(self.size_choice)
 
-        # Which part of the piece goes out. Counted the way the number beside
-        # the timeline counts, on the Sync grid, so a range is read off the
-        # screen rather than worked out -- what gets written is at whatever
-        # rate is chosen here, and the two need not be the same.
-        bar.addWidget(QLabel("Frames"))
+        # Which part of the piece goes out, in frames of the grid it is
+        # watched on, so a range is read off the screen rather than worked
+        # out. Shift+I and Shift+O set it from the playhead; «всё» puts it
+        # back to the whole piece.
+        bar.addWidget(said("Кадры"))
         self.first_frame = QSpinBox()
         self.first_frame.setObjectName("qa_frame_first")
         self.last_frame = QSpinBox()
@@ -2659,24 +2951,32 @@ class Viewer(QMainWindow):
         for box, tip in ((self.first_frame, "Первый записываемый кадр"),
                          (self.last_frame, "Последний записываемый кадр, он "
                                            "сам включительно")):
-            box.setFixedWidth(78)
+            box.setFixedWidth(80)
             box.setRange(0, 0)
-            box.setToolTip(tip + ". Считается так же, как число у таймлайна, "
-                                 "по сетке Sync. Любая загрузка возвращает "
-                                 "это к целой вещи.")
+            box.setToolTip(tip + ". Считается так же, как счётчик у плейхеда, "
+                                 "по сетке просмотра. Shift+I и Shift+O ставят "
+                                 "начало и конец туда, где плейхед.")
             box.setKeyboardTracking(False)
             box.valueChanged.connect(self._range_changed)
+            box.valueChanged.connect(lambda _: self._say_range())
         bar.addWidget(self.first_frame)
-        dash = QLabel("-")
+        dash = QLabel("–")
         dash.setFixedWidth(8)
         bar.addWidget(dash)
         bar.addWidget(self.last_frame)
+        self.range_all = _small(QPushButton("всё"), 44)
+        self.range_all.setObjectName("qa_range_all")
+        self.range_all.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.range_all.setToolTip("Всю вещь целиком")
+        self.range_all.clicked.connect(self._reset_range)
+        bar.addWidget(self.range_all)
 
+        bar.addWidget(said("Писать"))
         self.fps_choice = QComboBox()
         self.fps_choice.setObjectName("qa_fps")
-        self.fps_choice.setFixedWidth(74)
+        self.fps_choice.setFixedWidth(76)
         for rate in (30, 60):
-            self.fps_choice.addItem(f"{rate} fps", rate)
+            self.fps_choice.addItem(f"{rate} к/с", rate)
         bar.addWidget(self.fps_choice)
 
         self.format_choice = QComboBox()
@@ -2699,54 +2999,69 @@ class Viewer(QMainWindow):
         self.out_name.setMinimumWidth(150)
         bar.addWidget(self.out_name, 1)
 
-        browse = iconed(QPushButton(), "directory", "Куда писать",
-                        "Папка, в которую писать, и как назвать файл",
-                        name="qa_out_browse")
+        browse = labeled(QPushButton(), "directory", "Куда…",
+                         "Папка, в которую писать, и как назвать файл",
+                         name="qa_out_browse")
         browse.clicked.connect(self._pick_output)
         bar.addWidget(browse)
 
-        bump = self.bump_button = iconed(
-            QPushButton(), "version", "Следующая версия",
+        self.bump_button = labeled(
+            QPushButton(), "", "+1", "Следующая версия",
             "Ничего никогда не перезаписывается; это находит следующее "
-            "свободное имя", name="qa_bump")
-        bump.clicked.connect(self._bump_version)
-        bar.addWidget(bump)
+            "свободное имя: _v1 становится _v2.", name="qa_bump")
+        self.bump_button.clicked.connect(self._bump_version)
+        bar.addWidget(self.bump_button)
 
-        snap = iconed(
-            QPushButton(), "snapshot", "Снимок",
+        snap = labeled(
+            QPushButton(), "snapshot", "Снимок", "Снимок кадра",
             "Записать этот один кадр в PNG, рядом с тем, куда идёт видео. В "
             f"{PREVIEW} это та же картинка, что записал бы рендер, в выбранном "
-            "размере; в Flat — раскладка так, как её показывает окно.",
+            "размере; в Развертке — каждый экран отдельно, в его родном размере.",
             name="qa_snapshot")
         snap.clicked.connect(self._snapshot)
         bar.addWidget(snap)
 
-        self.render_button = iconed(
-            QPushButton(), "render", "Рендер",
+        self.render_button = labeled(
+            QPushButton(), "render", "Рендер", "Рендер",
             "Записать весь диапазон, все экраны разом, в файл, названный "
             "слева. Вид сперва возвращается к целому кадру, так что "
             "записывается именно то, что в кадре.", name="qa_render")
         self.render_button.clicked.connect(self._start_export)
         bar.addWidget(self.render_button)
 
-        self.cancel_button = iconed(QPushButton(), "stop", "Отмена",
-                                    "Остановить рендер. Записанное к этому "
-                                    "моменту выбрасывается.",
-                                    name="qa_cancel")
+        # These two only while something is being written: without a render
+        # an empty bar was the brightest thing in the window.
+        self.cancel_button = labeled(QPushButton(), "stop", "Стоп",
+                                     "Остановить рендер",
+                                     "Записанное к этому моменту выбрасывается.",
+                                     name="qa_cancel")
         self.cancel_button.setEnabled(False)
+        self.cancel_button.setVisible(False)
         self.cancel_button.clicked.connect(self._cancel_export)
         bar.addWidget(self.cancel_button)
 
         self.progress = QProgressBar()
         self.progress.setObjectName("qa_progress")
         self.progress.setFixedWidth(150)
+        self.progress.setTextVisible(False)
+        self.progress.setVisible(False)
         bar.addWidget(self.progress)
 
         self.eta = QLabel()
         self.eta.setObjectName("qa_eta")
         self.eta.setFont(QFont(MONO, 9))
+        self.eta.setStyleSheet(f"color:{theme.QUIET}; background:transparent;")
         self.eta.setMinimumWidth(200)
+        self.eta.setSizePolicy(QSizePolicy.Policy.Ignored,
+                               QSizePolicy.Policy.Preferred)
         bar.addWidget(self.eta, 1)
+
+        self.open_out = labeled(QPushButton(), "directory", "Открыть папку",
+                                "Открыть папку с записанным", "",
+                                name="qa_open_out")
+        self.open_out.clicked.connect(self._open_out)
+        self.open_out.setVisible(False)
+        bar.addWidget(self.open_out)
 
         self.out_dir = logfile.app_dir() / "OUT"
         self.job = None
@@ -3101,15 +3416,15 @@ class Viewer(QMainWindow):
                     written.append(
                         self._write_png(picture, folder, SHORT.get(name, name), at))
         except Exception as error:  # noqa: BLE001 -- said in the window
-            self.eta.setText(f"snapshot failed: {error}")
+            self.eta.setText(f"Снимок не записан: {error}")
             logfile.write(f"snapshot failed: {error}")
             return
 
         if not written:
-            self.eta.setText("nothing to snapshot")
+            self.eta.setText("Снимать нечего: ничего не загружено")
             return
-        self.eta.setText(f"-> {SNAPSHOTS}/{written[0].name}"
-                         + (f" and {len(written) - 1} more" if len(written) > 1
+        self.eta.setText(f"Снимок: {SNAPSHOTS}/{written[0].name}"
+                         + (f" и ещё {len(written) - 1}" if len(written) > 1
                             else ""))
         for path in written:
             logfile.write(f"snapshot: {path}")
@@ -3162,7 +3477,8 @@ class Viewer(QMainWindow):
         else:
             frame = self.mesh.frame if self.mesh else (2048, 2048)
             self.size_choice.addItem("1080x1920", (1080, 1920))
-            for label, divide in (("Full", 1), ("Half", 2), ("Quarter", 4)):
+            for label, divide in (("Полный", 1), ("Половина", 2),
+                                  ("Четверть", 4)):
                 wide, tall = frame[0] // divide, frame[1] // divide
                 self.size_choice.addItem(f"{label} {wide}x{tall}", (wide, tall))
         if was:
@@ -3235,25 +3551,25 @@ class Viewer(QMainWindow):
         bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(6)
 
-        bar.addWidget(QLabel("ReBake"))
+        bar.addWidget(QLabel("Перепечь"))
         self.rebake_what = QComboBox()
         self.rebake_what.setObjectName("qa_rebake_what")
         self.rebake_what.setFixedWidth(104)
         # Clean first, because it is the default: it leaves the fade the
         # author made and only takes away what a premultiplied reading would
         # bloom on. Dither is the stronger medicine and is chosen on purpose.
-        self.rebake_what.addItem("Clean", rebake.CLEAN)
-        self.rebake_what.addItem("Dither", rebake.DITHER)
+        self.rebake_what.addItem("Чистка", rebake.CLEAN)
+        self.rebake_what.addItem("Дизер", rebake.DITHER)
         self.rebake_what.setToolTip(
-            "Dither превращает альфу в одни только 0 и 255 по неподвижной "
+            "Дизер превращает альфу в одни только 0 и 255 по неподвижной "
             "карте голубого шума и уводит цвет вместе с ней — после этого два "
-            "чтения файла не могут различаться вовсе. Clean альфу не трогает "
+            "чтения файла не могут различаться вовсе. Чистка альфу не трогает "
             "и стирает цвет там, где альфа ниже порога: фейд остаётся фейдом, "
             "а худшее из того, что показывает премультиплаед, уходит.")
         self.rebake_what.currentIndexChanged.connect(self._rebake_changed)
         bar.addWidget(self.rebake_what)
 
-        bar.addWidget(QLabel("below"))
+        bar.addWidget(QLabel("порог"))
         self.rebake_threshold = QSpinBox()
         self.rebake_threshold.setObjectName("qa_rebake_below")
         self.rebake_threshold.setRange(0, 255)
@@ -3261,31 +3577,31 @@ class Viewer(QMainWindow):
         self.rebake_threshold.setFixedWidth(64)
         self.rebake_threshold.setKeyboardTracking(False)
         self.rebake_threshold.setToolTip(
-            "Clean стирает цвет под любой альфой ниже этого значения, в том "
+            "Чистка стирает цвет под любой альфой ниже этого значения, в том "
             "счёте, в каком ведёт его файл, от 0 до 255. Восьмёрка не "
             "отличима от прозрачного: убирает грязь и оставляет фейд.")
         self.rebake_threshold.valueChanged.connect(self._rebake_changed)
         bar.addWidget(self.rebake_threshold)
 
-        bar.addWidget(QLabel("colour"))
+        bar.addWidget(QLabel("цвет"))
         self.rebake_colour = QComboBox()
         self.rebake_colour.setObjectName("qa_rebake_colour")
         self.rebake_colour.setFixedWidth(104)
-        self.rebake_colour.addItem("Multiply", rebake.MULTIPLY)
-        self.rebake_colour.addItem("Keep", rebake.KEEP)
-        self.rebake_colour.addItem("Clamp", rebake.CLAMP)
+        self.rebake_colour.addItem("Умножить", rebake.MULTIPLY)
+        self.rebake_colour.addItem("Оставить", rebake.KEEP)
+        self.rebake_colour.addItem("Прижать", rebake.CLAMP)
         self.rebake_colour.setToolTip(
-            "Что происходит с цветом выше порога. Keep оставляет фейд ровно "
-            "таким, каким он сделан. Clamp прижимает каждый канал к его "
+            "Что происходит с цветом выше порога. «Оставить» — фейд ровно "
+            "такой, каким он сделан. «Прижать» прижимает каждый канал к его "
             "собственной альфе: вспышка уходит, но появляется излом — канал "
-            "либо не тронут, либо срезан. Multiply вместо этого сворачивает "
+            "либо не тронут, либо срезан. «Умножить» вместо этого сворачивает "
             "цвет с его альфой; это масштаб, а не потолок, поэтому излома нет "
             "нигде: премультиплаед становится верным чтением, а стрэйт "
             "расплачивается тем, что применяет альфу второй раз.")
         self.rebake_colour.currentIndexChanged.connect(self._rebake_changed)
         bar.addWidget(self.rebake_colour)
 
-        bar.addWidget(QLabel("as"))
+        bar.addWidget(QLabel("в"))
         self.rebake_format = QComboBox()
         self.rebake_format.setObjectName("qa_rebake_format")
         self.rebake_format.setFixedWidth(126)
@@ -3352,12 +3668,13 @@ class Viewer(QMainWindow):
         self.rebake_progress.setObjectName("qa_rebake_progress")
         self.rebake_progress.setFixedWidth(150)
         self.rebake_progress.setTextVisible(False)
+        self.rebake_progress.setVisible(False)       # only while re-baking
         bar.addWidget(self.rebake_progress)
 
         self.rebake_note = QLabel()
         self.rebake_note.setObjectName("qa_rebake_note")
         self.rebake_note.setFont(QFont(MONO, 9))
-        self.rebake_note.setStyleSheet("color:#9a9a9a;")
+        self.rebake_note.setStyleSheet("color:#8d97a5;")
         bar.addWidget(self.rebake_note, 1)
         return holder
 
@@ -3391,7 +3708,7 @@ class Viewer(QMainWindow):
             self.noise_job = jobs.NoiseJob(missing, parent=self)
             self.noise_job.ready.connect(self._noise_ready)
             self.noise_job.start()
-            self.rebake_note.setText("building the threshold map...")
+            self.rebake_note.setText("строю карту порогов…")
         return False
 
     def _noise_ready(self, made: dict) -> None:
@@ -3488,9 +3805,9 @@ class Viewer(QMainWindow):
             box.currentIndexChanged.connect(
                 lambda _: (self.touch(), self._remember()))
 
-        self.rebake_before = QLabel("before", self.canvas)
+        self.rebake_before = QLabel("файл", self.canvas)
         self.rebake_before.setObjectName("qa_rebake_before")
-        self.rebake_after = QLabel("after", self.canvas)
+        self.rebake_after = QLabel("перепечка", self.canvas)
         self.rebake_after.setObjectName("qa_rebake_after")
         for tag in (self.rebake_before, self.rebake_after):
             tag.setFont(QFont(MONO, 9))
@@ -3771,6 +4088,9 @@ class Viewer(QMainWindow):
     TRANSPORT_KEYS = (Qt.Key.Key_Space, Qt.Key.Key_Left, Qt.Key.Key_Right)
     # And in Шоу, these as well. Letters by the key rather than the character,
     # so they work on a Russian layout the same.
+    # And in both: ? for the card of keys, Shift+I and Shift+O for the range.
+    ALWAYS_KEYS = (Qt.Key.Key_Question, Qt.Key.Key_Slash, Qt.Key.Key_I,
+                   Qt.Key.Key_O)
     SHOW_KEYS = (Qt.Key.Key_I, Qt.Key.Key_O, Qt.Key.Key_L, Qt.Key.Key_F,
                  Qt.Key.Key_Home, Qt.Key.Key_End, Qt.Key.Key_Question,
                  Qt.Key.Key_Slash, Qt.Key.Key_K, Qt.Key.Key_Z, Qt.Key.Key_Y,
@@ -3788,9 +4108,10 @@ class Viewer(QMainWindow):
                 self._hint(None)
         if (event.type() == QEvent.Type.KeyPress
                 and (event.key() in self.TRANSPORT_KEYS
+                     or event.key() in self.ALWAYS_KEYS
+                     or event.text() == "?"
                      or (self.level == "show"
-                         and (event.key() in self.SHOW_KEYS
-                              or event.text() == "?")))
+                         and event.key() in self.SHOW_KEYS))
                 and self._transport_key(event)):
             return True
         return super().eventFilter(watched, event)
@@ -3841,6 +4162,15 @@ class Viewer(QMainWindow):
             return False
         keys = event.modifiers()
         control = bool(keys & Qt.KeyboardModifier.ControlModifier)
+        shift = bool(keys & Qt.KeyboardModifier.ShiftModifier)
+        key = event.key()
+        if event.text() == "?" or key == Qt.Key.Key_Question \
+                or (key == Qt.Key.Key_Slash and shift):
+            self._toggle_keys()
+            return True
+        if shift and not control and key in (Qt.Key.Key_I, Qt.Key.Key_O):
+            self._range_here(key == Qt.Key.Key_O)
+            return True
         if self.level == "show" and self._show_key(event, control):
             return True
         others = keys & ~(Qt.KeyboardModifier.ControlModifier
@@ -3867,10 +4197,6 @@ class Viewer(QMainWindow):
         if keys & Qt.KeyboardModifier.AltModifier:
             return False
         key = event.key()
-        if event.text() == "?" or key == Qt.Key.Key_Question \
-                or (key == Qt.Key.Key_Slash and shift):
-            self._toggle_keys()
-            return True
         if shift and not control and key in (Qt.Key.Key_Left,
                                              Qt.Key.Key_Right):
             self._jump_by(-1.0 if key == Qt.Key.Key_Left else 1.0)
@@ -3974,10 +4300,21 @@ class Viewer(QMainWindow):
             tag.adjustSize()
             tag.move(int(middle - tag.width() / 2),
                      max(edge, tall - tag.height() - edge - foot))
+        if hasattr(self, "empty_card"):
+            # Only in the quick look, only while nothing is loaded at all.
+            empty = (self.level == "view" and not getattr(self, "_full", False)
+                     and not any(row.field.text().strip() for row in self.rows))
+            self.empty_card.setVisible(empty)
+            if empty:
+                self.empty_card.adjustSize()
+                self.empty_card.move(
+                    max(edge, (wide - self.empty_card.width()) // 2),
+                    max(edge, (tall - self.empty_card.height()) // 2))
+                self.empty_card.raise_()
         if hasattr(self, "keys_button"):
-            # Bottom left of the picture, in Шоу only, and the card above the
-            # button that raises it.
-            showing = self.level == "show"
+            # Bottom left of the picture, in both levels, and the card above
+            # the button that raises it.
+            showing = True
             button, card = self.keys_button, self.keys_card
             button.setVisible(showing)
             card.setVisible(showing and self._keys_open)
@@ -3989,8 +4326,11 @@ class Viewer(QMainWindow):
                 card.move(edge, max(edge, button.y() - card.height() - 6))
                 card.raise_()
         if hasattr(self, "levels_panel"):
-            # Against the right edge, under the buttons in that corner.
-            showing = self.level == "show" and not getattr(self, "_full", False)
+            # Against the right edge, under the buttons in that corner. The
+            # frame's brightness only where there is a frame: the quick look.
+            showing = not getattr(self, "_full", False)
+            for widget in self.levels_lines.get("Frame", ()):
+                widget.setVisible(self.level == "view")
             panel, tab = self.levels_panel, self.levels_tab
             panel.setVisible(showing and self._levels_open)
             tab.setVisible(showing and not self._levels_open)
@@ -4059,7 +4399,7 @@ class Viewer(QMainWindow):
         self.rebake_get.setVisible(missing and depends.can_download())
         self._lay_overlays()
         if missing:
-            self.rebake_note.setText(f"no ffmpeg here has the {needs} encoder")
+            self.rebake_note.setText(f"ни в одном ffmpeg здесь нет кодировщика {needs}")
 
     def _get_ffmpeg(self) -> None:
         """Fetch one that has it, saying so on the re-bake's own progress bar."""
@@ -4069,7 +4409,7 @@ class Viewer(QMainWindow):
         self.rebake_button.setEnabled(False)
         self.rebake_progress.setRange(0, 100)
         self.rebake_progress.setValue(0)
-        self.rebake_note.setText("fetching ffmpeg...")
+        self.rebake_note.setText("качаю ffmpeg…")
         logfile.write("rebake: fetching an ffmpeg that has the encoder")
         self.job = jobs.DownloadJob(self)
         self.job.progress.connect(self._ffmpeg_progress)
@@ -4088,7 +4428,7 @@ class Viewer(QMainWindow):
         self.rebake_get.setEnabled(True)
         self.rebake_button.setEnabled(True)
         self.rebake_progress.setValue(0)
-        self.rebake_note.setText(f"could not fetch it: {why[:60]}")
+        self.rebake_note.setText(f"не скачалось: {why[:60]}")
         logfile.write(f"rebake: could not fetch ffmpeg: {why}")
 
     def _ffmpeg_here(self, where: str) -> None:
@@ -4102,7 +4442,7 @@ class Viewer(QMainWindow):
         logfile.write(f"rebake: ffmpeg fetched to {where}")
         self._offer_ffmpeg()
         if not self.rebake_get.isVisible():
-            self.rebake_note.setText("ready -- that one has the encoder")
+            self.rebake_note.setText("готово — в этом кодировщик есть")
 
     def _rebake_changed(self, *_) -> None:
         """Hand the panel's settings to the screens that are showing."""
@@ -4153,7 +4493,7 @@ class Viewer(QMainWindow):
     def _probe(self) -> None:
         """This frame, both screens, at the size the file really is."""
         if not self.screens:
-            self.rebake_note.setText("nothing loaded to probe")
+            self.rebake_note.setText("пробовать нечего: ничего не загружено")
             return
         what, threshold, colour = self._rebake_recipe()
         folder = self.out_dir / rebake.PROBES
@@ -4174,11 +4514,11 @@ class Viewer(QMainWindow):
                 self._write_rgba(self.painter.frame_of(screen), target)
                 written.append(target)
         except Exception as error:  # noqa: BLE001 -- said in the window
-            self.rebake_note.setText(f"probe failed: {error}")
-            logfile.write(f"probe failed: {error}")
+            self.rebake_note.setText(f"проба не удалась: {error}")
+            logfile.write(f"проба не удалась: {error}")
             return
         if not written:
-            self.rebake_note.setText("no screen here carries an alpha")
+            self.rebake_note.setText("ни у одного экрана здесь нет альфы")
             return
         self.rebake_note.setText(
             f"-> {rebake.PROBES}/{written[0].name}"
@@ -4197,18 +4537,18 @@ class Viewer(QMainWindow):
 
     def _start_rebake(self) -> None:
         if self.job is not None or not self.streams:
-            self.rebake_note.setText("nothing loaded to re-bake")
+            self.rebake_note.setText("перепекать нечего: ничего не загружено")
             return
         if not depends.ffmpeg_version():
-            self.rebake_note.setText("ffmpeg is missing; it writes the file")
+            self.rebake_note.setText("перепечь нечем: не найден ffmpeg")
             return
         work, skipped = self._rebake_work()
         if not work:
-            self.rebake_note.setText("no screen here carries an alpha")
+            self.rebake_note.setText("ни у одного экрана здесь нет альфы")
             return
         already = [target.name for _, target in work if target.exists()]
         if already:
-            self.rebake_note.setText(f"{already[0]} exists -- move it aside")
+            self.rebake_note.setText(f"{already[0]} уже есть — уберите его")
             return
 
         # Asked before the first frame rather than found out when the pipe
@@ -4218,7 +4558,7 @@ class Viewer(QMainWindow):
         needs = rebake.ENCODERS.get(kind, "")
         if needs and not depends.can_encode(needs):
             self.rebake_note.setText(
-                f"no ffmpeg here has the {needs} encoder"
+                f"ни в одном ffmpeg здесь нет кодировщика {needs}"
                 + ("  -- the button beside the format fetches one"
                    if depends.can_download() else ""))
             logfile.write(
@@ -4244,9 +4584,10 @@ class Viewer(QMainWindow):
         self.rebake_button.setEnabled(False)
         self.probe_button.setEnabled(False)
         self.rebake_stop.setEnabled(True)
+        self.rebake_progress.setVisible(True)
         self.rebake_progress.setRange(0, 1)
         self.rebake_progress.setValue(0)
-        self.rebake_note.setText("re-baking...")
+        self.rebake_note.setText("перепекаю…")
 
         # Kept for the swap at the end: the job reports what it wrote, and
         # this says what each of those was made from.
@@ -4267,7 +4608,7 @@ class Viewer(QMainWindow):
 
     def _rebake_failed(self, why: str) -> None:
         self._rebake_over()
-        self.rebake_note.setText("cancelled" if why == "cancelled" else why[:70])
+        self.rebake_note.setText("остановлено" if why == "cancelled" else why[:70])
         logfile.write(f"rebake: {why}")
 
     @staticmethod
@@ -4323,11 +4664,11 @@ class Viewer(QMainWindow):
         # for somewhere else -- it is not the format the wall plays -- so it
         # stays under its own name and the sources are not touched.
         if int(self.rebake_format.currentData()) != rebake.HAPM:
-            self.rebake_note.setText("wrote " + ", ".join(names))
+            self.rebake_note.setText("записано: " + ", ".join(names))
             return
         moved, stuck = self._swap_in(getattr(self, "_rebake_pairs", []))
         if stuck:
-            self.rebake_note.setText("written, but not put in place -- "
+            self.rebake_note.setText("записано, но не встало на место — "
                                      + stuck[0][:60])
             logfile.write("rebake: could not swap: " + "; ".join(stuck))
             return
@@ -4336,13 +4677,14 @@ class Viewer(QMainWindow):
                 f"{len(moved)} in place; the old kept as "
                 + ", ".join(aside.name for _, aside in moved))
         else:
-            self.rebake_note.setText("wrote " + ", ".join(names))
+            self.rebake_note.setText("записано: " + ", ".join(names))
 
     def _rebake_over(self) -> None:
         self.job = None
         self.rebake_button.setEnabled(True)
         self.probe_button.setEnabled(True)
         self.rebake_stop.setEnabled(False)
+        self.rebake_progress.setVisible(False)
         self.canvas.set_update_mode("ondemand")
         self.touch()
 
@@ -4450,6 +4792,39 @@ class Viewer(QMainWindow):
             name = f"{stem}_v2{dot}{suffix}" if dot else f"{name}_v2"
         self.out_name.setText(name)
 
+    def _range_here(self, end: bool) -> None:
+        """The render's first or last frame, where the playhead stands."""
+        at, _ = self._frame_now()
+        box = self.last_frame if end else self.first_frame
+        box.setValue(at)
+        self._range_changed()
+        self._say_range()
+
+    def _range_from_show(self, first: int, last: int) -> None:
+        """A clip of the show, as the render's range: show frames in, frames
+        of the grid it is watched on out."""
+        grid = self.clock.rate or 60.0
+        begins = int(round(first * grid / showfile.FPS))
+        ends = max(begins, int(round(last * grid / showfile.FPS)) - 1)
+        self.first_frame.setValue(begins)
+        self.last_frame.setValue(ends)
+        self._say_range()
+
+    def _say_range(self) -> None:
+        """Mark the render's range where time is shown, when it is not all."""
+        if not hasattr(self, "slider"):
+            return
+        _, last = self._frame_now()
+        begins, ends = self.first_frame.value(), self.last_frame.value()
+        whole = last <= 0 or (begins, ends) == (0, last)
+        count = max(1, last + 1)
+        self.slider.set_range(None if whole
+                              else (begins / count, (ends + 1) / count))
+        grid = self.clock.rate or 60.0
+        self.show_view.set_render_range(
+            None if whole else (begins * showfile.FPS / grid,
+                                (ends + 1) * showfile.FPS / grid))
+
     def _range_changed(self, *_) -> None:
         """Keep the end at or after the beginning, whichever was moved."""
         if self.last_frame.value() < self.first_frame.value():
@@ -4476,7 +4851,7 @@ class Viewer(QMainWindow):
         self.last_frame.setValue(last)
 
     def _note_output(self) -> None:
-        self.eta.setText(f"-> {self.out_dir}")
+        self.eta.setText(f"в {self.out_dir}")
 
     # -- rendering it out ------------------------------------------------------
 
@@ -4534,12 +4909,13 @@ class Viewer(QMainWindow):
         """The strips, each written on its own, at the wall's own size."""
         work = self._flat_work()
         if not work:
-            self.eta.setText("nothing loaded to write")
+            self.eta.setText("Нечего записывать: ничего не загружено")
             return
         already = [target.name for _, _, target, _, _ in work
                    if target.exists()]
         if already:
-            self.eta.setText(f"{already[0]} exists -- move it aside")
+            self.eta.setText(f"{already[0]} уже есть — уберите его или "
+                             "смените имя")
             return
 
         kind, _ = self.format_choice.currentData()
@@ -4576,6 +4952,7 @@ class Viewer(QMainWindow):
         self.canvas.set_update_mode("manual")
         self.render_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
+        self._writing(True)
         self.progress.setRange(0, count * len(work))
         self.progress.setValue(0)
 
@@ -4596,7 +4973,7 @@ class Viewer(QMainWindow):
         if self.job is not None or self.solid is None:
             return
         if not depends.ffmpeg_version():
-            self.eta.setText("ffmpeg is missing; it is what writes the file")
+            self.eta.setText("Видео записать нечем: не найден ffmpeg")
             logfile.write("render refused: no ffmpeg on this machine")
             return
         # Flat is not one picture: it is the screens laid out to be read one
@@ -4607,7 +4984,7 @@ class Viewer(QMainWindow):
         in_show = self.level == "show"
         if not self.streams and not (in_show and (self.mix is not None
                                                   or self.show_motors)):
-            self.eta.setText("nothing loaded to write")
+            self.eta.setText("Нечего записывать: ничего не загружено")
             return
         # Written back into the box as well, so that what is about to be
         # made and what is on screen are the same string.
@@ -4615,7 +4992,8 @@ class Viewer(QMainWindow):
         self.out_name.setText(name)
         target = self.out_dir / name
         if target.exists():
-            self.eta.setText(f"{target.name} exists -- press +1 version")
+            self.eta.setText(f"{target.name} уже есть — нажмите +1, "
+                             "чтобы записать следующей версией")
             return
 
         # Back to the whole frame before a single frame is written. On screen
@@ -4672,6 +5050,7 @@ class Viewer(QMainWindow):
         self.canvas.set_update_mode("manual")
         self.render_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
+        self._writing(True)
         self.progress.setRange(0, count)
         self.progress.setValue(0)
 
@@ -4718,7 +5097,8 @@ class Viewer(QMainWindow):
 
     def _export_progress(self, done, total, fps, eta) -> None:
         self.progress.setValue(done)
-        self.eta.setText(f"{done}/{total}   {fps:.1f} fps   ETA {eta:.0f} s")
+        self.eta.setText(f"{done} из {total}   {fps:.1f} к/с   "
+                         f"осталось {eta:.0f} с")
 
     def _backing_back(self) -> None:
         """Put the backing back, if writing an alpha took it off."""
@@ -4726,7 +5106,25 @@ class Viewer(QMainWindow):
             self.backing.setCurrentText(self._backing_was)
             self._backing_was = None
 
+    def _open_out(self) -> None:
+        """The folder the render went into, in the file manager."""
+        folder = str(self.out_dir)
+        opener = {"win32": ["explorer"], "darwin": ["open"]}.get(
+            sys.platform, ["xdg-open"])
+        try:
+            subprocess.Popen(opener + [folder])
+        except OSError as trouble:  # noqa: BLE001 -- said in the log
+            logfile.write(f"could not open {folder}: {trouble}")
+
+    def _writing(self, on: bool) -> None:
+        """While a file is being written: the bar that says how far, and Stop."""
+        self.progress.setVisible(on)
+        self.cancel_button.setVisible(on)
+        if on:
+            self.open_out.setVisible(False)
+
     def _export_finished(self) -> None:
+        self._writing(False)
         self.job = None
         self._backing_back()
         if self._mix_file is not None:
@@ -4742,14 +5140,18 @@ class Viewer(QMainWindow):
 
     def _export_failed(self, message: str) -> None:
         lines = message.strip().splitlines() or [message]
-        self.eta.setText(lines[0][:70])
+        self.eta.setText("Остановлено" if lines[0] == "cancelled"
+                         else "Не записано: " + lines[0][:70])
         logfile.write("RENDER FAILED: " + message)
         self._export_finished()
 
     def _export_done(self, result: dict) -> None:
         self.progress.setValue(self.progress.maximum())
-        self.eta.setText(f"{result['frames']} frames in {result['seconds']:.0f} s "
-                         f"({result['fps']:.1f} fps)")
+        self.open_out.setVisible(True)
+        self.open_out.setToolTip(str(self.out_dir))
+        self.eta.setText(f"Записано: {result['frames']} кадров за "
+                         f"{result['seconds']:.0f} с "
+                         f"({result['fps']:.1f} к/с)")
         logfile.write(f"saved: {result['output']}  ({result['encoder']})")
         if result.get("complaints"):
             logfile.write("ffmpeg said: " + result["complaints"])
@@ -4869,7 +5271,7 @@ class Viewer(QMainWindow):
             text = row.field.text().strip()
             row._shown()
             row.note.setText("")
-            row.note.setStyleSheet("color:#8fbf8f;")
+            row.note.setStyleSheet("color:#8d97a5;")
             if not text:
                 continue
             try:
@@ -4877,7 +5279,7 @@ class Viewer(QMainWindow):
                 if not clips or clips[0].missing:
                     # Asked again, strictly this time, for the reason.
                     showfile.media_frames(text, strict=True)
-                    raise showfile.ShowError(f"{Path(text).name} will not open")
+                    raise showfile.ShowError(f"{Path(text).name} не открывается")
                 # A frame keeps its own size: where it sits on the screen is
                 # decided below, not by resampling it into the screen's shape.
                 stream = player.Track(
@@ -4886,7 +5288,7 @@ class Viewer(QMainWindow):
                 screen = screen_gpu.Screen(self.device, stream.movie)
             except Exception as error:  # noqa: BLE001 -- shown beside the field
                 row.note.setText(str(error)[:60])
-                row.note.setStyleSheet("color:#e06c6c;")
+                row.note.setStyleSheet("color:#e25c5c;")
                 logfile.write(f"{text}: {error}")
                 continue
             stream.start()
@@ -4956,6 +5358,7 @@ class Viewer(QMainWindow):
         # and its range from how long they are.
         self._name_from_sources()
         self._reset_range()
+        self._lay_overlays()
         # The files above all: what somebody dragged in is the expensive part
         # to do again, so it is written down as soon as it is loaded and not
         # left to depend on the window being closed politely.
@@ -4971,10 +5374,10 @@ class Viewer(QMainWindow):
         rate = float(getattr(movie, "rate", 0.0) or 0.0)
         if rate:
             row.note.setText(f"{movie.width}x{movie.height}  {movie.kind}  "
-                             f"{rate:g} fps  {stream.duration:.2f} s")
+                             f"{rate:g} к/с  {stream.duration:.2f} с")
         elif getattr(movie, "was_fitted", False):
             came = movie.came_as
-            row.note.setText(f"{came[0]}x{came[1]} fitted into "
+            row.note.setText(f"{came[0]}x{came[1]} вписана в "
                              f"{movie.width}x{movie.height}  {movie.kind}")
         else:
             row.note.setText(f"{movie.width}x{movie.height}  {movie.kind}")
@@ -5409,7 +5812,7 @@ class Viewer(QMainWindow):
         for name, box in self._strips(showing, width, height):
             x, y, wide, high = box
             behind = (self.solid.calibration.get(name)
-                      if self.solid and self.backing.currentText() == "Calibration"
+                      if self.solid and self.backing.currentData() == "Calibration"
                       else None)
             if behind is not None:
                 self.painter.draw_picture(encoder, behind, view, viewport=box)
@@ -5532,7 +5935,7 @@ class Viewer(QMainWindow):
         except Exception as error:  # noqa: BLE001 -- shown beside the field
             self.track = None
             row.note.setText(str(error)[:60])
-            row.note.setStyleSheet("color:#e06c6c;")
+            row.note.setStyleSheet("color:#e25c5c;")
             logfile.write(f"{text}: {error}")
             return
         self.player.set_volume(row.multiplier)
@@ -5542,7 +5945,7 @@ class Viewer(QMainWindow):
                                      if self.player is not None
                                      and self.player.playing else None)
         row.note.setText(self.track.describe())
-        row.note.setStyleSheet("color:#8fbf8f;")
+        row.note.setStyleSheet("color:#8d97a5;")
         logfile.write(f"{Path(text).name}: {self.track.describe()}")
         if self.clock.playing:
             self.player.play()
@@ -5561,7 +5964,7 @@ class Viewer(QMainWindow):
             return
         row._shown()
         row.note.setText("")
-        row.note.setStyleSheet("color:#8fbf8f;")
+        row.note.setStyleSheet("color:#8d97a5;")
         self.motors = None
         self._moved_to = None
         text = row.field.text().strip()
@@ -5588,7 +5991,7 @@ class Viewer(QMainWindow):
             self.solid.rest_cells()
             self._pick_top()
             row.note.setText(str(error)[:60])
-            row.note.setStyleSheet("color:#e06c6c;")
+            row.note.setStyleSheet("color:#e25c5c;")
             logfile.write(f"{', '.join(Path(one).name for one in chain)}: {error}")
             self._say_sources()
             return
@@ -5602,7 +6005,7 @@ class Viewer(QMainWindow):
         row.note.setText(said)
         for bad in self.motors.complaints():
             row.note.setText(bad[:60])
-            row.note.setStyleSheet("color:#d9a441;")
+            row.note.setStyleSheet("color:#f08c4a;")
             logfile.write(f"kinetic: {bad}")
         self._mark_span()
         logfile.write(", ".join(Path(one).name for one in chain)
@@ -5671,7 +6074,7 @@ class Viewer(QMainWindow):
         its own proportions kept, which leaves the screen showing on two sides
         -- the frame's alpha decides what happens to the rest.
         """
-        if row.how is None or row.how.currentText() == "Stretch":
+        if row.how is None or row.how.currentData() == "Stretch":
             return (1.0, 1.0)
         across, down = self._pixels(row.screen)
         if min(across, down, movie.width, movie.height) < 1:
@@ -5727,7 +6130,7 @@ class Viewer(QMainWindow):
                     break
 
         behind = None
-        if not bare and self.backing.currentText() == "Calibration":
+        if not bare and self.backing.currentData() == "Calibration":
             drawer = self.solid
             behind = drawer.calibration.get(name) if drawer else None
         if behind is not None:
@@ -5783,45 +6186,64 @@ class Viewer(QMainWindow):
                 slider.blockSignals(True)
                 slider.setValue(where)
                 slider.blockSignals(False)
-        self.time_label.setText(f"{seconds:6.2f} / {self.clock.duration:.2f} s")
-
-        # Counted at the rate the sources run at, not the rate being written:
-        # this number is for finding a moment in the material.
+        # Counted on the grid the piece is watched on, not the rate being
+        # written: this number is for finding a moment in the material. One
+        # reading -- the timecode, and the frame out of how many there are.
         at, last = self._frame_now()
-        self.frame_label.setText(f"frame {at:>5d} / {last}")
-        self.full_time.setText(f"frame {at:>5d} / {last}    "
-                               f"{seconds:6.2f} / {self.clock.duration:.2f} s")
+        code = showfile.timecode(at, self.clock.rate or 60.0)
+        self.time_label.setText(code)
+        self.frame_label.setText(f"кадр {at} из {last + 1}")
+        self.full_time.setText(f"{code}   кадр {at} из {last + 1}")
 
         # Only a rate while something is playing: drawing happens on demand,
         # so between changes "frames a second" would just measure how often
         # somebody touched the mouse.
-        pace = (f"drawing {self.shown_fps:5.1f} fps, {self.draw_ms:.2f} ms a frame"
+        pace = (f"рисует {self.shown_fps:4.1f} к/с, {self.draw_ms:.2f} мс на кадр"
                 if self.clock.playing else
-                f"idle, last frame took {self.draw_ms:.2f} ms")
+                f"стоит, последний кадр {self.draw_ms:.2f} мс")
         # Where the free camera is standing, while there is one. Otherwise
         # there is no way to say what you are looking at, or to get back to it.
         if self.inspecting() and self.solid is not None and self.solid.free:
-            pace = f"{pace}   camera {self.solid.free.describe()}"
+            pace = f"{pace}   камера {self.solid.free.describe()}"
         head = (f"{self.adapter.info.get('device', '?')} "
                 f"({self.adapter.info.get('backend_type', '?')})   {pace}")
-        lines = []
-        for stream in self.streams:
+        lines, dropped = [], 0
+        for index, stream in enumerate(self.streams):
             counts = stream.counts
             if stream.movie is None:
                 continue          # a show's track between two clips
-            lines.append(
-                f"  {stream.movie.path.name[:26]:26s} "
-                f"{stream.movie.width:5d}x{stream.movie.height:<5d} "
-                f"read {counts.read:6d}  dropped {counts.dropped:5d}  "
-                f"skipped {counts.skipped:5d}  starved {counts.starved:5d}  "
-                f"demux {counts.demux_ms:5.2f}  unpack {counts.unpack_ms:5.2f} ms"
-                + (f"   {stream.error}" if stream.error else "")
-                + ("   at the end" if stream.at_end else ""))
+            dropped += counts.dropped
+            feeds = self.feeding[index] if index < len(self.feeding) else ""
+            row = ("Frame" if index == self.frame_at
+                   else theme.BAKED.get(feeds, ""))
+            text = (f"{stream.movie.path.name[:26]:26s} "
+                    f"{stream.movie.width:5d}x{stream.movie.height:<5d} "
+                    f"прочитано {counts.read:6d}  выброшено {counts.dropped:5d}  "
+                    f"пропущено {counts.skipped:5d}  ждали {counts.starved:5d}  "
+                    f"демукс {counts.demux_ms:5.2f}  "
+                    f"распаковка {counts.unpack_ms:5.2f} мс"
+                    + (f"   {stream.error}" if stream.error else "")
+                    + ("   в конце" if stream.at_end else ""))
+            lines.append(theme.cell_html(row) + " " + html.escape(text))
+        # Frames thrown away because they came too late are what a stutter
+        # is. Folded, the line says how many; while the number is growing it
+        # says so in the colour that asks for attention.
+        now = time.perf_counter()
+        if dropped > self._dropped_seen:
+            self._dropped_grew = now
+        self._dropped_seen = dropped
+        growing = now - self._dropped_grew < 3.0
         arrow = "\u25be" if self.stats_open else "\u25b8"
+        mark = f"   · выброшено кадров {dropped}" if dropped else ""
         more = "" if self.stats_open or not lines else \
-            f"   ({len(lines)} файлов)"
-        self.stats_head.setText(f"{arrow} {head}{more}")
-        self.stats.setText("\n".join(lines))
+            f"   · файлы: {len(lines)}"
+        self.stats_head.setText(f"{arrow} {head}{mark}{more}")
+        if growing != getattr(self, "_stats_warn", None):
+            self._stats_warn = growing
+            self.stats_head.setStyleSheet(FOLD_HEADER_WARN if growing
+                                          else FOLD_HEADER)
+        self.stats.setText('<div style="white-space:pre">'
+                           + "<br>".join(lines) + "</div>")
         self.stats.setVisible(self.stats_open and bool(lines))
 
     def _fold_stats(self, open_it=None) -> None:
@@ -5844,18 +6266,8 @@ class Viewer(QMainWindow):
         super().closeEvent(event)
 
 
-STYLESHEET = """
-QWidget { background:#232323; color:#dcdcdc; font-size:12px; }
-QLineEdit { background:#1b1b1b; border:1px solid #3a3a3a; border-radius:3px;
-            padding:3px; }
-QPushButton { background:#333; border:1px solid #454545; border-radius:3px;
-              padding:5px 12px; }
-QPushButton:hover { background:#3c3c3c; }
-QPushButton:disabled { color:#666; background:#2a2a2a; }
-QSlider::groove:horizontal { height:6px; background:#1b1b1b; border-radius:3px; }
-QSlider::handle:horizontal { width:12px; background:#4a7ea8; border-radius:3px;
-                             margin:-4px 0; }
-"""
+# The palette, as a style sheet: see theme.py.
+STYLESHEET = theme.sheet()
 
 
 def main() -> int:

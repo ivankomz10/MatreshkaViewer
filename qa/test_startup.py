@@ -27,7 +27,7 @@ def test_says_what_it_found(app):
     assert "ffmpeg" in line, line
     shown = app.says("qa_stats_header")
     assert "Vulkan" in shown or "D3D12" in shown or "Metal" in shown \
-        or "idle" in shown, f"the footer says {shown!r}"
+        or "стоит" in shown, f"the footer says {shown!r}"
 
 
 def test_carries_the_last_session_over(app):
@@ -37,12 +37,12 @@ def test_carries_the_last_session_over(app):
         assert path.endswith(f"qa_{row}.mov"), f"{row} holds {path!r}"
         note = app.says(f"qa_note_{row}")
         assert "x" in note, f"{row} says nothing about its file: {note!r}"
-    assert "frame" in app.says("qa_frame_label").lower()
+    assert "кадр" in app.says("qa_frame_label").lower()
 
 
 def test_the_whole_window_is_there(app):
     """Every control a test will reach for, on the screen and reachable."""
-    for qa in ("qa_mode", "qa_timeline", "qa_play", "qa_render", "qa_snapshot",
+    for qa in ("qa_mode_preview", "qa_timeline", "qa_play", "qa_render", "qa_snapshot",
                "qa_log", "qa_size", "qa_format", "qa_out_name", "qa_full",
                "qa_frame_edge_button", "qa_link", "qa_stats_header"):
         found = app.at(qa)
