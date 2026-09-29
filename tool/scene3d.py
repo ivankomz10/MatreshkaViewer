@@ -51,6 +51,8 @@ struct Frame {
     light: vec4<f32>,
     // x: 1 to show the moving cells in their own colours (`tints`) instead
     //    of the video -- the kinetic editor's mask; the viewer leaves it 0
+    // y: 1 to draw the back of the top screen's cells dark, as the backs of
+    //    the panels are, rather than showing the picture through from behind
     paint: vec4<f32>,
 };
 
@@ -59,7 +61,9 @@ struct Piece {
     colour: vec4<f32>,
     // x: which screen (0..2); y: 1 when this piece's cells move;
     // z: 1 when it is the top screen, whose far side can be dropped -- which
-    //    is both of its geometries, standing still or moving alike
+    //    is both of its geometries, standing still or moving alike;
+    // w: 1 for the moving cells drawn a second time as a ghost, from the
+    //    second half of `cells`, every other pixel
     which: vec4<f32>,
 };
 
@@ -94,12 +98,22 @@ fn vs_main(@location(0) point: vec3<f32>,
         // the vertex. It used to be `vertex_index / 6`, which held only while
         // a cell was six vertices in a row -- and it stopped holding the
         // moment the bake began splitting a corner off at the UV seam.
-        let moved = cells[u32(cell)];
+        // The ghost's cells stand in the second half of the buffer.
+        var at = u32(cell);
+        if (piece.which.w > 0.5) {
+            at = at + 1500u;
+        }
+        let moved = cells[at];
         here = (moved * vec4<f32>(point, 1.0)).xyz;
         facing = (moved * vec4<f32>(normal, 0.0)).xyz;
     }
     var out: VOut;
     out.pos = frame.view_projection * vec4<f32>(here, 1.0);
+    if (piece.which.w > 0.5) {
+        // Pulled towards the camera in depth only, so the ghost is seen over
+        // the cells it stands inside of; where on screen it falls is kept.
+        out.pos.z = out.pos.z * 0.2;
+    }
     out.normal = facing;
     out.uv = uv;
     out.cell = u32(cell);
@@ -287,6 +301,23 @@ fn fs_main(in: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f3
     if (piece.which.z > 0.5 && frame.light.w > 0.5 && !front) {
         discard;
     }
+    // The ghost is every other pixel of itself: seen through without a
+    // blend, so it keeps the one pipeline and its depth, and where it stands
+    // exactly where the solid cells do it is hidden by them.
+    if (piece.which.w > 0.5) {
+        let pixel = vec2<u32>(in.pos.xy);
+        // Its near side alone: drawn over everything, its far side would
+        // show through the building.
+        if (((pixel.x + pixel.y) & 1u) == 0u || !front) {
+            discard;
+        }
+    }
+    // The back of a panel is black and unlit -- the picture is on its face.
+    if (piece.which.z > 0.5 && frame.paint.y > 0.5 && !front) {
+        let n = normalize(in.normal);
+        let facing = abs(dot(n, normalize(frame.light.xyz)));
+        return vec4<f32>(vec3<f32>(0.015 + 0.035 * facing), 1.0);
+    }
     if (piece.colour.w > 0.5) {
         // A screen shows what it is given, unlit: it is a lamp, not a surface.
         var shown = screen_colour(i32(piece.which.x), in.uv);
@@ -301,6 +332,9 @@ fn fs_main(in: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f3
             }
             let over = tints[at + 1u];
             shown = mix(shown, over.rgb, over.a);
+            if (piece.which.w > 0.5) {
+                shown = mix(shown, vec3<f32>(0.85, 0.9, 1.0), 0.35);
+            }
         }
         return vec4<f32>(shown, 1.0);
     }

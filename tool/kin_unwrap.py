@@ -78,6 +78,7 @@ class Unwrap(QWidget):
         self.over = np.zeros((ROWS, PER_ROW, 4), np.float32)
         self.selection = np.zeros((ROWS, PER_ROW), bool)
         self.warn = np.zeros((ROWS, PER_ROW), bool)
+        self.lag = np.zeros((ROWS, PER_ROW), bool)
         self.tool = "brush"            # brush | select
         self.radius = 2.5              # cells
         self.hardness = 0.5
@@ -93,12 +94,17 @@ class Unwrap(QWidget):
         self.places = cell_places(self.front)
         self.update()
 
-    def set_colours(self, colours, over=None, warn=None) -> None:
+    def set_colours(self, colours, over=None, warn=None, lag=None) -> None:
+        """What each cell is painted, what is laid over it, which are past
+        their limit (ringed red), and which the motors have left behind the
+        keys (ringed orange)."""
         self.colours = np.asarray(colours, np.float32).reshape(ROWS, PER_ROW, 3)
         if over is not None:
             self.over = np.asarray(over, np.float32).reshape(ROWS, PER_ROW, 4)
         if warn is not None:
             self.warn = np.asarray(warn, bool).reshape(ROWS, PER_ROW)
+        self.lag = (np.zeros((ROWS, PER_ROW), bool) if lag is None
+                    else np.asarray(lag, bool).reshape(ROWS, PER_ROW))
         self.update()
 
     def set_selection(self, cells) -> None:
@@ -170,6 +176,8 @@ class Unwrap(QWidget):
                     brush.setPen(QPen(QColor("#ffffff"), max(1.0, size * 0.1)))
                 elif self.warn[row, which]:
                     brush.setPen(QPen(QColor(theme.ERROR), max(1.0, size * 0.12)))
+                elif self.lag[row, which]:
+                    brush.setPen(QPen(QColor(theme.WARN), max(1.0, size * 0.1)))
                 else:
                     brush.setPen(Qt.PenStyle.NoPen)
                 brush.drawPolygon(QPolygonF([centre + one for one in hexagon]))

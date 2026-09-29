@@ -57,6 +57,9 @@ class KeyTimeline(QWidget):
         self.family = "tilt"               # the lane edits go to
         self.chosen: set = set()           # (family, frame)
         self.warnings: list = []           # (frame, count)
+        self.dropped = {family: np.array([]) for family in km.FAMILIES}
+        self.late = {family: [] for family in km.FAMILIES}
+        self.clashes: list = []
         self.wave = None                   # (peaks, frames each peak covers)
         self._drag = None                  # what the left button is doing
         self._pan = None
@@ -67,6 +70,9 @@ class KeyTimeline(QWidget):
         self.project = project
         self.axis.stretch(project.length)
         self.chosen = set()
+        self.dropped = {family: np.array([]) for family in km.FAMILIES}
+        self.late = {family: [] for family in km.FAMILIES}
+        self.clashes = []
         self.update()
 
     def set_frame(self, frame: int) -> None:
@@ -81,6 +87,19 @@ class KeyTimeline(QWidget):
 
     def set_warnings(self, found) -> None:
         self.warnings = list(found)
+        self.update()
+
+    def set_simulation(self, result) -> None:
+        """What the motors' own motion made of the keys: per family, the
+        commands dropped (frames) and the moves arriving late (due, arrived);
+        and every frame a tilt goes past its gaps on the way."""
+        self.dropped = {family: np.array(sorted(one.frame for one in result.dropped
+                                                if one.family == family))
+                        for family in km.FAMILIES}
+        self.late = {family: sorted((one.due, one.arrives) for one in result.late
+                                    if one.family == family)
+                     for family in km.FAMILIES}
+        self.clashes = [frame for frame, _ in result.clashes]
         self.update()
 
     def set_sound(self, track) -> None:
@@ -166,6 +185,13 @@ class KeyTimeline(QWidget):
         end = self.axis.x_of(self.project.length if self.project else 0)
         brush.fillRect(QRectF(end, RULER, max(0.0, self.width() - end),
                               self.height() - RULER), QColor(0, 0, 0, 70))
+        # The motion going past the gaps, in orange under the keys' own red.
+        last = None
+        for frame in self.clashes:
+            x = self.axis.x_of(frame)
+            if self._visible(x) and (last is None or x - last >= 1):
+                brush.fillRect(QRectF(x - 1, RULER - 3, 2, 3), QColor(theme.WARN))
+                last = x
         # Keys over the limit, in red along the ruler's foot.
         for frame, _count in self.warnings:
             x = self.axis.x_of(frame)
@@ -183,6 +209,22 @@ class KeyTimeline(QWidget):
                            QColor(47, 95, 143, 40))
         if self.project is None:
             return
+        # The motion's troubles first, under the keys: a move arriving late
+        # is an orange bar from when it was due to when it got there, along
+        # the lane's foot; a command dropped is a red tick at its head.
+        late = QColor(theme.WARN)
+        late.setAlpha(150)
+        for due, arrives in self.late.get(family, ()):
+            left, right = self.axis.x_of(due), self.axis.x_of(arrives)
+            if right < HEAD or left > self.width():
+                continue
+            brush.fillRect(QRectF(left, top + LANE - 5, max(1.0, right - left), 3), late)
+        last = None
+        for frame in self.dropped.get(family, ()):
+            x = self.axis.x_of(frame)
+            if self._visible(x) and (last is None or x - last >= 2):
+                brush.fillRect(QRectF(x - 1, top + 1, 2, 6), QColor(theme.ERROR))
+                last = x
         track = self.project.tracks[family]
         colour = QColor(FAMILY_COLOUR[family])
         middle = top + LANE / 2

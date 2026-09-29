@@ -533,7 +533,6 @@ EN: dict = {
     'удалить выбранные ключи': 'delete the chosen keys',
     'копировать позу слоя / вставить на плейхед':
         "copy the layer's pose / paste it at the playhead",
-    'кисть, выбор, профиль, кольца': 'brush, select, profile, rings',
     'слой: подъём, вынос, наклон': 'layer: lift, push, tilt',
     'видео или маска': 'video or mask',
     'ПКМ по 3D': 'RMB on the 3D',
@@ -650,4 +649,38 @@ EN: dict = {
     '{0}: ключ не того размера': '{0}: a key of the wrong size',
     'домкрат ряда 1 двигается, а у машины его нет — файл пронумерован как в Houdini, подъём сдвинут на кольцо':
         'the row 1 jack moves, and the machine has none: the file is numbered as Houdini numbers it, the lift is one ring off',
+    'Моторы': 'Motors',
+    'Ключи': 'Keys',
+    'Симуляция': 'Simulation',
+    'Оба': 'Both',
+    'кисть, выбор, профиль, кольца, моторы': 'brush, select, profile, rings, motors',
+    'Что на сотах: ключи, как их сыграют моторы, или оба — второе призраком':
+        'What the cells show: the keys, the motors playing them, or both, the second as a ghost',
+    'Изнанка': 'Backs',
+    'Показывать задние стороны сот, чёрные, — выключает отсечение задних граней':
+        'Show the backs of the cells, black; turns backface culling off',
+    'Симуляция перенесена в ключи': 'The simulation is now the keys',
+    'Моторы: пропущено команд {0}, опоздали ходов {1}, наклон сверх зазоров на {2} кадрах — «Перенести в ключи» в панели «Моторы»':
+        'Motors: {0} commands dropped, {1} moves late, tilt past the gaps on {2} frames; see Motors to put the simulation onto the keys',
+    'моторы пропустят команд: {0}': 'the motors will drop {0} commands',
+    '◀ ошибка': '◀ problem',
+    'ошибка ▶': 'problem ▶',
+    'Перенести симуляцию в ключи': 'Put the simulation onto the keys',
+    'Пропущено команд: {0} (подъём {1}, вынос {2}, наклон {3})':
+        'Commands dropped: {0} (lift {1}, push {2}, tilt {3})',
+    'Опоздали ходов: {0} (подъём {1}, вынос {2}, наклон {3})':
+        'Moves late: {0} (lift {1}, push {2}, tilt {3})',
+    'Наклон сверх зазоров в движении: кадров {0}':
+        'Tilt past the gaps while moving: {0} frames',
+    'Как их считает Cinema 4D: ход не быстрее мотора — полный ход за столько секунд, половина за половину; после каждого хода отдых; команда, пришедшая во время хода или отдыха, пропускается.':
+        'As Cinema 4D reckons them: no move faster than the motor, a full travel in so many seconds and half of one in half; a rest after every move; a command arriving during a move or a rest is dropped.',
+    'ход, с': 'travel, s',
+    'отдых, с': 'rest, s',
+    'Призраком в «Оба»': 'The ghost in Both',
+    'Что получилось': 'What came out',
+    'Ключи встанут там, где моторы на самом деле начинают и заканчивают ход; пропущенные команды уйдут. Экспорт после этого — то, что сыграет площадка. Отменяется Ctrl+Z.':
+        'The keys go where the motors really start and finish their moves; the dropped commands go. The export is then what the site will play. Ctrl+Z undoes it.',
+    'Симуляция считается…': 'Simulating…',
+    'Дольше всех: {0}, кольцо {1}, мотор {2} — на {3:.1f} с позже, кадр {4}':
+        'Latest: {0}, ring {1}, motor {2}, {3:.1f} s behind, frame {4}',
 }

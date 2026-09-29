@@ -213,3 +213,73 @@ def test_the_viewer_hands_the_editor_its_flags(monkeypatch):
     assert main._asked_for("--motors") == "a.json"
     assert main._asked_for("--top") == "b.mov"
     assert main._asked_for("--sound") is None
+
+
+# -- the motors' own motion ------------------------------------------------------
+
+def _too_fast(editor):
+    """A band pushed 900 mm in a second, and pulled back while moving."""
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[5:25, 5:30] = True
+    editor._select(cells, "set")
+    editor.go_to(60)
+    editor.set_selected("push", 0.9)
+    editor.go_to(100)
+    editor.set_selected("push", 0.2)
+    editor.select_none()
+    editor._resimulate()
+
+
+def test_the_simulation_is_drawn_with_the_keys_as_its_ghost(fresh, tick):
+    _too_fast(fresh)
+    result = fresh.simulation()
+    assert result is not None and result.dropped and result.late
+    fresh.go_to(150)
+    fresh.set_view("both")
+    tick(0.2)
+    assert fresh.solid.ghost, "no ghost in Both"
+    solid, ghost = fresh._shown()
+    assert not np.allclose(solid["push"], ghost["push"])
+    assert np.allclose(ghost["push"], fresh.pose_now()["push"]), \
+        "the ghost is not the keys"
+    both = fresh.solid.to_array(480, 480)[..., :3].astype(int)
+    fresh.set_view("sim")
+    tick(0.2)
+    assert not fresh.solid.ghost
+    alone = fresh.solid.to_array(480, 480)[..., :3].astype(int)
+    assert np.abs(both - alone).sum(axis=2).astype(bool).sum() > 500, \
+        "the ghost drew nothing"
+    fresh.set_ghost("sim")
+    fresh.set_view("both")
+    solid, ghost = fresh._shown()
+    assert np.allclose(solid["push"], fresh.pose_now()["push"])
+    fresh.set_ghost("keys")
+    fresh.set_view("keys")
+    assert not fresh.solid.ghost
+    assert fresh.unwrap.lag.sum() == 0
+
+
+def test_the_simulation_goes_onto_the_keys_and_back(fresh):
+    _too_fast(fresh)
+    before = fresh.project.tracks["push"].frames
+    fresh.bake_simulation()
+    fresh._resimulate()
+    assert not fresh.simulation().dropped and not fresh.simulation().late
+    assert fresh.project.tracks["push"].frames != before
+    fresh._step_undo(True)
+    assert fresh.project.tracks["push"].frames == before
+
+
+def test_the_background_is_grey_and_the_backs_are_dark(fresh, tick):
+    import kinedit
+    picture = fresh.solid.to_array(320, 320)[..., :3].astype(int)
+    corner = picture[2, 2]
+    want = np.round(np.array(kinedit.BACKGROUND) * 255).astype(int)
+    assert np.abs(corner - want).max() <= 2, corner
+    assert fresh.solid.backs_dark == 1.0
+    assert fresh.cull and fresh.solid.cull_far_side == 1.0
+    fresh.set_backs(True)
+    assert not fresh.cull and fresh.solid.cull_far_side == 0.0
+    tick(0.1)
+    fresh.set_backs(False)
+    assert fresh.cull

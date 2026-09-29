@@ -17,13 +17,13 @@ MODULES = ("main.py", "timeline.py", "show.py", "kinetic.py", "sound.py",
            "depends.py", "scene3d.py",
            # The kinetic editor.
            "kinedit.py", "kin_model.py", "kin_tools.py", "kin_timeline.py",
-           "kin_unwrap.py")
+           "kin_unwrap.py", "kin_sim.py")
 # Said once, at import, and put through tr() where they are shown.
 CONSTANTS = {"MODE_LABEL", "LAYER_LABEL", "CALLED", "SAID", "TRANSPORT",
              "WRITE_SIZE_HINT", "FLAT_SCALES", "KEYS", "EDIT_KEYS",
              "VIEW_KEYS", "MEDIA", "CUE", "ADVICE",
              "LAYER_NAMES", "TOOL_NAMES", "FAMILIES", "MODES", "GRAINS",
-             "FAMILY_NAME"}
+             "FAMILY_NAME", "GHOSTS", "VIEW_NAMES"}
 # Words that are data, not the window's: keys the settings and the code are
 # written in, and what each language is called in itself.
 DATA = {"PREVIEW", "WAS_CALLED", "OLD_WORDS", "LANGUAGE_NAMES"}

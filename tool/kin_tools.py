@@ -534,3 +534,116 @@ class RingsPanel(Panel):
                 button.blockSignals(True)
                 button.setChecked(index == state and not between)
                 button.blockSignals(False)
+
+
+# -- the motors ---------------------------------------------------------------------
+
+class MotorsPanel(Panel):
+    """The simulation: how fast each family goes and rests, which of the two
+    is the ghost, what went wrong, and putting the motion onto the keys."""
+
+    GHOSTS = ("Ключи", "Симуляция")
+    GHOST_KEYS = ("keys", "sim")
+
+    def __init__(self, actions) -> None:
+        super().__init__(actions, "qa_kin_motors_panel")
+        import kin_sim
+        self.column.addWidget(heading(tr("Моторы")))
+        self.column.addWidget(note(tr(
+            "Как их считает Cinema 4D: ход не быстрее мотора — полный ход за "
+            "столько секунд, половина за половину; после каждого хода отдых; "
+            "команда, пришедшая во время хода или отдыха, пропускается.")))
+        grid_holder = QWidget()
+        grid = QGridLayout(grid_holder)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        for column, text in ((1, tr("ход, с")), (2, tr("отдых, с"))):
+            label = QLabel(text)
+            label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
+            grid.addWidget(label, 0, column)
+        self.boxes = {}
+        for row, family in enumerate(km.FAMILIES, start=1):
+            name = QLabel(tr(FAMILY_NAME[family]))
+            name.setStyleSheet(f"color:{FAMILY_COLOUR[family]};")
+            grid.addWidget(name, row, 0)
+            travel, rest = kin_sim.PACE[family]
+            pair = []
+            for column, value in ((1, travel), (2, rest)):
+                box = QDoubleSpinBox()
+                box.setObjectName(f"qa_kin_pace_{family}_{column}")
+                box.setRange(0.0 if column == 2 else 0.05, 120.0)
+                box.setDecimals(2)
+                box.setSingleStep(0.05)
+                box.setValue(value)
+                box.setFixedWidth(84)
+                box.editingFinished.connect(self._paced)
+                grid.addWidget(box, row, column)
+                pair.append(box)
+            self.boxes[family] = pair
+        self.column.addWidget(grid_holder)
+
+        self.ghost = segments([tr(x) for x in self.GHOSTS], "qa_kin_ghost",
+                              lambda i: actions.set_ghost(self.GHOST_KEYS[i]), 0)
+        self.column.addWidget(labelled(tr("Призраком в «Оба»"), self.ghost))
+
+        self.column.addWidget(heading(tr("Что получилось")))
+        self.summary = note()
+        self.summary.setObjectName("qa_kin_sim_summary")
+        self.summary.setStyleSheet(f"color:{theme.SECOND}; font-size:11.5px;")
+        self.column.addWidget(self.summary)
+        buttons = QWidget()
+        line = QHBoxLayout(buttons)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(6)
+        back = QPushButton(tr("◀ ошибка"))
+        back.setObjectName("qa_kin_problem_back")
+        back.clicked.connect(lambda: actions.step_problem(-1))
+        on = QPushButton(tr("ошибка ▶"))
+        on.setObjectName("qa_kin_problem_next")
+        on.clicked.connect(lambda: actions.step_problem(1))
+        line.addWidget(back)
+        line.addWidget(on)
+        self.column.addWidget(buttons)
+        self.bake = QPushButton(tr("Перенести симуляцию в ключи"))
+        self.bake.setObjectName("qa_kin_bake")
+        self.bake.clicked.connect(actions.bake_simulation)
+        self.column.addWidget(self.bake)
+        self.column.addWidget(note(tr(
+            "Ключи встанут там, где моторы на самом деле начинают и заканчивают "
+            "ход; пропущенные команды уйдут. Экспорт после этого — то, что "
+            "сыграет площадка. Отменяется Ctrl+Z.")))
+        self.finish()
+
+    def pace(self) -> dict:
+        return {family: (boxes[0].value(), boxes[1].value())
+                for family, boxes in self.boxes.items()}
+
+    def _paced(self) -> None:
+        self.actions.set_pace(self.pace())
+
+    def refresh(self) -> None:
+        result = self.actions.simulation()
+        if result is None:
+            self.summary.setText(tr("Симуляция считается…"))
+            return
+        counts = result.by_family()
+        dropped = sum(one["dropped"] for one in counts.values())
+        late = sum(one["late"] for one in counts.values())
+        lines = [tr("Пропущено команд: {0} (подъём {1}, вынос {2}, наклон {3})",
+                    dropped, counts["lift"]["dropped"], counts["push"]["dropped"],
+                    counts["tilt"]["dropped"]),
+                 tr("Опоздали ходов: {0} (подъём {1}, вынос {2}, наклон {3})",
+                    late, counts["lift"]["late"], counts["push"]["late"],
+                    counts["tilt"]["late"])]
+        worst = result.worst_late()
+        if worst is not None:
+            row, which = km.motor_address(worst.family, worst.motor)
+            lines.append(tr("Дольше всех: {0}, кольцо {1}, мотор {2} — на {3:.1f} с "
+                            "позже, кадр {4}", tr(FAMILY_NAME[worst.family]),
+                            row + 1, which + 1,
+                            (worst.arrives - worst.due) / km.FPS, worst.due))
+        lines.append(tr("Наклон сверх зазоров в движении: кадров {0}",
+                        len(result.clashes)))
+        self.summary.setText("\n".join(lines))
+        self.bake.setEnabled(bool(dropped or late))

@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QComboBox,
 from rendercanvas.pyside6 import RenderCanvas
 
 import kin_model as km
+import kin_sim
 import kin_tools
 import kinetic
 import lang
@@ -70,10 +71,19 @@ UNDO_DEPTH = 80
 LIFT_LEVEL = np.array([0.0, 33.0 / 130.0, 66.0 / 130.0, 1.0])
 LAYERS = ("rgb", "lift", "push", "tilt")
 LAYER_NAMES = ("RGB", "Подъём", "Вынос", "Наклон")
-TOOLS = ("brush", "select", "profile", "rings")
-TOOL_NAMES = ("Кисть", "Выбор", "Профиль", "Кольца")
+TOOLS = ("brush", "select", "profile", "rings", "motors")
+TOOL_NAMES = ("Кисть", "Выбор", "Профиль", "Кольца", "Моторы")
 TOOL_KEYS = {Qt.Key.Key_B: "brush", Qt.Key.Key_V: "select",
-             Qt.Key.Key_P: "profile", Qt.Key.Key_R: "rings"}
+             Qt.Key.Key_P: "profile", Qt.Key.Key_R: "rings",
+             Qt.Key.Key_S: "motors"}
+# What the picture shows: the keys, the motors' own motion, or both -- one
+# of them then a ghost.
+VIEWS = ("keys", "sim", "both")
+VIEW_NAMES = ("Ключи", "Симуляция", "Оба")
+# Behind the building: a little off black, so the dark backs of the panels
+# and the canopy read against it.
+BACKGROUND = (0.137, 0.141, 0.157)
+SIM_WAIT_MS = 250
 
 # The keys, for the card and for the tooltips.
 KEYS = [
@@ -87,7 +97,7 @@ KEYS = [
     ("Delete", "удалить выбранные ключи"),
     ("Ctrl+C / Ctrl+V", "копировать позу слоя / вставить на плейхед"),
     ("Ctrl+Z / Ctrl+Y", "отменить / вернуть"),
-    ("B V P R", "кисть, выбор, профиль, кольца"),
+    ("B V P R S", "кисть, выбор, профиль, кольца, моторы"),
     ("1 2 3", "слой: подъём, вынос, наклон"),
     ("M", "видео или маска"),
     ("ПКМ по 3D", "облёт; СКМ или Shift — сдвиг; колесо — ближе"),
@@ -202,6 +212,17 @@ class KineticEditor(QMainWindow):
         self._under = None           # brush cells under the pointer in 3D
         self._drag = None
         self._hover = None
+        # The motors' own motion, worked out a moment after the keys change.
+        self.view = "both"
+        self.ghost_is = "keys"
+        self.cull = True
+        self.pace = dict(kin_sim.PACE)
+        self.sim = None
+        self._sim_for = None
+        self._sim_pose = None
+        self.sim_timer = QTimer(self)
+        self.sim_timer.setSingleShot(True)
+        self.sim_timer.timeout.connect(self._resimulate)
         self.clock = player.Clock()
         self.clock.rate = float(km.FPS)
         self.stream = None
@@ -285,7 +306,9 @@ class KineticEditor(QMainWindow):
             self.solid.load_calibration(TOP, read_rgba(picture))
             self.solid.set_backing(True)
         self.solid.show_paint(self.show_mask)
-        self.solid.cull(True)
+        self.solid.cull(self.cull)
+        self.solid.dark_backs(True)
+        self.solid.clear = BACKGROUND
         self._aim_camera()
         self.canvas.request_draw(self._draw)
 
@@ -349,6 +372,7 @@ class KineticEditor(QMainWindow):
             "select": kin_tools.SelectPanel(self),
             "profile": kin_tools.ProfilePanel(self),
             "rings": kin_tools.RingsPanel(self),
+            "motors": kin_tools.MotorsPanel(self),
         }
         self.panel_stack = QStackedWidget()
         self.panel_stack.setObjectName("qa_kin_panels")
@@ -422,6 +446,24 @@ class KineticEditor(QMainWindow):
             [tr(one) for one in LAYER_NAMES], "qa_kin_layer",
             lambda i: self.set_layer(LAYERS[i]), 0)
         row.addWidget(self.layer_switch)
+        row.addWidget(_divider())
+        self.view_choice = kin_tools.segments(
+            [tr(one) for one in VIEW_NAMES], "qa_kin_show",
+            lambda i: self.set_view(VIEWS[i]), VIEWS.index(self.view))
+        self.view_choice.setToolTip(tr(
+            "Что на сотах: ключи, как их сыграют моторы, или оба — второе "
+            "призраком"))
+        row.addWidget(self.view_choice)
+        self.backs = QPushButton(tr("Изнанка"))
+        self.backs.setObjectName("qa_kin_backs")
+        self.backs.setProperty("pill", True)
+        self.backs.setCheckable(True)
+        self.backs.setChecked(not self.cull)
+        self.backs.setToolTip(tr(
+            "Показывать задние стороны сот, чёрные, — выключает отсечение "
+            "задних граней"))
+        self.backs.clicked.connect(lambda on: self.set_backs(on))
+        row.addWidget(self.backs)
         row.addStretch(1)
         row.addWidget(_button(tr("Во вьюере"), "qa_kin_viewer", self.show_in_viewer,
                               tr("Сохранить JSON и открыть его во вьюере")))
@@ -449,7 +491,7 @@ class KineticEditor(QMainWindow):
         column.setContentsMargins(6, 10, 6, 10)
         column.setSpacing(6)
         self.tool_buttons = {}
-        for tool, text, key in zip(TOOLS, TOOL_NAMES, "BVPR"):
+        for tool, text, key in zip(TOOLS, TOOL_NAMES, "BVPRS"):
             button = QPushButton(tr(text))
             button.setObjectName(f"qa_kin_tool_{tool}")
             button.setCheckable(True)
@@ -564,11 +606,15 @@ class KineticEditor(QMainWindow):
 
     def _changed(self, keys: bool = False) -> None:
         """Something about the piece or the playhead moved: say it all again."""
-        pose = self.pose_now()
+        solid, ghost = self._shown()
         if self.solid is not None:
             self.solid.set_cells(kinetic.transforms(
-                self.cell_at, self.cell_is, PoseMotors(pose), self.frame))
-        self._paint(pose)
+                self.cell_at, self.cell_is, PoseMotors(solid), self.frame))
+            if ghost is not None:
+                self.solid.set_ghost_cells(kinetic.transforms(
+                    self.cell_at, self.cell_is, PoseMotors(ghost), self.frame))
+            self.solid.show_ghost(ghost is not None)
+        self._paint()
         self.timeline.set_frame(self.frame)
         if keys:
             self.dirty = self.dirty or bool(self.undo)
@@ -579,14 +625,132 @@ class KineticEditor(QMainWindow):
             self.warn_button.setVisible(bool(warnings))
             self.timeline.update()
             self._say_title()
+            self.sim_timer.start(SIM_WAIT_MS)
         self.panels[self.tool].refresh()
         self._say_clock()
         self.touch()
 
-    def _paint(self, pose: dict) -> None:
+    # -- the motors' own motion ------------------------------------------------------
+
+    def simulation(self):
+        """The motion of the keys as they are now, or None while it is still
+        to be worked out."""
+        if self.sim is not None and self._sim_for == self._sim_key():
+            return self.sim
+        return None
+
+    def _sim_key(self):
+        # The piece itself as well as its version: a new piece starts its
+        # counts where the last one's did.
+        return (id(self.project), self.project.version,
+                tuple(sorted(self.pace.items())))
+
+    def _resimulate(self) -> None:
+        if self.simulation() is not None:
+            return
+        started = time.perf_counter()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self.sim = kin_sim.simulate(self.project, self.pace)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._sim_for = self._sim_key()
+        self._sim_pose = None
+        took = time.perf_counter() - started
+        counts = self.sim.by_family()
+        dropped = sum(one["dropped"] for one in counts.values())
+        late = sum(one["late"] for one in counts.values())
+        logfile.write(f"kinetic editor: simulated in {took * 1000:.0f} ms, "
+                      f"{dropped} dropped, {late} late, "
+                      f"{len(self.sim.clashes)} frames past the gaps")
+        self.timeline.set_simulation(self.sim)
+        if dropped or late or self.sim.clashes:
+            self.status.setText(tr(
+                "Моторы: пропущено команд {0}, опоздали ходов {1}, наклон сверх "
+                "зазоров на {2} кадрах — «Перенести в ключи» в панели «Моторы»",
+                dropped, late, len(self.sim.clashes)))
+        self._changed()
+
+    def sim_pose(self):
+        result = self.simulation()
+        if result is None:
+            return None
+        key = (self._sim_for, self.frame)
+        if self._sim_pose is None or self._sim_pose[0] != key:
+            self._sim_pose = (key, result.project.pose(self.frame))
+        return self._sim_pose[1]
+
+    def _shown(self):
+        """(what the cells are drawn at, what the ghost is drawn at or None)."""
+        keys = self.pose_now()
+        motion = self.sim_pose() if self.view != "keys" else None
+        if motion is None:
+            return keys, None
+        if self.view == "sim":
+            return motion, None
+        if self.ghost_is == "keys":
+            return motion, keys
+        return keys, motion
+
+    def set_view(self, view: str) -> None:
+        self.view = view
+        self.view_choice.buttons[VIEWS.index(view)].setChecked(True)
+        if view != "keys" and self.simulation() is None:
+            self._resimulate()
+        self._changed()
+
+    def set_ghost(self, which: str) -> None:
+        self.ghost_is = which
+        self._changed()
+
+    def set_backs(self, on: bool) -> None:
+        """The backs of the cells shown, black; or dropped, which hides the
+        far side of the ring behind the near."""
+        self.cull = not on
+        self.backs.setChecked(bool(on))
+        if self.solid is not None:
+            self.solid.cull(self.cull)
+        self.touch()
+
+    def set_pace(self, pace: dict) -> None:
+        self.pace = dict(pace)
+        self.sim_timer.start(SIM_WAIT_MS)
+
+    def step_problem(self, direction: int) -> None:
+        result = self.simulation()
+        if result is None:
+            return
+        found = result.problems()
+        if direction > 0:
+            later = [f for f in found if f > self.frame]
+            if later:
+                self.go_to(later[0])
+        else:
+            earlier = [f for f in found if f < self.frame]
+            if earlier:
+                self.go_to(earlier[-1])
+
+    def bake_simulation(self) -> None:
+        """The motion onto the timeline: its keys for the keys."""
+        result = self.simulation()
+        if result is None:
+            self._resimulate()
+            result = self.simulation()
+        self._record()
+        for family in km.FAMILIES:
+            self.project.tracks[family].restore(
+                result.project.tracks[family].state())
+        self.timeline.chosen = set()
+        self.status.setText(tr("Симуляция перенесена в ключи"))
+        self._changed(keys=True)
+
+    def _paint(self) -> None:
         """The cells' colours, and what is laid over them: red past the
         limit, the brush where it would land, and -- in 3D, where there is
-        no outline to draw -- the selection lightened."""
+        no outline to draw -- the selection lightened. The colours are the
+        ones of what the cells are drawn at; on the strip the cells whose
+        motion is not where the keys want it are ringed."""
+        pose, _ = self._shown()
         colours = mask_colours(pose, self.layer)
         over = np.zeros((ROWS, PER_ROW, 4), np.float32)
         warn = km.over_limit(pose["tilt"], pose["lift"])
@@ -596,7 +760,11 @@ class KineticEditor(QMainWindow):
             under = weight > 0
             over[under, :3] = 1.0
             over[under, 3] = np.maximum(over[under, 3], 0.2 + 0.35 * weight[under])
-        self.unwrap.set_colours(colours, over, warn)
+        lag = None
+        result = self.simulation()
+        if result is not None and self.view != "keys":
+            lag = kin_sim.differs(self.project, result.project, self.frame)
+        self.unwrap.set_colours(colours, over, warn, lag)
         self.unwrap.set_selection(self.selection)
         if self.solid is not None:
             solid = over.copy()
@@ -1040,7 +1208,7 @@ class KineticEditor(QMainWindow):
                 if self._drag and self._drag[0] == "brush" and got is not None:
                     self._dab(self._under)
                 else:
-                    self._paint(self.pose_now())
+                    self._paint()
                     self.touch()
             elif self._drag and self._drag[0] == "select" and got is not None:
                 how = self._drag[1] if self._drag[1] != "set" else "add"
@@ -1054,7 +1222,7 @@ class KineticEditor(QMainWindow):
         if kind == "pointer_leave":
             self._under = None
             self._hovered(-1, -1)
-            self._paint(self.pose_now())
+            self._paint()
             self.touch()
 
     def _weights_at(self, cell) -> np.ndarray:
@@ -1247,6 +1415,9 @@ class KineticEditor(QMainWindow):
         words = tr("Записан {0}", written.name)
         if warnings:
             words += " — " + tr("наклон вне предела на {0} ключах", len(warnings))
+        result = self.simulation()
+        if result is not None and result.dropped:
+            words += " — " + tr("моторы пропустят команд: {0}", len(result.dropped))
         self.status.setText(words)
         logfile.write(f"kinetic editor: exported {written}")
         return written

@@ -60,7 +60,10 @@ class Renderer3D:
         # One 4x4 per cell of the kinetic screen, rewritten whenever the
         # motors move. Still, it is 1500 identities and costs nothing.
         self.cell_count = scene3d.CELLS_ON_KINETIC
-        blank = np.tile(np.eye(4, dtype=np.float32), (self.cell_count, 1, 1))
+        # Twice over: the second half is where the ghost's cells stand, for
+        # the kinetic editor's keys against its simulation. The viewer never
+        # draws a ghost and never writes there.
+        blank = np.tile(np.eye(4, dtype=np.float32), (self.cell_count * 2, 1, 1))
         self.cell_buffer = device.create_buffer_with_data(
             data=np.ascontiguousarray(blank),
             usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST)
@@ -88,6 +91,25 @@ class Renderer3D:
                 entries=[{"binding": 0, "resource": {
                     "buffer": piece.settings, "offset": 0, "size": 32}}])
             for piece in scene.pieces]
+        # The moving cells again, as the ghost: the same geometry with its own
+        # settings, which send it to the second half of the cells.
+        self.ghost = False
+        self.ghost_piece = next((p for p in scene.pieces if p.kinetic), None)
+        self.ghost_group = None
+        if self.ghost_piece is not None:
+            about = np.zeros((2, 4), dtype=np.float32)
+            about[0, :3] = 0.5
+            about[0, 3] = 1.0 if self.ghost_piece.is_screen else 0.0
+            about[1] = (max(0, self.ghost_piece.screen_index), 1.0,
+                        1.0 if self.ghost_piece.hollow else 0.0, 1.0)
+            self._ghost_settings = device.create_buffer_with_data(
+                data=about, usage=wgpu.BufferUsage.UNIFORM)
+            self.ghost_group = device.create_bind_group(
+                layout=self.pipeline.get_bind_group_layout(1),
+                entries=[{"binding": 0, "resource": {
+                    "buffer": self._ghost_settings, "offset": 0, "size": 32}}])
+        self.backs_dark = 0.0        # 1: the backs of the panels drawn dark
+        self.clear = (0.0, 0.0, 0.0)  # what is behind everything
 
         self.on = {piece.name: True for piece in scene.pieces}
         self.backing = 1.0
@@ -231,6 +253,7 @@ class Renderer3D:
         values[20:23] = self.light
         values[23] = self.cull_far_side
         values[24] = self.painted
+        values[25] = self.backs_dark
         self.device.queue.write_buffer(self.frame_uniform, 0, values.tobytes())
 
     # -- what the window changes -----------------------------------------------
@@ -334,6 +357,20 @@ class Renderer3D:
         self.painted = 1.0 if on else 0.0
         self._write_frame()
 
+    def set_ghost_cells(self, matrices) -> None:
+        """Where the ghost's cells are: the second half of the buffer."""
+        data = np.ascontiguousarray(
+            np.asarray(matrices, dtype=np.float32).transpose(0, 2, 1))
+        self.device.queue.write_buffer(self.cell_buffer, self.cell_count * 64, data)
+
+    def show_ghost(self, on: bool) -> None:
+        self.ghost = bool(on) and self.ghost_group is not None
+
+    def dark_backs(self, on: bool) -> None:
+        """The backs of the top screen's panels black, as they are."""
+        self.backs_dark = 1.0 if on else 0.0
+        self._write_frame()
+
     def set_gain(self, gains: dict, frame: float | None = None) -> None:
         """How brightly each screen is turned up, as rgb multipliers."""
         for name, value in gains.items():
@@ -417,7 +454,7 @@ class Renderer3D:
                 "view": colour,
                 "resolve_target": view,
                 "load_op": "clear", "store_op": "store",
-                "clear_value": (0, 0, 0, 1),
+                "clear_value": (*self.clear, 1),
             }],
             depth_stencil_attachment={
                 "view": depth,
@@ -437,6 +474,12 @@ class Renderer3D:
             pass_.set_vertex_buffer(0, piece.vertices)
             pass_.set_index_buffer(piece.indices, "uint32")
             pass_.draw_indexed(piece.count)
+        ghost = self.ghost_piece
+        if self.ghost and ghost is not None and self.on.get(ghost.name):
+            pass_.set_bind_group(1, self.ghost_group)
+            pass_.set_vertex_buffer(0, ghost.vertices)
+            pass_.set_index_buffer(ghost.indices, "uint32")
+            pass_.draw_indexed(ghost.count)
         pass_.end()
 
     def to_array(self, width: int, height: int):
