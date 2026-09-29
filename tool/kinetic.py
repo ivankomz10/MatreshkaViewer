@@ -75,18 +75,22 @@ JACK_SCALE = 0.1 if JACK_LIKE_THE_RIG else 1.0
 
 # Which gap a jack row of a file opens. The files disagree, by tool:
 #
-#   "rig"      row N opens the gap between rings N and N+1, and row 30 has no
-#              gap to open. Houdini's exporter writes rows 1 to 29, and the rig
-#              in the blend moves the rings so -- which is what the viewer was
-#              checked against, to 5.6 mm, and still reads.
 #   "machine"  the lowest ring stands on the base and the jacks are between
 #              the others (the technical director, 2026-09-29): row 1 has no
 #              jack and row N opens the gap under ring N. Cinema 4D numbers
 #              them so -- it writes rows 2 to 30 and holds row 1 still -- and
-#              the kinetic editor works in it.
+#              the viewer and the kinetic editor read them so: they show what
+#              the site will do.
+#   "rig"      row N opens the gap between rings N and N+1, and row 30 has no
+#              gap to open. Houdini's exporter writes rows 1 to 29, and the rig
+#              in the blend moves the rings so. The viewer was checked against
+#              that rig to 5.6 mm reading it this way; set this back to see a
+#              render made from the rig ring for ring.
 #
-# Read one way, a file made the other way lifts every ring one ring off.
-JACK_READING = "rig"
+# Read one way, a file made the other way lifts every ring one ring off: a
+# Houdini show, played by the machine, opens each gap one ring lower than
+# the rig drew it.
+JACK_READING = "machine"
 
 ROWS, PER_ROW, PER_PUSHER = 30, 50, 5
 

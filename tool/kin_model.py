@@ -40,8 +40,8 @@ far as the narrower of the two gaps beside its ring allows --
 Which gap is beside which ring is the machine's (kinetic.JACK_READING): the
 lowest ring stands on the base and the jacks are between the others, so row
 1 has no jack and row N opens the gap under ring N -- Cinema 4D's numbering.
-Houdini's exporter, the rig and the viewer number them one lower; a file made
-there comes in with its row 1 moving, and the editor says so.
+Houdini's exporter and the rig number them one lower; a file made there comes
+in with its row 1 moving, and the editor says so.
 """
 from __future__ import annotations
 

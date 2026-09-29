@@ -147,13 +147,15 @@ def test_a_real_show_goes_in_as_keys_and_comes_out_the_same(name):
     assert moving_first == any("ряда 1" in one for one in said), said
 
 
-def test_the_rings_rise_the_machines_way_in_the_editor():
-    """Row N lifts ring N; the lowest ring never moves. The viewer's own
-    reading is the rig's, and is kept apart."""
+def test_the_rings_rise_the_machines_way_in_the_editor_and_the_viewer():
+    """Row N lifts ring N; the lowest ring never moves. The rig's reading,
+    one ring lower, is still there for comparing with its renders."""
     lift = np.full(ROWS, 1.0)
     lift[5] = 3.0                          # row 6: the gap under ring 6
     rise = kinetic.rise_mm(lift, "machine")
     assert np.all(rise[:5] == 0) and np.all(rise[5:] > 0)
+    assert kinetic.JACK_READING == "machine" == km.READING
+    assert np.array_equal(kinetic.rise_mm(lift), rise), "the viewer reads otherwise"
     rig = kinetic.rise_mm(lift, "rig")
     assert np.all(rig[:6] == 0) and np.all(rig[6:] > 0)
     lift = np.full(ROWS, 1.0)
