@@ -150,9 +150,9 @@ def test_keys_move_and_go_from_the_timeline(fresh):
     fresh.key_all(False)
     track = fresh.project.tracks["tilt"]
     assert track.frames == [0, 600]
-    fresh._move_keys([("tilt", 600)], 60)
+    fresh._move_keys([(("tilt",), 600)], 60)
     assert track.frames == [0, 660]
-    assert fresh.timeline.chosen == {("tilt", 660)}
+    assert fresh.timeline.chosen == {(("tilt",), 660)}
     fresh.delete_keys()
     assert track.frames == [0]
 
@@ -284,3 +284,62 @@ def test_the_background_is_grey_and_the_backs_are_dark(fresh, tick):
     tick(0.1)
     fresh.set_backs(False)
     assert fresh.cull
+
+
+# -- the timeline's two ways to look ------------------------------------------------
+
+def test_the_simple_timeline_is_three_lanes_and_the_detailed_one_opens(fresh, tick):
+    timeline = fresh.timeline
+    fresh.set_detailed(False)
+    timeline.expanded = {("tilt",), ("tilt", "r", 12)}
+    assert [lane.key for lane, _ in timeline.lanes()] == [("lift",), ("push",), ("tilt",)]
+    fresh.set_detailed(True)
+    keys = [lane.key for lane, _ in timeline.lanes()]
+    assert ("tilt", "r", 29) in keys and ("tilt", "g", 12, 0) in keys
+    assert ("tilt", "c", 12, 0) not in keys
+    timeline.toggle(("tilt", "g", 12, 0))
+    keys = [lane.key for lane, _ in timeline.lanes()]
+    assert [key for key in keys if key[1:2] == ("c",)] ==         [("tilt", "c", 12, cell) for cell in range(5)]
+    # The lift opens to rings only, and the lowest ring, with no jack, is not one.
+    timeline.toggle(("lift",))
+    lift = [lane for lane, _ in timeline.lanes() if lane.family == "lift"]
+    assert all(not lane.opens for lane in lift[1:]) and len(lift) == 1 + 29
+    timeline.expanded = set()
+    fresh.set_detailed(False)
+    tick(0.1)
+
+
+def test_a_rings_part_of_a_key_moves_and_goes_on_its_own(fresh):
+    import kinedit
+    fresh.set_detailed(True)
+    fresh.set_family("tilt")
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[3, :] = cells[7, :] = True
+    fresh._select(cells, "set")
+    fresh.go_to(300)
+    fresh.set_selected("tilt", 0.05)
+    track = fresh.project.tracks["tilt"]
+    assert track.frames == [0, 300] and track.keyed_count(1) == 2 * PER_ROW
+    # Ring 8's share of the key, dragged on ring 8's lane.
+    fresh._move_keys([(("tilt", "r", 7), 300)], 120)
+    assert track.frames == [0, 300, 420]
+    assert track.keyed_count(1) == PER_ROW and track.keyed_count(2) == PER_ROW
+    assert track.keyed[2].reshape(ROWS, PER_ROW)[7].all()
+    assert fresh.timeline.chosen == {(("tilt", "r", 7), 420)}
+    # One cell of ring 4 taken out of its key.
+    fresh.timeline.chosen = {(("tilt", "c", 3, 10), 300)}
+    fresh.delete_keys()
+    assert track.keyed_count(1) == PER_ROW - 1
+    fresh._step_undo(True)
+    assert track.keyed_count(1) == PER_ROW
+    fresh.set_detailed(False)
+
+
+def test_a_lanes_name_picks_its_cells(fresh):
+    fresh._lane_picked(("push", "g", 5, 2))
+    assert fresh.family == "push"
+    chosen = fresh.selection
+    assert chosen.sum() == 5 and chosen[5, 10:15].all()
+    fresh._lane_picked(("tilt", "r", 9))
+    assert fresh.family == "tilt" and fresh.selection[9].all()         and fresh.selection.sum() == PER_ROW
+    fresh.select_none()

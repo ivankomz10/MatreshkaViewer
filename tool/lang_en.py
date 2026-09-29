@@ -683,4 +683,12 @@ EN: dict = {
     'Симуляция считается…': 'Simulating…',
     'Дольше всех: {0}, кольцо {1}, мотор {2} — на {3:.1f} с позже, кадр {4}':
         'Latest: {0}, ring {1}, motor {2}, {3:.1f} s behind, frame {4}',
+    'Простой': 'Simple',
+    'Подробный': 'Detailed',
+    'Простой — три дорожки, чтобы набрасывать формы; подробный — кольца, группы и соты, чтобы работать с частями ключей':
+        'Simple: three lanes, for throwing shapes down; detailed: rings, groups and cells, for working on parts of keys',
+    'Кольцо {0}': 'Ring {0}',
+    'Группа {0} · соты {1}–{2}': 'Group {0} · cells {1}–{2}',
+    'Сота {0}': 'Cell {0}',
+    '{0}: ключей {1}, кадры {2}–{3}': '{0}: {1} keys, frames {2}–{3}',
 }

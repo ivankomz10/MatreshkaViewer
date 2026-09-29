@@ -55,7 +55,7 @@ import scene3d
 import screen_gpu
 import sound
 import theme
-from kin_timeline import FAMILY_COLOUR, FAMILY_NAME, KeyTimeline
+from kin_timeline import FAMILY_COLOUR, FAMILY_NAME, KeyTimeline, lane_of
 from kin_unwrap import Unwrap, brush_weights
 from kinetic import PER_PUSHER, PER_ROW, ROWS
 from lang import tr
@@ -80,6 +80,7 @@ TOOL_KEYS = {Qt.Key.Key_B: "brush", Qt.Key.Key_V: "select",
 # of them then a ghost.
 VIEWS = ("keys", "sim", "both")
 VIEW_NAMES = ("Ключи", "Симуляция", "Оба")
+TIMELINE_NAMES = ("Простой", "Подробный")
 # Behind the building: a little off black, so the dark backs of the panels
 # and the canopy read against it.
 BACKGROUND = (0.137, 0.141, 0.157)
@@ -237,6 +238,8 @@ class KineticEditor(QMainWindow):
         QApplication.instance().installEventFilter(self)
         self._set_project(self.project)
         self.resize(1600, 960)
+        self.body.setSizes([640, 960])
+        self.right.setSizes([430, 470])
         if open_path:
             QTimer.singleShot(0, lambda: self.open_any(open_path))
 
@@ -337,35 +340,39 @@ class KineticEditor(QMainWindow):
         page.setSpacing(0)
         page.addWidget(self._top_bar())
 
-        body = QSplitter(Qt.Orientation.Vertical)
+        # The building down the whole left, tools beside it; on the right the
+        # strip of cells and the tool's panel over the timeline.
+        body = QSplitter(Qt.Orientation.Horizontal)
         body.setObjectName("qa_kin_body")
-        # Laid side by side rather than split: the tools and the panel keep
-        # their widths, and every pixel the window grows by goes to the view.
+        left = QWidget()
+        left.setObjectName("qa_kin_left")
+        beside = QHBoxLayout(left)
+        beside.setContentsMargins(0, 0, 0, 0)
+        beside.setSpacing(0)
+        beside.addWidget(self._tool_column())
+        self.canvas = RenderCanvas(parent=left, update_mode="ondemand",
+                                   max_fps=60, vsync=True)
+        self.canvas.setObjectName("qa_kin_canvas")
+        self.canvas.setMinimumSize(320, 260)
+        self.canvas.add_event_handler(
+            self._canvas_event, "wheel", "pointer_down", "pointer_move",
+            "pointer_up", "double_click", "pointer_leave")
+        beside.addWidget(self.canvas, 1)
+        body.addWidget(left)
+
+        right = QSplitter(Qt.Orientation.Vertical)
+        right.setObjectName("qa_kin_right")
         upper = QWidget()
         across = QHBoxLayout(upper)
         across.setContentsMargins(0, 0, 0, 0)
         across.setSpacing(0)
-        across.addWidget(self._tool_column())
-
-        middle = QSplitter(Qt.Orientation.Vertical)
-        self.canvas = RenderCanvas(parent=middle, update_mode="ondemand",
-                                   max_fps=60, vsync=True)
-        self.canvas.setObjectName("qa_kin_canvas")
-        self.canvas.setMinimumHeight(260)
-        self.canvas.add_event_handler(
-            self._canvas_event, "wheel", "pointer_down", "pointer_move",
-            "pointer_up", "double_click", "pointer_leave")
-        middle.addWidget(self.canvas)
         self.unwrap = Unwrap()
         self.unwrap.stroke_started.connect(self.begin_edit)
         self.unwrap.dabbed.connect(self._dab)
         self.unwrap.stroke_finished.connect(self.end_edit)
         self.unwrap.selected.connect(self._select)
         self.unwrap.hovered.connect(self._hovered)
-        middle.addWidget(self.unwrap)
-        middle.setStretchFactor(0, 3)
-        middle.setStretchFactor(1, 2)
-        across.addWidget(middle, 1)
+        across.addWidget(self.unwrap, 1)
 
         self.panels = {
             "brush": kin_tools.BrushPanel(self),
@@ -383,7 +390,7 @@ class KineticEditor(QMainWindow):
         for tool in TOOLS:
             self.panel_stack.addWidget(self.panels[tool])
         across.addWidget(self.panel_stack)
-        body.addWidget(upper)
+        right.addWidget(upper)
 
         lower = QWidget()
         column = QVBoxLayout(lower)
@@ -394,15 +401,32 @@ class KineticEditor(QMainWindow):
         self.timeline.family_chosen.connect(self.set_family)
         self.timeline.moved_keys.connect(self._move_keys)
         self.timeline.chosen_changed.connect(self._say_keys)
+        self.timeline.lane_picked.connect(self._lane_picked)
+        # The two ways to look, in the corner over the lanes' names.
+        self.timeline_mode = kin_tools.segments(
+            [tr(one) for one in TIMELINE_NAMES], "qa_kin_timeline_mode",
+            lambda i: self.set_detailed(i == 1), 0)
+        self.timeline_mode.setParent(self.timeline)
+        self.timeline_mode.setGeometry(6, 4, 178, 24)
+        self.timeline_mode.setToolTip(tr(
+            "Простой — три дорожки, чтобы набрасывать формы; подробный — "
+            "кольца, группы и соты, чтобы работать с частями ключей"))
+        for button in self.timeline_mode.buttons:
+            button.setStyleSheet("padding:2px 8px; font-size:11.5px;")
         column.addWidget(self._transport())
         column.addWidget(self.timeline, 1)
-        body.addWidget(lower)
-        body.setStretchFactor(0, 1)
-        body.setStretchFactor(1, 0)
+        column.addWidget(self._status_bar())
+        right.addWidget(lower)
+        right.setStretchFactor(0, 4)
+        right.setStretchFactor(1, 5)
+        body.addWidget(right)
+        body.setStretchFactor(0, 4)
+        body.setStretchFactor(1, 6)
         page.addWidget(body, 1)
-        page.addWidget(self._status_bar())
+        self.body, self.right = body, right
         self._choose_tool("brush")
         self.set_family("tilt")
+        self.set_detailed(bool(self.settings.get("timeline_detailed", False)))
 
     def _top_bar(self) -> QWidget:
         bar = QWidget()
@@ -1047,36 +1071,67 @@ class KineticEditor(QMainWindow):
                         np.ones(track.size, bool))
         self._changed(keys=True)
 
+    @staticmethod
+    def _parts(chosen) -> dict:
+        """Chosen keys as (family, frame) -> the motors taken: a key chosen
+        on a ring's or a cell's lane is that part of the key, and two lanes
+        of one key take both their parts."""
+        parts: dict = {}
+        for key, frame in chosen:
+            lane = lane_of(key)
+            mask = lane.mask()
+            got = parts.get((lane.family, int(frame)))
+            parts[(lane.family, int(frame))] = mask if got is None else (got | mask)
+        return parts
+
     def delete_keys(self) -> None:
         chosen = sorted(self.timeline.chosen)
         if not chosen:
             self.status.setText(tr("Выберите ключи на таймлайне"))
             return
         self._record()
-        for family, frame in chosen:
+        for (family, frame), mask in self._parts(chosen).items():
             track = self.project.tracks[family]
             index = track.index(frame)
             if index is not None:
-                track.remove(index)
+                track.remove(index, None if mask.all() else mask)
         self.timeline.chosen = set()
         self._changed(keys=True)
 
     def _move_keys(self, chosen, by: int) -> None:
         self._record()
-        moved = set()
+        parts = self._parts(chosen)
         for family in km.FAMILIES:
-            frames = sorted((f for fam, f in chosen if fam == family),
+            frames = sorted((frame for fam, frame in parts if fam == family),
                             reverse=by > 0)
             track = self.project.tracks[family]
             for frame in frames:
                 index = track.index(frame)
                 if index is None:
                     continue
+                mask = parts[(family, frame)]
                 target = max(0, min(self.project.length - 1, frame + by))
-                track.move(index, target)
-                moved.add((family, target))
-        self.timeline.chosen = moved
+                track.move(index, target, None if mask.all() else mask)
+        top = self.project.length - 1
+        self.timeline.chosen = {(key, max(0, min(top, frame + by)))
+                                for key, frame in chosen}
         self._changed(keys=True)
+
+    def set_detailed(self, on: bool) -> None:
+        """The timeline's tree of lanes, or its three families alone."""
+        self.timeline.set_detailed(on)
+        self.timeline_mode.buttons[1 if on else 0].setChecked(True)
+        if self.settings.get("timeline_detailed") != bool(on):
+            self.settings["timeline_detailed"] = bool(on)
+            self._write_settings()
+
+    def _lane_picked(self, key) -> None:
+        """A lane's name clicked: its family to work on, and its cells
+        chosen -- a ring, a group, a cell."""
+        lane = lane_of(key)
+        self.set_family(lane.family)
+        if lane.level > 0:
+            self._select(lane.cells(), "set")
 
     def step_key(self, direction: int) -> None:
         frames = self.project.tracks[self.family].frames

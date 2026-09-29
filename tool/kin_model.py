@@ -272,15 +272,26 @@ class Track:
             del self.frames[index], self.values[index], self.keyed[index]
         self._changed()
 
-    def move(self, index: int, frame: int) -> int:
+    def move(self, index: int, frame: int, mask=None) -> int:
         """Slide a key to another frame; returns where it now is.
 
         Onto another key it merges, what it keys winning, so dragging a pose
-        onto an existing one never silently loses either.
+        onto an existing one never silently loses either. With `mask`, only
+        those motors' part of the key goes -- a ring's share of a stroke,
+        dragged on the ring's own lane -- and the rest stays where it was.
         """
         frame = max(0, int(frame))
         if self.frames[index] == frame:
             return index
+        if mask is not None:
+            part = self.keyed[index] & np.asarray(mask, bool).reshape(-1)
+            if not part.any():
+                return index
+            if (self.keyed[index] & ~part).any():
+                values = self.values[index]
+                self.remove(index, part)
+                self.write(frame, values, part)
+                return self.index(frame)
         values, keyed = self.values[index], self.keyed[index]
         del self.frames[index], self.values[index], self.keyed[index]
         other = self.index(frame)
