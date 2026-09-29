@@ -265,3 +265,8 @@ qa/media/
 
 # The editor's working files, beside the program.
 drafts/
+
+# The kinetic editor's own settings beside the program, and its projects,
+# which are the artists' work.
+kinedit.json
+*.kin

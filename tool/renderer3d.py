@@ -49,7 +49,7 @@ class Renderer3D:
         )
 
         self.frame_uniform = device.create_buffer(
-            size=16 * 4 + 16 + 16,
+            size=16 * 4 + 16 + 16 + 16,
             usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST)
         self.screen_settings = device.create_buffer(
             size=128, usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST)
@@ -64,6 +64,12 @@ class Renderer3D:
         self.cell_buffer = device.create_buffer_with_data(
             data=np.ascontiguousarray(blank),
             usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST)
+        # Two colours a cell, for the kinetic editor: what it is painted, and
+        # what is laid over it. Zero here, which the shader takes as none.
+        self.tint_buffer = device.create_buffer_with_data(
+            data=np.zeros((self.cell_count * 2, 4), np.float32),
+            usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST)
+        self.painted = 0.0           # 1: the cells show their paint, not video
 
         self.frame_group = device.create_bind_group(
             layout=self.pipeline.get_bind_group_layout(0),
@@ -72,7 +78,10 @@ class Renderer3D:
                 "size": self.frame_uniform.size}},
                      {"binding": 1, "resource": {
                 "buffer": self.cell_buffer, "offset": 0,
-                "size": self.cell_buffer.size}}])
+                "size": self.cell_buffer.size}},
+                     {"binding": 2, "resource": {
+                "buffer": self.tint_buffer, "offset": 0,
+                "size": self.tint_buffer.size}}])
         self.piece_groups = [
             device.create_bind_group(
                 layout=self.pipeline.get_bind_group_layout(1),
@@ -212,7 +221,7 @@ class Renderer3D:
             layout=self.pipeline.get_bind_group_layout(2), entries=entries)
 
     def _write_frame(self) -> None:
-        values = np.zeros(16 + 4 + 4, dtype=np.float32)
+        values = np.zeros(16 + 4 + 4 + 4, dtype=np.float32)
         # Column-major, which is how WGSL reads a mat4x4.
         values[:16] = self.scene.view_projection().T.reshape(-1)
         values[16] = self.backing
@@ -221,6 +230,7 @@ class Renderer3D:
         values[19] = self.flood
         values[20:23] = self.light
         values[23] = self.cull_far_side
+        values[24] = self.painted
         self.device.queue.write_buffer(self.frame_uniform, 0, values.tobytes())
 
     # -- what the window changes -----------------------------------------------
@@ -305,6 +315,24 @@ class Renderer3D:
     def rest_cells(self) -> None:
         """Put every cell back where it was modelled."""
         self.set_cells(np.tile(np.eye(4, dtype=np.float32), (self.cell_count, 1, 1)))
+
+    def set_tints(self, paint, over=None) -> None:
+        """The kinetic editor's colours: rgb per cell, and rgba laid over.
+
+        Both indexed the way the cells are -- by the cell each vertex of the
+        moving screen says it belongs to, the same index `set_cells` takes.
+        """
+        both = np.zeros((self.cell_count, 2, 4), np.float32)
+        both[:, 0, :3] = np.asarray(paint, np.float32).reshape(self.cell_count, 3)
+        if over is not None:
+            both[:, 1, :] = np.asarray(over, np.float32).reshape(self.cell_count, 4)
+        self.device.queue.write_buffer(self.tint_buffer, 0,
+                                       np.ascontiguousarray(both).tobytes())
+
+    def show_paint(self, on: bool) -> None:
+        """The moving cells in their paint rather than showing the video."""
+        self.painted = 1.0 if on else 0.0
+        self._write_frame()
 
     def set_gain(self, gains: dict, frame: float | None = None) -> None:
         """How brightly each screen is turned up, as rgb multipliers."""

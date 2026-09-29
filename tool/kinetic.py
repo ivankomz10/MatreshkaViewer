@@ -16,11 +16,12 @@ of the same file and against the rig's own animation read back out of Blender.
 
   reading      exact: rebuilt from the JSON and compared with the clip on all
                1829 tracks of a real piece, worst disagreement zero
-  tilt         value x 90 degrees, so the mechanical limit is at one third
+  tilt         value x 90 degrees; how far a cell may go depends on the gaps
+               beside its ring (see kin_model: 0, 10 or 30 degrees)
   pusher       value x 1000 mm, radially out; measured 99.77 cm at 0.9979
-  jack         a state number, not a fraction. States 1, 2 and 3 are 330, 660
-               and 1300 mm of ring gap; state 0 exists but is a service
-               position and is never commanded. A move between two states
+  jack         a state number, not a fraction. States 0, 1, 2 and 3 are 0,
+               330, 660 and 1300 mm of ring gap -- 0 is commanded too, in 45
+               of the 123 shows on the content drive. A move between two states
                passes through the millimetres of every state between them, not
                straight from one to the other: 1 to 3 goes by way of 660, and
                reading it the other way is 320 mm wrong at the top ring.
@@ -47,7 +48,7 @@ from lang import tr
 
 # -- what a unit of each motor is worth --------------------------------------
 
-TILT_DEGREES = 90.0            # value x this, so +-1/3 is the +-30 degree limit
+TILT_DEGREES = 90.0            # value x this: +-1/3 is 30 degrees, the widest
 PUSHER_MM = 1000.0             # value x this, radially outward
 
 # Jack states, in millimetres of ring gap.

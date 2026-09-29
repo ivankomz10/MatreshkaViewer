@@ -6930,7 +6930,21 @@ class Viewer(QMainWindow):
 STYLESHEET = theme.sheet()
 
 
+def _asked_for(flag: str):
+    """The value after `flag` on the command line, or None."""
+    argv = sys.argv
+    if flag in argv and argv.index(flag) + 1 < len(argv):
+        return argv[argv.index(flag) + 1]
+    return None
+
+
 def main() -> int:
+    # The kinetic editor lives in the same executable: MatreshkaKinetic.exe
+    # beside it starts this with --kinetic, and so does the viewer's own
+    # button. Everything after the flag is the editor's.
+    if "--kinetic" in sys.argv:
+        import kinedit
+        return kinedit.main([one for one in sys.argv if one != "--kinetic"])
     written = logfile.start(APP_NAME, APP_VERSION)
     app = QApplication(sys.argv)
     # The design's own faces when they travel with the program, then the
@@ -6949,6 +6963,23 @@ def main() -> int:
         logfile.write(f"log: {written}")
     window.show()
     logfile.loading_done()
+    # From the kinetic editor's «Во вьюере»: its JSON, and the video and the
+    # sound it was made to, straight onto the quick look's rows.
+    handed = {title: _asked_for(flag) for title, flag in
+              (("Kinetic", "--motors"), ("Top", "--top"), ("Sound", "--sound"))}
+    handed = {title: path for title, path in handed.items() if path}
+    if handed:
+        def put() -> None:
+            if window.level != "view":
+                window._set_level("view")
+            for title, path in handed.items():
+                row = window.row_for(title)
+                if row is not None:
+                    row.field.setText(path)
+            logfile.write("handed over: " + ", ".join(
+                f"{title} {Path(path).name}" for title, path in handed.items()))
+            window._load()
+        QTimer.singleShot(0, put)
     # After the window is painted, not during construction: the check talks to
     # the GPU and may open a dialog, and both want something to sit in front of.
     QTimer.singleShot(0, window.check_machine)

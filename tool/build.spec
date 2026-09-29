@@ -182,6 +182,36 @@ exe = EXE(
     entitlements_file=None,
 )
 
+# The kinetic editor's own name on Windows: MatreshkaKinetic.exe, a few
+# megabytes that start MatreshkaViewer.exe --kinetic beside it (see
+# kin_launcher.py). The editor itself is inside the viewer's executable, so it
+# is not a second hundred megabytes of the same Qt and the same building. On
+# macOS the editor is started the same way, from the viewer's bundle, with
+# --kinetic.
+if not MAC:
+    door = Analysis(
+        [os.path.join(TOOL, "kin_launcher.py")],
+        pathex=[TOOL],
+        binaries=[],
+        datas=[],
+        hiddenimports=[],
+        excludes=["numpy", "PySide6", "wgpu", "rendercanvas", "tkinter",
+                  "unittest", "pydoc", "email", "http", "xml"],
+        noarchive=False,
+    )
+    EXE(
+        PYZ(door.pure),
+        door.scripts,
+        door.binaries,
+        door.datas,
+        [],
+        name="MatreshkaKinetic",
+        debug=False,
+        strip=False,
+        upx=False,
+        console=False,
+    )
+
 if MAC:
     collected = COLLECT(
         exe,

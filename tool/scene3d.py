@@ -49,6 +49,9 @@ struct Frame {
     // xyz direction towards the light; w: 1 to drop the far side of the
     // top screen, so its own back does not show through its front
     light: vec4<f32>,
+    // x: 1 to show the moving cells in their own colours (`tints`) instead
+    //    of the video -- the kinetic editor's mask; the viewer leaves it 0
+    paint: vec4<f32>,
 };
 
 struct Piece {
@@ -65,12 +68,18 @@ struct Piece {
 // together in the buffer, so which one a vertex belongs to is its own index
 // divided by six -- nothing has to be baked beside the geometry to say so.
 @group(0) @binding(1) var<storage, read> cells: array<mat4x4<f32>>;
+// Two colours per cell of the kinetic screen: [2i] what it is painted,
+// shown when `frame.paint.x` is on; [2i+1] rgb and a weight laid over it
+// either way -- a selection, a cell over its limit. All zero in the viewer,
+// which is how it draws exactly what it drew before these existed.
+@group(0) @binding(2) var<storage, read> tints: array<vec4<f32>>;
 @group(1) @binding(0) var<uniform> piece: Piece;
 
 struct VOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
+    @location(2) @interpolate(flat) cell: u32,
 };
 
 @vertex
@@ -93,6 +102,7 @@ fn vs_main(@location(0) point: vec3<f32>,
     out.pos = frame.view_projection * vec4<f32>(here, 1.0);
     out.normal = facing;
     out.uv = uv;
+    out.cell = u32(cell);
     return out;
 }
 
@@ -279,7 +289,20 @@ fn fs_main(in: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f3
     }
     if (piece.colour.w > 0.5) {
         // A screen shows what it is given, unlit: it is a lamp, not a surface.
-        return vec4<f32>(screen_colour(i32(piece.which.x), in.uv), 1.0);
+        var shown = screen_colour(i32(piece.which.x), in.uv);
+        if (piece.which.y > 0.5) {
+            let at = in.cell * 2u;
+            if (frame.paint.x > 0.5) {
+                // The mask is a surface rather than a lamp: lit a little, so
+                // the shape the cells make still reads through their colour.
+                let n = normalize(in.normal);
+                let facing = clamp(dot(n, normalize(frame.light.xyz)), -1.0, 1.0);
+                shown = tints[at].rgb * (0.6 + 0.4 * (facing * 0.5 + 0.5));
+            }
+            let over = tints[at + 1u];
+            shown = mix(shown, over.rgb, over.a);
+        }
+        return vec4<f32>(shown, 1.0);
     }
     // Everything else only has to read as a shape. Lit from above and filled
     // from below so nothing goes to pure black and hides what it occludes.

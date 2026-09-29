@@ -81,7 +81,7 @@ jobs:
 
       - name: Package
         shell: pwsh
-        run: Compress-Archive -Path MatreshkaViewer.exe -DestinationPath MatreshkaViewer-windows.zip
+        run: Compress-Archive -Path MatreshkaViewer.exe, MatreshkaKinetic.exe -DestinationPath MatreshkaViewer-windows.zip
 
       - uses: actions/upload-artifact@v7
         with:
