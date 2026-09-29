@@ -73,6 +73,21 @@ JACK_REST_STATE = 1
 JACK_LIKE_THE_RIG = True
 JACK_SCALE = 0.1 if JACK_LIKE_THE_RIG else 1.0
 
+# Which gap a jack row of a file opens. The files disagree, by tool:
+#
+#   "rig"      row N opens the gap between rings N and N+1, and row 30 has no
+#              gap to open. Houdini's exporter writes rows 1 to 29, and the rig
+#              in the blend moves the rings so -- which is what the viewer was
+#              checked against, to 5.6 mm, and still reads.
+#   "machine"  the lowest ring stands on the base and the jacks are between
+#              the others (the technical director, 2026-09-29): row 1 has no
+#              jack and row N opens the gap under ring N. Cinema 4D numbers
+#              them so -- it writes rows 2 to 30 and holds row 1 still -- and
+#              the kinetic editor works in it.
+#
+# Read one way, a file made the other way lifts every ring one ring off.
+JACK_READING = "rig"
+
 ROWS, PER_ROW, PER_PUSHER = 30, 50, 5
 
 # A cell swings about a hinge on its own meridian, level with the cell centre,
@@ -414,9 +429,7 @@ class Motors:
         every gap below it. The modelled geometry already sits at state 1, so
         what counts is the difference from there.
         """
-        states = self.jack[:, frame]
-        gaps = (_state_mm(states) - JACK_STATE_MM[JACK_REST_STATE]) * JACK_SCALE
-        return np.concatenate([[0.0], np.cumsum(gaps[:-1])])
+        return rise_mm(self.jack[:, frame])
 
     def out(self, frame: int) -> np.ndarray:
         """How far each cell has been pushed out, in millimetres."""
@@ -441,6 +454,16 @@ def _state_mm(states) -> np.ndarray:
     part = states - low
     table = np.array([JACK_STATE_MM[i] for i in range(4)])
     return table[low] * (1.0 - part) + table[high] * part
+
+
+def rise_mm(states, reading: str | None = None) -> np.ndarray:
+    """How much each ring has risen, in millimetres, bottom to top, for the
+    jack rows as given -- read the rig's way or the machine's (see
+    JACK_READING). The lowest ring never rises either way."""
+    gaps = ((_state_mm(states) - JACK_STATE_MM[JACK_REST_STATE]) * JACK_SCALE)
+    if (reading or JACK_READING) == "machine":
+        return np.concatenate([[0.0], np.cumsum(gaps[1:])])
+    return np.concatenate([[0.0], np.cumsum(gaps[:-1])])
 
 
 def transforms(centres: np.ndarray, addresses: np.ndarray,

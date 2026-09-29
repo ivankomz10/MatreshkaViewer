@@ -140,10 +140,8 @@ class PoseMotors:
                 * kinetic.PUSHER_MM)
 
     def rise(self, frame=None) -> np.ndarray:
-        gaps = ((kinetic._state_mm(self.pose["lift"])
-                 - kinetic.JACK_STATE_MM[kinetic.JACK_REST_STATE])
-                * kinetic.JACK_SCALE)
-        return np.concatenate([[0.0], np.cumsum(gaps[:-1])])
+        # The machine's numbering, not the rig's: row N lifts ring N.
+        return kinetic.rise_mm(self.pose["lift"], km.READING)
 
 
 def mask_colours(pose: dict, layer: str) -> np.ndarray:
@@ -1084,11 +1082,13 @@ class KineticEditor(QMainWindow):
         push = float(pose["push"][row, which // PER_PUSHER])
         tilt = float(pose["tilt"][row, which])
         reach = float(km.tilt_reach(pose["lift"])[row])
+        # The lowest ring stands on the base: there is no gap under it.
+        gap = ("—" if row == km.NO_JACK
+               else f"{float(kinetic._state_mm(lift)):.0f} " + tr("мм"))
         self.hover_label.setText(tr(
-            "кольцо {0}, сота {1}: зазор {2:.0f} мм, вынос {3:.0f} мм, "
+            "кольцо {0}, сота {1}: зазор под ним {2}, вынос {3:.0f} мм, "
             "наклон {4:+.1f}° (предел ±{5:.0f}°)",
-            row + 1, which + 1, float(kinetic._state_mm(lift)), push * 1000,
-            tilt * 90, reach * 90))
+            row + 1, which + 1, gap, push * 1000, tilt * 90, reach * 90))
 
     # -- keys on the keyboard ------------------------------------------------------------------
 

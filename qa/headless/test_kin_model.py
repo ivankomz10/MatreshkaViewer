@@ -69,12 +69,15 @@ def test_keys_ease_like_the_exporter_and_only_where_they_are():
     assert lift.at(1100)[4] == 3.0 and lift.at(1100)[9] == 0.0
 
 
-def test_a_jack_keys_only_its_four_places():
+def test_a_jack_keys_only_its_four_places_and_row_one_has_none():
     track = km.Project().tracks["lift"]
     track.write(60, np.full(ROWS, 1.7), np.ones(ROWS, bool))
-    assert set(np.unique(track.values[track.index(60)])) == {2.0}
+    key = track.values[track.index(60)]
+    assert set(np.unique(key[1:])) == {2.0}
     track.write(90, np.full(ROWS, 9.0), np.ones(ROWS, bool))
-    assert set(np.unique(track.values[track.index(90)])) == {3.0}
+    assert set(np.unique(track.values[track.index(90)][1:])) == {3.0}
+    # The lowest ring stands on the base: row 1 is asked, and stays.
+    assert track.at(90)[km.NO_JACK] == km.REST["lift"]
 
 
 def test_moving_a_key_onto_another_merges_and_undo_puts_it_back():
@@ -139,6 +142,23 @@ def test_a_real_show_goes_in_as_keys_and_comes_out_the_same(name):
         assert np.abs(got[..., :frames] - want[..., :frames]).max() < 1e-4
     if name.startswith("23 February"):
         assert any("наложенными" in one for one in said), said
+    # Houdini numbers the jacks one lower than the machine; Cinema 4D does not.
+    moving_first = np.ptp(original.jack[0]) > 0
+    assert moving_first == any("ряда 1" in one for one in said), said
+
+
+def test_the_rings_rise_the_machines_way_in_the_editor():
+    """Row N lifts ring N; the lowest ring never moves. The viewer's own
+    reading is the rig's, and is kept apart."""
+    lift = np.full(ROWS, 1.0)
+    lift[5] = 3.0                          # row 6: the gap under ring 6
+    rise = kinetic.rise_mm(lift, "machine")
+    assert np.all(rise[:5] == 0) and np.all(rise[5:] > 0)
+    rig = kinetic.rise_mm(lift, "rig")
+    assert np.all(rig[:6] == 0) and np.all(rig[6:] > 0)
+    lift = np.full(ROWS, 1.0)
+    lift[0] = 3.0
+    assert not kinetic.rise_mm(lift, "machine").any()
 
 
 # -- the limits ----------------------------------------------------------------------
@@ -147,15 +167,22 @@ def test_tilts_are_held_to_cinema4d_by_the_narrower_gap():
     lift = np.full(ROWS, 1.0)
     reach = km.tilt_reach(lift)
     assert np.allclose(reach, 10 / 90)
-    lift[10] = 0.0                  # the gap between rings 10 and 11 closed
+    # Row 11's jack closed: the gap under ring 11, over ring 10 (from zero,
+    # 10 and 9) -- the machine's numbering, Cinema 4D's.
+    lift[10] = 0.0
     reach = km.tilt_reach(lift)
-    assert reach[10] == 0.0 and reach[11] == 0.0
-    assert reach[9] == pytest.approx(10 / 90) and reach[12] == pytest.approx(10 / 90)
+    assert reach[10] == 0.0 and reach[9] == 0.0
+    assert reach[8] == pytest.approx(10 / 90) and reach[11] == pytest.approx(10 / 90)
     lift = np.full(ROWS, 2.0)
     assert np.allclose(km.tilt_reach(lift), 30 / 90)
-    # The top ring has only the gap below it; the last jack moves nothing.
+    # Row 1 has no jack: what it says changes nothing. The top ring has only
+    # the gap under it.
+    lift[0] = 0.0
+    assert np.allclose(km.tilt_reach(lift), 30 / 90)
     lift[ROWS - 1] = 0.0
-    assert km.tilt_reach(lift)[ROWS - 1] == pytest.approx(30 / 90)
+    reach = km.tilt_reach(lift)
+    assert reach[ROWS - 1] == 0.0 and reach[ROWS - 2] == 0.0
+    assert reach[ROWS - 3] == pytest.approx(30 / 90)
     tilt = np.full((ROWS, PER_ROW), 0.45)
     held = km.clamp_tilt(tilt, np.full(ROWS, 1.0))
     assert np.allclose(held, 10 / 90)

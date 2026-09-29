@@ -37,11 +37,11 @@ far as the narrower of the two gaps beside its ring allows --
   narrower gap state 2, 3  +-0.333 (30 degrees)
 
 -- and 45 degrees, which Houdini allows once a pusher is out, is not used.
-Which gap is beside which ring is the viewer's reading, the one checked
-against the rig to 5.6 mm: the jack of row N opens the gap between rings N
-and N+1, so the top row's jack moves nothing. Houdini's and Cinema 4D's own
-tilt rules read it one ring lower; that is an open question about the machine
-and is kept in one function, `gaps_around`, so it is one line to change.
+Which gap is beside which ring is the machine's (kinetic.JACK_READING): the
+lowest ring stands on the base and the jacks are between the others, so row
+1 has no jack and row N opens the gap under ring N -- Cinema 4D's numbering.
+Houdini's exporter, the rig and the viewer number them one lower; a file made
+there comes in with its row 1 moving, and the editor says so.
 """
 from __future__ import annotations
 
@@ -84,6 +84,11 @@ LIFT_THRESHOLDS = (16.5 / 130.0, 49.5 / 130.0, 98.0 / 130.0)
 
 FORMAT = "matreshka-kinetic"
 VERSION = 1
+
+# The machine's numbering of the jacks (see kinetic.JACK_READING): row 1's is
+# not there, and nothing the tools do moves it.
+READING = "machine"
+NO_JACK = 0
 
 
 class ModelError(Exception):
@@ -217,6 +222,10 @@ class Track:
         if not mask.any():
             return
         values = self._legal(values)
+        if self.family == "lift" and READING == "machine":
+            # Row 1 has no jack: whatever is asked of it, it stays.
+            values = values.copy()
+            values[NO_JACK] = self.at(frame).reshape(-1)[NO_JACK]
         at = self.index(frame)
         if at is None:
             base = self.at(frame).reshape(-1)
@@ -298,14 +307,20 @@ class Track:
 def gaps_around(lift) -> tuple[np.ndarray, np.ndarray]:
     """The jack state of the gap below and above each ring, inf for none.
 
-    The viewer's reading: jack N (from zero) opens the gap between rings N
-    and N+1, so ring 0 has nothing below and the last jack moves nothing.
+    The machine's reading: jack N (from zero) opens the gap under ring N, so
+    the lowest ring stands on the base with nothing below it, and jack 0 is
+    not there. Cinema 4D's own rule reads exactly so: ring r between up[r]
+    and up[r+1], the lowest ring by up[1] alone, the top one by up[29].
     """
     lift = np.asarray(lift, np.float64).reshape(ROWS)
     below = np.full(ROWS, np.inf)
     above = np.full(ROWS, np.inf)
-    below[1:] = lift[:-1]
-    above[:-1] = lift[:-1]
+    if READING == "machine":
+        below[1:] = lift[1:]
+        above[:-1] = lift[1:]
+    else:
+        below[1:] = lift[:-1]
+        above[:-1] = lift[:-1]
     return below, above
 
 
@@ -654,6 +669,10 @@ def from_motor_json(path: str | Path) -> tuple["Project", list[str]]:
                         np.ones(track.size, bool))
     if jumps:
         said.append(tr("ключей домкратов между положениями: {0}", jumps))
+    first_row = np.array([one[NO_JACK] for one in project.tracks["lift"].values])
+    if READING == "machine" and np.ptp(first_row) > 1e-6:
+        said.append(tr("домкрат ряда 1 двигается, а у машины его нет — файл "
+                       "пронумерован как в Houdini, подъём сдвинут на кольцо"))
     if overlaps:
         said.append(tr("моторов с наложенными сегментами: {0}", len(overlaps)))
     if starts_off:
@@ -804,10 +823,7 @@ def ring_heights(lift, base=None) -> np.ndarray:
     base = (np.arange(ROWS) * RING_PITCH_M if base is None
             else np.asarray(base, np.float64).reshape(ROWS))
     lift = np.asarray(lift, np.float64).reshape(ROWS)
-    gaps = ((kinetic._state_mm(lift)
-             - kinetic.JACK_STATE_MM[kinetic.JACK_REST_STATE])
-            * kinetic.JACK_SCALE / 1000.0)
-    return base + np.concatenate([[0.0], np.cumsum(gaps[:-1])])
+    return base + kinetic.rise_mm(lift, READING) / 1000.0
 
 
 def cell_azimuths() -> np.ndarray:

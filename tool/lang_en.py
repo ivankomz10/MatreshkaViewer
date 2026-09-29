@@ -546,8 +546,8 @@ EN: dict = {
     ' с': ' s',
     'без имени': 'untitled',
     'Поза слоя «{0}» скопирована': 'The {0} pose is copied',
-    'кольцо {0}, сота {1}: зазор {2:.0f} мм, вынос {3:.0f} мм, наклон {4:+.1f}° (предел ±{5:.0f}°)':
-        'ring {0}, cell {1}: gap {2:.0f} mm, push {3:.0f} mm, tilt {4:+.1f}° (limit ±{5:.0f}°)',
+    'кольцо {0}, сота {1}: зазор под ним {2}, вынос {3:.0f} мм, наклон {4:+.1f}° (предел ±{5:.0f}°)':
+        'ring {0}, cell {1}: gap under it {2}, push {3:.0f} mm, tilt {4:+.1f}° (limit ±{5:.0f}°)',
     'Сохранить изменения в кинетике?': 'Save the changes to the kinetics?',
     'Открыть кинетику': 'Open kinetics',
     'Кинетика (*.kin *.json)': 'Kinetics (*.kin *.json)',
@@ -633,8 +633,8 @@ EN: dict = {
     'Профиль вазы': 'Vase profile',
     'Кривая от нижнего кольца до верхнего: насколько вынесено каждое кольцо, все десять его пушеров разом. С выбором — только выбранные группы. Наклон по касательной кладёт соты вдоль получившейся поверхности, в пределах их зазоров. Двойной щелчок — точка, правый — убрать.':
         'A curve from the lowest ring to the top: how far out each ring is pushed, all ten of its pushers at once. With a selection, only the chosen groups. Tilt along the tangent lays the cells along the surface made, within their gaps. Double-click adds a point, right click takes one away.',
-    'Зазор над кольцом, мм. Домкрат стоит только в четырёх положениях; между ключами он переходит плавно. Верхний домкрат ничего не двигает — над последним кольцом зазора нет.':
-        'The gap above the ring, mm. A jack stands in four places only; between keys it moves smoothly. The top jack moves nothing: there is no gap above the last ring.',
+    'Зазор под кольцом, мм. Домкрат стоит только в четырёх положениях; между ключами он переходит плавно. Нижнее кольцо стоит на основании — домкрата под ним нет.':
+        'The gap under the ring, mm. A jack stands in four places only; between keys it moves smoothly. The lowest ring stands on the base, with no jack under it.',
     'Все кольца': 'All rings',
     '{0}: кадр {1}, моторов {2} из {3}': '{0}: frame {1}, {2} motors of {3}',
     'Кисть {0:.1f} соты': 'Brush {0:.1f} cells',
@@ -648,4 +648,6 @@ EN: dict = {
         'cells past the tilt limit: {0} at {1} keys',
     '{0} — не проект редактора кинетики': '{0} is not a kinetic editor project',
     '{0}: ключ не того размера': '{0}: a key of the wrong size',
+    'домкрат ряда 1 двигается, а у машины его нет — файл пронумерован как в Houdini, подъём сдвинут на кольцо':
+        'the row 1 jack moves, and the machine has none: the file is numbered as Houdini numbers it, the lift is one ring off',
 }

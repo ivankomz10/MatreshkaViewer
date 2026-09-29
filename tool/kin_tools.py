@@ -476,9 +476,10 @@ class RingsPanel(Panel):
     def __init__(self, actions) -> None:
         super().__init__(actions, "qa_kin_rings_panel")
         self.column.addWidget(heading(tr("Кольца")))
-        self.column.addWidget(note(tr("Зазор над кольцом, мм. Домкрат стоит только в четырёх положениях; "
-            "между ключами он переходит плавно. Верхний домкрат ничего не "
-            "двигает — над последним кольцом зазора нет.")))
+        self.column.addWidget(note(tr(
+            "Зазор под кольцом, мм. Домкрат стоит только в четырёх положениях; "
+            "между ключами он переходит плавно. Нижнее кольцо стоит на "
+            "основании — домкрата под ним нет.")))
         everything = segments([f"{mm}" for mm in LIFT_MM], "qa_kin_rings_all",
                               lambda i: actions.set_rings(np.ones(ROWS, bool), i), 1)
         self.column.addWidget(labelled(tr("Все кольца"), everything))
@@ -505,6 +506,8 @@ class RingsPanel(Panel):
                 button.setProperty("segment", True)
                 button.setFixedHeight(20)
                 button.setStyleSheet("padding:0px 4px; font-size:11px;")
+                # The lowest ring stands on the base, with no jack under it.
+                button.setEnabled(ring != km.NO_JACK)
                 group.addButton(button, state)
                 grid.addWidget(button, place, state + 1)
                 buttons.append(button)
