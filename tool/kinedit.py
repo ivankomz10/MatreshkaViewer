@@ -173,7 +173,7 @@ def mask_colours(pose: dict, layer: str) -> np.ndarray:
         return ramp(0.15 + 0.85 * red, FAMILY_COLOUR["lift"])
     if layer == "push":
         return ramp(0.12 + 0.88 * push, FAMILY_COLOUR["push"])
-    level = np.abs(tilt) / km.TILT_REACH[2]
+    level = np.abs(tilt) / 0.5            # 45 degrees, the widest there is
     warm = ramp(level, "#e3a04a")
     cold = ramp(level, FAMILY_COLOUR["tilt"])
     return np.where((tilt >= 0)[..., None], cold, warm)
@@ -753,7 +753,7 @@ class KineticEditor(QMainWindow):
         pose, _ = self._shown()
         colours = mask_colours(pose, self.layer)
         over = np.zeros((ROWS, PER_ROW, 4), np.float32)
-        warn = km.over_limit(pose["tilt"], pose["lift"])
+        warn = km.over_limit(pose["tilt"], pose["lift"], pose["push"])
         over[warn] = (0.95, 0.25, 0.25, 0.75)
         if self._under is not None:
             weight = self._under
@@ -962,7 +962,8 @@ class KineticEditor(QMainWindow):
         """Key `values` for the motors in `mask` at the playhead, in bounds."""
         track = self.project.tracks[family]
         if family == "tilt":
-            values = km.clamp_tilt(values, self.pose_now()["lift"]).reshape(-1)
+            pose = self.pose_now()
+            values = km.clamp_tilt(values, pose["lift"], pose["push"]).reshape(-1)
         track.write(self.frame, values, mask)
         self.dirty = True
 
@@ -1249,14 +1250,15 @@ class KineticEditor(QMainWindow):
         lift = float(pose["lift"][row])
         push = float(pose["push"][row, which // PER_PUSHER])
         tilt = float(pose["tilt"][row, which])
-        reach = float(km.tilt_reach(pose["lift"])[row])
+        low, high = km.tilt_bounds(pose["lift"], pose["push"])
         # The lowest ring stands on the base: there is no gap under it.
         gap = ("—" if row == km.NO_JACK
                else f"{float(kinetic._state_mm(lift)):.0f} " + tr("мм"))
         self.hover_label.setText(tr(
             "кольцо {0}, сота {1}: зазор под ним {2}, вынос {3:.0f} мм, "
-            "наклон {4:+.1f}° (предел ±{5:.0f}°)",
-            row + 1, which + 1, gap, push * 1000, tilt * 90, reach * 90))
+            "наклон {4:+.1f}° (вниз до {5:.0f}°, вверх до {6:.0f}°)",
+            row + 1, which + 1, gap, push * 1000, tilt * 90,
+            float(high[row, which]) * 90, float(-low[row, which]) * 90))
 
     # -- keys on the keyboard ------------------------------------------------------------------
 

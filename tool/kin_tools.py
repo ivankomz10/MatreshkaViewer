@@ -190,7 +190,7 @@ class BrushPanel(Panel):
         self.push = Slider(0, 1000, 500, tr("мм"), "qa_kin_brush_push", 10)
         self.push.moved.connect(lambda v: setattr(actions, "brush_push", v / 1000.0))
         self.push_box = labelled(tr("Вынос, мм"), self.push)
-        self.tilt = Slider(-30, 30, 10, "°", "qa_kin_brush_tilt", 0.5, 1)
+        self.tilt = Slider(-45, 45, 10, "°", "qa_kin_brush_tilt", 0.5, 1)
         self.tilt.moved.connect(lambda v: setattr(actions, "brush_tilt", v / 90.0))
         self.tilt_box = labelled(tr("Наклон, градусы"), self.tilt)
         for box in (self.lift_box, self.push_box, self.tilt_box):
@@ -265,7 +265,7 @@ class SelectPanel(Panel):
                                                                live=True))
         self.push.released.connect(actions.end_edit)
         self.column.addWidget(labelled(tr("Вынос групп, мм"), self.push))
-        self.tilt = Slider(-30, 30, 0, "°", "qa_kin_set_tilt", 0.5, 1)
+        self.tilt = Slider(-45, 45, 0, "°", "qa_kin_set_tilt", 0.5, 1)
         self.tilt.pressed.connect(actions.begin_edit)
         self.tilt.moved.connect(lambda v: actions.set_selected("tilt", v / 90.0,
                                                                live=True))

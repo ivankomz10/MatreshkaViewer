@@ -99,7 +99,8 @@ def test_edits_are_held_to_the_gaps_as_they_are_made(fresh):
     fresh._select(cells, "set")
     fresh.set_selected("tilt", 0.3)
     tilt = fresh.pose_now()["tilt"]
-    assert np.allclose(tilt[10], 0.0), "a ring with a closed gap tilted"
+    # Face down into a closed gap: Houdini's 2 degrees; into 330 mm, 10.
+    assert np.allclose(tilt[10], 2 / 90), "a ring over a closed gap tilted"
     assert np.allclose(tilt[5], 10 / 90), "not held to 10 degrees at state 1"
 
 

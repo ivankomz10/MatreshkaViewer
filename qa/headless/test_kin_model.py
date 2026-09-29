@@ -165,10 +165,49 @@ def test_the_rings_rise_the_machines_way_in_the_editor_and_the_viewer():
 
 # -- the limits ----------------------------------------------------------------------
 
-def test_tilts_are_held_to_cinema4d_by_the_narrower_gap():
+def _degrees(lift, push=None):
+    low, high = km.tilt_bounds(lift, push)
+    return -low[:, 0] * 90, high[:, 0] * 90          # up, down: by ring
+
+
+def test_tilts_are_held_the_houdini_way_by_the_gap_they_swing_into():
+    lift = np.full(ROWS, 1.0)
+    up, down = _degrees(lift)
+    assert np.allclose(up[:-1], 10) and np.allclose(down[1:], 10)
+    # Nothing under the lowest ring, nothing over the top one: only the beam.
+    assert down[0] == pytest.approx(30) and up[-1] == pytest.approx(30)
+    # Row 11's jack closed: the gap under ring 11 (from zero, 10) and over
+    # ring 10 (9). Face down into it from above, face up into it from below.
+    lift[10] = 0.0
+    up, down = _degrees(lift)
+    assert down[10] == pytest.approx(2) and up[10] == pytest.approx(10)
+    assert up[9] == pytest.approx(2) and down[9] == pytest.approx(10)
+    # A gap of 660 mm lets 45 through, and the beam holds it to 30 until the
+    # pusher is out: 0.1 still 30, 0.2 all 45, half way half way.
+    lift = np.full(ROWS, 2.0)
+    for push, want in ((0.0, 30), (0.1, 30), (0.15, 37.5), (0.2, 45), (0.8, 45)):
+        up, down = _degrees(lift, np.full((ROWS, km.GROUPS), push))
+        assert np.allclose(up, want) and np.allclose(down, want), push
+    # Row 1 has no jack; a jack between two places is between their degrees.
+    lift[0] = 0.0
+    assert np.allclose(_degrees(lift)[1], 30)
+    lift = np.full(ROWS, 1.5)                 # 495 mm, half way to 660
+    assert _degrees(lift, np.full((ROWS, km.GROUPS), 1.0))[1][5] == \
+        pytest.approx(10 + (45 - 10) / 2, abs=0.01)
+    tilt = np.full((ROWS, PER_ROW), 0.45)
+    held = km.clamp_tilt(tilt, np.full(ROWS, 1.0))
+    assert np.allclose(held[1:], 10 / 90) and np.allclose(held[0], 30 / 90)
+    assert not km.over_limit(held, np.full(ROWS, 1.0)).any()
+    held = km.clamp_tilt(-tilt, np.full(ROWS, 1.0))
+    assert np.allclose(held[:-1], -10 / 90) and np.allclose(held[-1], -30 / 90)
+
+
+def test_cinema4ds_rule_is_kept_beside_it():
     lift = np.full(ROWS, 1.0)
     reach = km.tilt_reach(lift)
     assert np.allclose(reach, 10 / 90)
+    low, high = km.tilt_bounds(lift, rule="c4d")
+    assert np.allclose(high, 10 / 90) and np.allclose(low, -10 / 90)
     # Row 11's jack closed: the gap under ring 11, over ring 10 (from zero,
     # 10 and 9) -- the machine's numbering, Cinema 4D's.
     lift[10] = 0.0
@@ -185,10 +224,6 @@ def test_tilts_are_held_to_cinema4d_by_the_narrower_gap():
     reach = km.tilt_reach(lift)
     assert reach[ROWS - 1] == 0.0 and reach[ROWS - 2] == 0.0
     assert reach[ROWS - 3] == pytest.approx(30 / 90)
-    tilt = np.full((ROWS, PER_ROW), 0.45)
-    held = km.clamp_tilt(tilt, np.full(ROWS, 1.0))
-    assert np.allclose(held, 10 / 90)
-    assert not km.over_limit(held, np.full(ROWS, 1.0)).any()
 
 
 def test_violations_are_found_at_keys():
@@ -196,7 +231,9 @@ def test_violations_are_found_at_keys():
     tilt = project.tracks["tilt"]
     tilt.write(300, np.full(tilt.size, 0.3), np.ones(tilt.size, bool))
     found = dict(project.violations())
-    assert found == {300: ROWS * PER_ROW}
+    # 27 degrees face down: past the 10 of every gap at 330 mm, and within
+    # the beam's 30 on the lowest ring, which has no gap under it.
+    assert found == {300: (ROWS - 1) * PER_ROW}
 
 
 # -- the tools -------------------------------------------------------------------------

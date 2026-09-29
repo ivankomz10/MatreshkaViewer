@@ -28,15 +28,18 @@ is converted on the way out:
   tilt  the tilt, -0.5..0.5, times 90 degrees -- the sign the viewer reads,
         which is the Houdini exporter's own (it inverts on the way out)
 
-The limits are Cinema 4D's, chosen by the show's technical director as the
-rule to work to (screen_0.6.0.c4d, `get_field_data`): a cell may only tilt as
-far as the narrower of the two gaps beside its ring allows --
+The tilt limits are Houdini's (anim_simple, `rotate_clamp`), chosen by the
+show's technical director: by the direction of the tilt. A cell turning its
+face down swings into the gap under its ring, face up into the gap over it,
+and each gap allows
 
-  narrower gap state 0     no tilt at all
-  narrower gap state 1     +-0.111 (10 degrees)
-  narrower gap state 2, 3  +-0.333 (30 degrees)
+  0 mm (state 0)       2 degrees
+  330 mm (state 1)     10 degrees
+  660 mm and up        45 degrees        -- straight between, as a jack moves
 
--- and 45 degrees, which Houdini allows once a pusher is out, is not used.
+-- and then the beam: with its pusher out less than 0.1 a cell tilts 30
+degrees at most, from 0.2 out the whole 45. Cinema 4D's rule -- the narrower
+gap, both ways, 0, 10 or 30 -- is kept beside it (`TILT_RULE`).
 Which gap is beside which ring is the machine's (kinetic.JACK_READING): the
 lowest ring stands on the base and the jacks are between the others, so row
 1 has no jack and row N opens the gap under ring N -- Cinema 4D's numbering.
@@ -77,6 +80,18 @@ RANGE = {"lift": (0.0, 3.0), "push": (0.0, 1.0), "tilt": (-0.5, 0.5)}
 # one, which is 9; its comment, Houdini's ramp and the files themselves all
 # say 10 -- 0.111 is the commonest tilt in the shows made at state 1.
 TILT_REACH = (0.0, 10.0 / 90.0, 30.0 / 90.0)
+
+# The rule in force (see `tilt_bounds`): Houdini's, by the direction of the
+# tilt, chosen by the technical director over Cinema 4D's on 2026-09-29.
+TILT_RULE = "houdini"
+# Houdini's ramp, both of its remaps the same: the gap as millimetres over the
+# jack's whole travel (0, 33, 66, 130 of the rig's 130) to a fraction of 45
+# degrees (2, 10, 45, 45).
+HOUDINI_RAMP = ((0.0, 33.0 / 130.0, 66.0 / 130.0, 1.0),
+                (2.0 / 45.0, 10.0 / 45.0, 1.0, 1.0))
+# And the beam: pushed out this far, a cell clears it and may tilt this much.
+BEAM_PUSH = (0.1, 0.2)
+BEAM_DEGREES = (30.0, 45.0)
 
 # Houdini's reading of a painted lift, mask 0..1 to a state: the thresholds
 # are the midpoints between 0, 33, 66 and 130 mm (anim_simple, `discrete`).
@@ -325,23 +340,68 @@ def gaps_around(lift) -> tuple[np.ndarray, np.ndarray]:
 
 
 def tilt_reach(lift) -> np.ndarray:
-    """How far each ring's cells may tilt, either way, in JSON units."""
+    """Cinema 4D's reach: how far each ring's cells may tilt, either way, in
+    JSON units, by the narrower of the two gaps beside the ring."""
     below, above = gaps_around(lift)
     narrow = np.minimum(below, above)
     return np.where(narrow < 1.0, TILT_REACH[0],
                     np.where(narrow < 2.0, TILT_REACH[1], TILT_REACH[2]))
 
 
-def clamp_tilt(tilt, lift) -> np.ndarray:
-    reach = tilt_reach(lift)[:, None]
+def _houdini_degrees(state) -> np.ndarray:
+    """Houdini's ramp: a gap, as its jack's state, to the degrees a cell may
+    swing towards it -- 0 mm 2, 330 mm 10, 660 and up 45, straight between.
+    The ramp is on the rig's mask, millimetres over the whole travel, so a
+    jack half way between two places is half way between their millimetres.
+    None (inf) is no neighbour at all, and no limit from it."""
+    state = np.asarray(state, np.float64)
+    free = ~np.isfinite(state)
+    mask = kinetic._state_mm(np.where(free, 3.0, state)) / kinetic.JACK_STATE_MM[3]
+    degrees = np.interp(mask, HOUDINI_RAMP[0], HOUDINI_RAMP[1]) * 45.0
+    return np.where(free, 45.0, degrees)
+
+
+def tilt_bounds(lift, push=None, rule: str | None = None):
+    """How far each cell may tilt each way, JSON units: (lowest, highest),
+    (ROWS, PER_ROW) each.
+
+    Houdini's rule (anim_simple, `rotate_clamp`), the one in force: a cell
+    turning its face down swings into the gap under its ring and is held by
+    that gap alone; face up, by the gap over it -- through the ramp above,
+    the lowest ring having nothing under it and the top one nothing over.
+    Then the beam: a cell whose pusher is out less than 0.1 tilts 30 degrees
+    at most, from 0.2 out 45, straight between. A positive tilt is face down
+    (the viewer's reading, and Houdini's negative: its exporter inverts).
+
+    Cinema 4D's rule, kept beside it: the narrower gap, the same both ways,
+    0, 10 or 30 degrees, and no beam.
+    """
+    rule = rule or TILT_RULE
+    if rule == "c4d":
+        reach = np.repeat(tilt_reach(lift)[:, None], PER_ROW, axis=1)
+        return -reach, reach
+    below, above = gaps_around(lift)
+    down = np.repeat(_houdini_degrees(below)[:, None], PER_ROW, axis=1)
+    up = np.repeat(_houdini_degrees(above)[:, None], PER_ROW, axis=1)
+    push = (np.zeros((ROWS, GROUPS)) if push is None
+            else np.asarray(push, np.float64).reshape(ROWS, GROUPS))
+    beam = np.interp(spread("push", push), [BEAM_PUSH[0], BEAM_PUSH[1]],
+                     [BEAM_DEGREES[0], BEAM_DEGREES[1]])
+    return (-np.minimum(up, beam) / kinetic.TILT_DEGREES,
+            np.minimum(down, beam) / kinetic.TILT_DEGREES)
+
+
+def clamp_tilt(tilt, lift, push=None) -> np.ndarray:
+    low, high = tilt_bounds(lift, push)
     return np.clip(np.asarray(tilt, np.float32).reshape(ROWS, PER_ROW),
-                   -reach, reach)
+                   low, high).astype(np.float32)
 
 
-def over_limit(tilt, lift) -> np.ndarray:
-    """Which cells tilt further than their ring's gaps allow."""
-    reach = tilt_reach(lift)[:, None]
-    return np.abs(np.asarray(tilt).reshape(ROWS, PER_ROW)) > reach + 1e-4
+def over_limit(tilt, lift, push=None) -> np.ndarray:
+    """Which cells tilt further than their gaps and their beam allow."""
+    low, high = tilt_bounds(lift, push)
+    tilt = np.asarray(tilt).reshape(ROWS, PER_ROW)
+    return (tilt > high + 1e-4) | (tilt < low - 1e-4)
 
 
 # -- a whole piece -----------------------------------------------------------
@@ -385,7 +445,7 @@ class Project:
         found = []
         for frame in self.key_frames():
             pose = self.pose(frame)
-            count = int(over_limit(pose["tilt"], pose["lift"]).sum())
+            count = int(over_limit(pose["tilt"], pose["lift"], pose["push"]).sum())
             if count:
                 found.append((frame, count))
         return found

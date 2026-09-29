@@ -184,8 +184,9 @@ def _clashes(project: km.Project) -> list:
         looked.update(track.frames)
     found = []
     tilt, lift = project.tracks["tilt"], project.tracks["lift"]
+    push = project.tracks["push"]
     for frame in sorted(f for f in looked if f < project.length):
-        over = km.over_limit(tilt.at(frame), lift.at(frame))
+        over = km.over_limit(tilt.at(frame), lift.at(frame), push.at(frame))
         count = int(over.sum())
         if count:
             found.append((frame, count))
