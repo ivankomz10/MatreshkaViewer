@@ -539,3 +539,92 @@ def test_a_number_is_pulled_by_the_mouse(fresh):
                                    Qt.MouseButton.NoButton))
     assert got and got[-1] == pytest.approx(number.value())
     number.moved.disconnect(got.append)
+
+
+# -- handles in 3D, and Blender's G R H -----------------------------------------------------
+
+def _handles(fresh, grain, cells):
+    fresh._choose_tool("select")
+    fresh.unwrap.grain = grain
+    fresh._select(cells, "set")
+    fresh.set_gizmos(True)
+    fresh._rebuild_handles()
+    return fresh.handles
+
+
+def test_the_handles_follow_selections_size(fresh):
+    import kin_gizmo
+    front = int(round(fresh.unwrap.front / 7.2)) % PER_ROW
+    rings = np.zeros((ROWS, PER_ROW), bool)
+    rings[[8, 12]] = True
+    handles = _handles(fresh, "ring", rings)
+    assert sorted({(h.element, h.family) for h in handles}) == sorted(
+        {(("ring", r), f) for r in (8, 12) for f in ("lift", "push", "tilt")})
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    places, faces, _ = fresh._cells_on_screen()
+    seen = [tuple(int(v) for v in fresh.cell_is[i]) for i in np.nonzero(faces)[0]]
+    ring, cell = seen[len(seen) // 2]
+    cells[ring, cell] = True
+    handles = _handles(fresh, "group", cells)
+    assert {h.family for h in handles} == {"push", "tilt"}
+    handles = _handles(fresh, "cell", cells)
+    assert [h.family for h in handles] == ["tilt"]
+    fresh.set_gizmos(False)
+    fresh._rebuild_handles()
+    assert fresh.handles == []
+    fresh.set_gizmos(True)
+    fresh.select_none()
+
+
+def test_dragging_a_rings_arrow_moves_that_ring_or_with_shift_all(fresh):
+    import kin_gizmo
+    rings = np.zeros((ROWS, PER_ROW), bool)
+    rings[[8, 12]] = True
+    handles = _handles(fresh, "ring", rings)
+    lift = next(h for h in handles if h.family == "lift" and h.element == ("ring", 12))
+    assert kin_gizmo.picked(handles, lift.tip) is lift
+    fresh.go_to(60)
+    x, y = lift.tip
+    fresh._grab_start(lift, x, y, everyone=False)
+    fresh._grab_move(x, y - 2 * kin_gizmo.PIXELS_A_STATE, fine=False)
+    fresh.end_edit()
+    got = fresh.pose_now()["lift"]
+    assert got[12] == 3 and got[8] == 1
+    fresh._grab_start(lift, x, y, everyone=True)
+    fresh._grab_move(x, y + kin_gizmo.PIXELS_A_STATE, fine=False)
+    fresh.end_edit()
+    got = fresh.pose_now()["lift"]
+    assert got[12] == 2 and got[8] == 0
+    # The tilt's arc: turned down the arc, the face goes down, within its gaps.
+    fresh._rebuild_handles()
+    arc = next(h for h in fresh.handles if h.family == "tilt" and h.element == ("ring", 12))
+    start = arc.anchor + np.array([kin_gizmo.ARC_RADIUS, 0.0])
+    turned = arc.anchor + kin_gizmo.ARC_RADIUS * np.array([np.cos(0.3), np.sin(0.3)])
+    fresh._grab_start(arc, *start, everyone=False)
+    fresh._grab_move(*turned, fine=False)
+    fresh.end_edit()
+    tilt = fresh.pose_now()["tilt"]
+    assert (tilt[12] > 0).all() and not tilt[8].any()
+    fresh.select_none()
+
+
+def test_g_pulls_the_chosen_pushers_and_esc_puts_them_back(fresh, tick):
+    """Where the hand is, handed over: the suite never moves the pointer."""
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[5, 0:10] = True
+    fresh._select(cells, "set")
+    fresh.go_to(30)
+    before = fresh.project.tracks["push"].frames.copy()
+    fresh._start_modal("push", x=400)
+    fresh._modal_move(False, x=500)
+    assert fresh.pose_now()["push"][5, :2] == pytest.approx(0.4, abs=1e-4)
+    fresh._end_modal(False)
+    assert fresh.project.tracks["push"].frames == before
+    assert not fresh.pose_now()["push"].any()
+    fresh._start_modal("push", x=400)
+    fresh._modal_move(False, x=450)
+    fresh._end_modal(True)
+    assert fresh.pose_now()["push"][5, 0] == pytest.approx(0.2, abs=1e-4)
+    fresh._step_undo(True)
+    assert not fresh.pose_now()["push"].any()
+    fresh.select_none()

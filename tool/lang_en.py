@@ -717,4 +717,14 @@ EN: dict = {
     'Кривая — рядом с картой, кольцо к кольцу: насколько вынесено каждое кольцо, все десять его пушеров разом; с выбором — только выбранные группы. Двойной щелчок — точка, правый — убрать.':
         'The curve stands beside the map, ring for ring: how far out each ring is pushed, all ten of its pushers at once; with a selection, only the chosen groups. Double-click adds a point, right click takes one away.',
     '…и ещё {0}': '…and {0} more',
+    'Ручки': 'Handles',
+    'Ручки выбранного в 3D (T): у кольца — подъём, вынос и наклон, у группы — вынос и наклон, у соты — наклон. Shift — всем выбранным':
+        "Handles on what is chosen, in 3D (T): a ring's lift, push and tilt, a group's push and tilt, a cell's tilt. Shift moves every one chosen",
+    'тянуть вынос, наклон, подъём выбранного; щелчок — принять, Esc — отменить':
+        'pull the chosen push, tilt, lift; click to take it, Esc to put it back',
+    'ручки выбранного в 3D; Shift — всем выбранным':
+        'handles on what is chosen, in 3D; Shift for all of it',
+    '{0}: {1} — щелчок принять, Esc отменить':
+        '{0}: {1}; click to take it, Esc to put it back',
+    'Отменено': 'Put back',
 }

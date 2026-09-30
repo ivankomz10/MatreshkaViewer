@@ -44,6 +44,8 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QComboBox,
 from rendercanvas.pyside6 import RenderCanvas
 
 import kin_model as km
+import kin_gizmo
+import kin_overlay
 import kin_sim
 import kin_tools
 import kinetic
@@ -106,6 +108,8 @@ KEYS = [
     ("B V P S", "кисть, выбор, профиль, моторы"),
     ("1 2 3", "выбор: кольца, группы, соты"),
     ("Q W E", "слой: подъём, вынос, наклон"),
+    ("G R H", "тянуть вынос, наклон, подъём выбранного; щелчок — принять, Esc — отменить"),
+    ("T", "ручки выбранного в 3D; Shift — всем выбранным"),
     ("M", "видео или маска"),
     ("ПКМ по 3D", "облёт; СКМ или Shift — сдвиг; колесо — ближе"),
     ("ПКМ по карте", "сдвиг; колесо — ближе; двойной ПКМ — вся карта"),
@@ -221,6 +225,12 @@ class KineticEditor(QMainWindow):
         self._pose_cache = None
         self._under = None           # brush cells under the pointer in 3D
         self._drag = None
+        self.gizmos_on = True           # handles on what is chosen, in 3D
+        self.handles: list = []
+        self._hot = None                # the handle under the hand
+        self._grab = None               # a handle being dragged
+        self._modal = None              # G, R, H under way
+        self.overlay = None
         self._hover = None
         # The motors' own motion, worked out a moment after the keys change.
         self.view = "both"
@@ -295,6 +305,8 @@ class KineticEditor(QMainWindow):
             [self.cell_at[self.cell_is[:, 0] == row, 2].mean()
              for row in range(ROWS)])
         flat = self.cell_at[:, :2].astype(np.float64)
+        self.index_of = np.zeros((ROWS, PER_ROW), np.int64)
+        self.index_of[self.cell_is[:, 0], self.cell_is[:, 1]] = np.arange(len(self.cell_is))
         self.cell_radial = np.concatenate(
             [flat / np.linalg.norm(flat, axis=1, keepdims=True),
              np.zeros((len(flat), 1))], axis=1)
@@ -321,6 +333,7 @@ class KineticEditor(QMainWindow):
         self.solid.cull(self.cull)
         self.solid.dark_backs(True)
         self.solid.clear = BACKGROUND
+        self.overlay = kin_overlay.Overlay(self.device, self.format)
         self._aim_camera()
         self.canvas.request_draw(self._draw)
 
@@ -543,6 +556,16 @@ class KineticEditor(QMainWindow):
             "задних граней"))
         self.backs.clicked.connect(lambda on: self.set_backs(on))
         row.addWidget(self.backs)
+        self.gizmo_button = QPushButton(tr("Ручки"))
+        self.gizmo_button.setObjectName("qa_kin_gizmos")
+        self.gizmo_button.setProperty("pill", True)
+        self.gizmo_button.setCheckable(True)
+        self.gizmo_button.setChecked(self.gizmos_on)
+        self.gizmo_button.setToolTip(tr(
+            "Ручки выбранного в 3D (T): у кольца — подъём, вынос и наклон, у "
+            "группы — вынос и наклон, у соты — наклон. Shift — всем выбранным"))
+        self.gizmo_button.clicked.connect(lambda on: self.set_gizmos(on))
+        row.addWidget(self.gizmo_button)
         row.addStretch(1)
         row.addWidget(_button(tr("Во вьюере"), "qa_kin_viewer", self.show_in_viewer,
                               tr("Сохранить JSON и открыть его во вьюере")))
@@ -882,6 +905,14 @@ class KineticEditor(QMainWindow):
         width, height = surface.size[0], surface.size[1]
         encoder = self.device.create_command_encoder()
         self.solid.draw(encoder, view, width, height)
+        # The handles, over the picture: worked out where the cells stand now.
+        self._rebuild_handles()
+        if self.handles and self.overlay is not None:
+            wide, tall = self.canvas.get_logical_size()
+            shapes = kin_overlay.Shapes(wide, tall)
+            kin_gizmo.draw(shapes, self.handles, self._hot)
+            self.overlay.set_triangles(shapes.array())
+            self.overlay.draw(encoder, view)
         self.device.queue.submit([encoder.finish()])
         if self.clock.playing:
             self.canvas.request_draw()
@@ -1403,7 +1434,108 @@ class KineticEditor(QMainWindow):
         eye = self.mesh.free.eye()
         towards = eye[None, :] - spot
         faces = in_front & (np.einsum("ci,ci->c", facing, towards) > 0)
+        self._frame_seen = (spot, facing, towards, transform, wide, tall)
         return np.stack([x, y], axis=1), faces, clip[:, 3]
+
+    def _project(self, points, transform, wide, tall) -> np.ndarray:
+        clip = np.concatenate([points, np.ones((len(points), 1))], axis=1) @ transform.T
+        w = np.where(clip[:, 3] > 1e-6, clip[:, 3], 1e-6)[:, None]
+        ndc = clip[:, :2] / w
+        return np.stack([(ndc[:, 0] + 1.0) * 0.5 * wide,
+                         (1.0 - ndc[:, 1]) * 0.5 * tall], axis=1)
+
+    # -- the handles -----------------------------------------------------------------------
+
+    def _rebuild_handles(self) -> None:
+        """The handles of what is chosen, where the cells stand now: in the
+        selection tool, with handles on, for rings, groups or cells as 1 2 3
+        have it."""
+        if (not self.gizmos_on or self.tool != "select" or not self.selection.any()
+                or self.solid is None):
+            self.handles = []
+            return
+        places, faces, _ = self._cells_on_screen()
+        spot, facing, towards, transform, wide, tall = self._frame_seen
+        norms = np.linalg.norm(towards, axis=1) * np.linalg.norm(facing, axis=1)
+        frontal = np.einsum("ci,ci->c", facing, towards) / np.maximum(norms, 1e-9)
+        out = self._project(spot + self.cell_radial, transform, wide, tall) - places
+        self.handles = kin_gizmo.build(self.selection, self.unwrap.grain, places,
+                                       faces, frontal, out, self.index_of)
+
+    def set_gizmos(self, on: bool) -> None:
+        self.gizmos_on = bool(on)
+        self.gizmo_button.setChecked(self.gizmos_on)
+        self.touch()
+
+    def _grab_start(self, handle, x: float, y: float, everyone: bool) -> None:
+        """A handle taken: its own element moves, or with Shift every one
+        chosen, from where they all stand now."""
+        chosen = (kin_gizmo.elements(self.selection, self.unwrap.grain) if everyone
+                  else [handle.element])
+        cells = np.zeros((ROWS, PER_ROW), bool)
+        for element in chosen:
+            cells |= kin_gizmo.element_cells(element)
+        family = handle.family
+        self.begin_edit()
+        self._grab = (handle, (x, y), km.cell_mask_for(family, cells),
+                      self.pose_now()[family].reshape(-1).copy())
+
+    def _grab_move(self, x: float, y: float, fine: bool) -> None:
+        handle, start, mask, values = self._grab
+        worth = kin_gizmo.amount(handle, start, (x, y), fine)
+        self._write(handle.family, values + worth, mask)
+        self._changed()
+
+    # -- Blender's G, R and H ---------------------------------------------------------------
+
+    MODAL = {Qt.Key.Key_G: "push", Qt.Key.Key_R: "tilt", Qt.Key.Key_H: "lift"}
+
+    def _start_modal(self, family: str, x: float | None = None) -> None:
+        """G, R, H: the chosen motors of one family follow the mouse sideways
+        until a click takes it or Esc puts it back. `x` is where the hand is,
+        on the screen; the cursor's own place when not said."""
+        from PySide6.QtGui import QCursor
+        if not self.selection.any():
+            self.status.setText(tr("Сначала выберите соты"))
+            return
+        self.begin_edit()
+        self._modal = (family, QCursor.pos().x() if x is None else x,
+                       km.cell_mask_for(family, self.selection),
+                       self.pose_now()[family].reshape(-1).copy())
+        self._say_modal(0.0)
+
+    def _modal_move(self, fine: bool, x: float | None = None) -> None:
+        from PySide6.QtGui import QCursor
+        family, start, mask, values = self._modal
+        here = QCursor.pos().x() if x is None else x
+        moved = (here - start) * (0.1 if fine else 1.0)
+        worth = {"push": moved * kin_gizmo.PUSH_A_PIXEL,
+                 "tilt": moved * 0.25 / 90.0,
+                 "lift": float(np.round(moved / kin_gizmo.PIXELS_A_STATE))}[family]
+        self._write(family, values + worth, mask)
+        self._changed()
+        self._say_modal(worth)
+
+    def _say_modal(self, worth: float) -> None:
+        family = self._modal[0]
+        said = {"push": f"{worth * 1000:+.0f} " + tr("мм"),
+                "tilt": f"{worth * 90:+.1f}°",
+                "lift": f"{worth:+.0f}"}[family]
+        self.status.setText(tr("{0}: {1} — щелчок принять, Esc отменить",
+                               tr(FAMILY_NAME[family]), said))
+
+    def _end_modal(self, keep: bool) -> None:
+        self._modal = None
+        if keep:
+            self.end_edit()
+            self.status.setText("")
+            return
+        # Put back exactly what was there: the step begin_edit took.
+        self._editing = False
+        if self.undo:
+            self.project.restore(self.undo.pop())
+        self.status.setText(tr("Отменено"))
+        self._changed(keys=True)
 
     def _cell_under(self, x: float, y: float):
         places, faces, depth = self._cells_on_screen()
@@ -1443,6 +1575,11 @@ class KineticEditor(QMainWindow):
                 self._drag = ("slide" if sliding else "turn", x, y)
                 return
             if button == 1:
+                handle = kin_gizmo.picked(self.handles, (x, y)) if self.handles else None
+                if handle is not None:
+                    self._grab_start(handle, x, y, "Shift" in mods)
+                    self._drag = ("grab",)
+                    return
                 got = self._cell_under(x, y)
                 if self.tool == "brush":
                     self._drag = ("brush",)
@@ -1472,6 +1609,14 @@ class KineticEditor(QMainWindow):
                 self.solid.refresh()
                 self.touch()
                 return
+            if self._drag and self._drag[0] == "grab":
+                self._grab_move(x, y, "Control" in mods)
+                return
+            if self.handles:
+                hot = kin_gizmo.picked(self.handles, (x, y))
+                if hot is not self._hot:
+                    self._hot = hot
+                    self.touch()
             got = self._cell_under(x, y)
             self._hovered(*(got if got else (-1, -1)))
             if self.tool == "brush":
@@ -1486,7 +1631,8 @@ class KineticEditor(QMainWindow):
                 self._select(self._grain_cells(got), how)
             return
         if kind == "pointer_up":
-            if self._drag and self._drag[0] == "brush":
+            if self._drag and self._drag[0] in ("brush", "grab"):
+                self._grab = None
                 self.end_edit()
             self._drag = None
             return
@@ -1538,6 +1684,18 @@ class KineticEditor(QMainWindow):
                 and not spot.isReadOnly())
 
     def eventFilter(self, watched, event):          # noqa: N802
+        if self._modal is not None:
+            kind = event.type()
+            if kind == QEvent.Type.MouseMove:
+                self._modal_move(bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+                return False
+            if kind == QEvent.Type.MouseButtonPress:
+                self._end_modal(event.button() == Qt.MouseButton.LeftButton)
+                return True
+            if kind == QEvent.Type.KeyPress and event.key() in (
+                    Qt.Key.Key_Escape, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._end_modal(event.key() != Qt.Key.Key_Escape)
+                return True
         if (event.type() == QEvent.Type.KeyPress and self.isActiveWindow()
                 and not self._typing() and self._key(event)):
             return True
@@ -1588,6 +1746,10 @@ class KineticEditor(QMainWindow):
             self.delete_keys()
         elif key == Qt.Key.Key_M:
             self.set_mask(not self.show_mask)
+        elif key in self.MODAL and not shift:
+            self._start_modal(self.MODAL[key])
+        elif key == Qt.Key.Key_T:
+            self.set_gizmos(not self.gizmos_on)
         elif key in TOOL_KEYS and not shift:
             self._choose_tool(TOOL_KEYS[key])
         elif key in GRAIN_KEYS:
