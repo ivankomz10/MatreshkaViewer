@@ -60,6 +60,7 @@ import kin_model as km
 import kin_gizmo
 import kin_layers
 import kin_overlay
+import kin_plan
 import kin_prims
 import kin_sample
 import kin_sim
@@ -75,7 +76,7 @@ import sound
 import theme
 from kin_timeline import (FAMILY_COLOUR, FAMILY_NAME, PRIM_COLOUR, KeyTimeline,
                           lane_of)
-from kin_unwrap import Unwrap, brush_weights
+from kin_unwrap import RING_PITCH, Unwrap, brush_weights
 from kinetic import PER_PUSHER, PER_ROW, ROWS
 from lang import tr
 
@@ -276,8 +277,11 @@ class KineticEditor(QMainWindow):
         self.prim_index = -1
         self._edit_base = None          # the pose an edit under way began at
         self._composed = None
+        self._desired = None
         self._shown_cache = None
         self.sampler = None             # the video, a colour a cell, for the strip
+        self.strip_picture = None       # and as the cells show it, patch by patch
+        self._picture_for = None
         self._video_cells = None
         self._strip_layers = (None, None, None)
         self._prims_seen = None
@@ -396,6 +400,17 @@ class KineticEditor(QMainWindow):
             self.sampler = None
             logfile.write(f"kinetic editor: no video on the strip: {error}")
         self._aim_camera()
+        try:
+            piece = next(one for one in self.mesh.pieces
+                         if one.name == scene3d.KINETIC_SCREEN)
+            geometry = kin_sample.strip_geometry(
+                self.mesh.points_of(scene3d.KINETIC_SCREEN),
+                self.mesh.raw[f"{scene3d.KINETIC_SCREEN}__uv"], piece.cell,
+                self.cell_at, self.cell_is, self.unwrap.places, RING_PITCH)
+            self.strip_picture = kin_sample.StripPicture(self.device, geometry)
+        except Exception as error:  # noqa: BLE001 -- the strip keeps its colours
+            self.strip_picture = None
+            logfile.write(f"kinetic editor: no picture on the strip: {error}")
         self.canvas.request_draw(self._draw)
 
     def _aim_camera(self) -> None:
@@ -470,6 +485,7 @@ class KineticEditor(QMainWindow):
         self.unwrap.jack_set.connect(self._set_jack)
         self.unwrap.jacks_finished.connect(self.end_edit)
         self.unwrap.placed.connect(self._place_primitive)
+        self.unwrap.view_changed.connect(self._picture_on_strip)
         across.addWidget(self.unwrap, 1)
         # The vase stands beside the strip, ring for ring, in its own tool.
         self.profile_strip = kin_tools.ProfileStrip(self.unwrap)
@@ -800,13 +816,42 @@ class KineticEditor(QMainWindow):
             self._pose_cache = (key, self.project.pose(self.frame))
         return self._pose_cache[1]
 
-    def composed(self):
-        """The piece as the motors will run it: its primitives in its keys.
-        What is simulated and exported."""
+    def _say_warnings(self) -> None:
+        warnings = self.desired().violations()
+        self.timeline.set_warnings(warnings)
+        self.warn_button.setText(tr("Вне предела: {0}", len(warnings)) if warnings else "")
+        self.warn_button.setVisible(bool(warnings))
+
+    def desired(self):
+        """The piece as it is meant to move, as keys: its layers and its
+        primitives in them. What the picture is held against."""
         key = (id(self.project), self.project.version)
+        if self._desired is None or self._desired[0] != key:
+            self._desired = (key, kin_prims.compose(kin_layers.flatten(self.project)))
+        return self._desired[1]
+
+    def composed(self):
+        """The piece as the motors will run it: what it means, made a plan
+        of moves the machine carries out when the plan is on. What is
+        simulated and exported."""
+        key = (id(self.project), self.project.version, tuple(sorted(self.pace.items())))
         if self._composed is None or self._composed[0] != key:
-            self._composed = (key, kin_prims.compose(kin_layers.flatten(self.project)))
+            wanted = self.desired()
+            if self.project.plan:
+                wanted = kin_plan.plan(wanted, self.pace, self.project.tolerance)
+            self._composed = (key, wanted)
         return self._composed[1]
+
+    def set_plan(self, on: bool, tolerance: float | None = None) -> None:
+        """The plan of moves on or off, and its tolerance (of the travel)."""
+        tolerance = self.project.tolerance if tolerance is None else float(tolerance)
+        if bool(on) == self.project.plan and abs(tolerance - self.project.tolerance) < 1e-9:
+            return
+        self._record()
+        self.project.plan = bool(on)
+        self.project.tolerance = max(0.0, tolerance)
+        self.project.changed()
+        self._changed(keys=True)
 
     def shown_now(self):
         """The piece at the playhead with its primitives over its keys."""
@@ -840,11 +885,12 @@ class KineticEditor(QMainWindow):
         self.timeline.set_frame(self.frame)
         if keys:
             self.dirty = self.dirty or bool(self.undo)
-            warnings = self.composed().violations()
-            self.timeline.set_warnings(warnings)
-            self.warn_button.setText(tr("Вне предела: {0}", len(warnings))
-                                     if warnings else "")
-            self.warn_button.setVisible(bool(warnings))
+            # With primitives or layers the piece has to be turned into keys
+            # first, which takes a moment: then it is said with the motion.
+            fresh_ = self._desired is not None and self._desired[0] == (
+                id(self.project), self.project.version)
+            if fresh_ or not (self.project.primitives or self.project.layers):
+                self._say_warnings()
             self.timeline.update()
             self._say_title()
             self.sim_timer.start(SIM_WAIT_MS)
@@ -897,6 +943,7 @@ class KineticEditor(QMainWindow):
                       f"{dropped} dropped, {late} late, "
                       f"{len(self.sim.clashes)} frames past the gaps")
         self.timeline.set_simulation(self.sim)
+        self._say_warnings()
         if dropped or late or self.sim.clashes:
             self.status.setText(tr(
                 "Моторы: пропущено команд {0}, опоздали ходов {1}, наклон сверх "
@@ -1014,7 +1061,7 @@ class KineticEditor(QMainWindow):
             out = 1.0 - self.mask_weights().reshape(ROWS, PER_ROW)
             over[..., 3] = out * 0.62
         one = self.primitive() if self.tool == "prims" else None
-        if one is not None:
+        if one is not None and one.kind != "noise":
             touched = kin_prims.touched_cells(self.project, one, self.frame)
             lilac = np.array(to_rgb(PRIM_COLOUR[one.polarity]), np.float32)
             over[touched, :3] = lilac
@@ -1033,9 +1080,10 @@ class KineticEditor(QMainWindow):
         lag = None
         result = self.simulation()
         if result is not None and self.view != "keys":
-            lag = kin_sim.differs(self.composed(), result.project, self.frame)
+            lag = kin_sim.differs(self.desired(), result.project, self.frame)
         self.unwrap.set_colours(colours, over, warn, lag)
         self._strip_layers = (over, warn, lag)
+        self._picture_on_strip(video is not None)
         self.unwrap.set_lift(pose["lift"])
         self.unwrap.set_selection(self.selection)
         if self.solid is not None:
@@ -1091,6 +1139,8 @@ class KineticEditor(QMainWindow):
         lift = self.shown_now()["lift"]
         centre, e_out, e_round, e_up = kin_prims.frame_of(values, self.base_heights,
                                                           lift)
+        if one.kind == "noise":
+            return []
         if one.kind == "sphere":
             radius = float(values[kin_prims.WIDTH])
             turn = np.linspace(0, 2 * np.pi, 49)[:, None]
@@ -1283,6 +1333,46 @@ class KineticEditor(QMainWindow):
         self._paint()
         self.touch()
 
+    def _picture_on_strip(self, wanted: bool | None = None) -> None:
+        """The strip in Video: the picture as the cells show it, drawn again
+        when the frame or the strip's view changes."""
+        if wanted is None:
+            wanted = not self.show_mask and not (self.tool == "brush"
+                                                 and self.brush_target == "mask")
+        painter = self.strip_picture
+        if not wanted or painter is None or self.solid is None:
+            if self.unwrap.picture is not None:
+                self.unwrap.set_picture(None)
+            self._picture_for = None
+            return
+        calibration = self.solid.calibration.get(TOP)
+        screen = self.screen
+        if calibration is None and screen is None:
+            self.unwrap.set_picture(None)
+            return
+        centre, middle, size, wide, tall = self.unwrap.view()
+        ratio = self.unwrap.devicePixelRatioF()
+        key = (id(screen), getattr(self.held, "index", None), centre, size, wide, tall,
+               ratio)
+        if key == self._picture_for and self.unwrap.picture is not None:
+            return
+        behind = calibration if calibration is not None else screen.planes[0].texture
+        width, height = int(round(wide * ratio)), int(round(tall * ratio))
+        if screen is not None:
+            raw, stride = painter.render(
+                width, height, centre, (middle[0] * ratio, middle[1] * ratio), size * ratio,
+                PER_ROW, screen.planes[0].texture, screen.planes[1].texture, behind,
+                screen.ycocg, screen.alpha_from, screen.uv_scale, True)
+        else:
+            raw, stride = painter.render(
+                width, height, centre, (middle[0] * ratio, middle[1] * ratio), size * ratio,
+                PER_ROW, calibration, calibration, calibration, False, 0, (1.0, 1.0), False)
+        from PySide6.QtGui import QImage
+        image = QImage(raw, width, height, stride, QImage.Format.Format_RGBA8888).copy()
+        image.setDevicePixelRatio(ratio)
+        self._picture_for = key
+        self.unwrap.set_picture(image)
+
     def video_cells(self):
         """What each cell shows of the video now, (ROWS, PER_ROW, 3) -- the
         calibration picture when there is no video -- or None."""
@@ -1312,6 +1402,7 @@ class KineticEditor(QMainWindow):
         colours = self.video_cells()
         if colours is not None:
             self.unwrap.set_colours(colours, *self._strip_layers)
+        self._picture_on_strip(True)
 
     def set_brush_radius(self, radius: float) -> None:
         self.brush_radius = float(radius)
@@ -1500,7 +1591,8 @@ class KineticEditor(QMainWindow):
         front of the camera, half way up -- keyed at the playhead."""
         self._record()
         count = sum(1 for one in self.project.primitives if one.kind == kind) + 1
-        name = tr("Сфера {0}", count) if kind == "sphere" else tr("Куб {0}", count)
+        name = {"sphere": tr("Сфера {0}", count), "box": tr("Куб {0}", count),
+                "noise": tr("Шум {0}", count)}[kind]
         if self.selection.any():
             rows, cells = np.nonzero(self.selection)
             turn = np.radians(km.cell_azimuths()[rows, cells])
@@ -1509,8 +1601,10 @@ class KineticEditor(QMainWindow):
         else:
             azimuth, ring = self._facing(), ROWS / 2.0
         one = kin_prims.Primitive(kind, name, azimuth % 360.0)
+        one.seed = len(self.project.primitives) * 7 + count
         values = one.values[0]
-        values[kin_prims.HEIGHT] = ring
+        if kind != "noise":
+            values[kin_prims.HEIGHT] = ring
         one.frames, one.values = [], []
         one.write(self.frame, values)
         self.project.primitives.append(one)
@@ -1518,7 +1612,9 @@ class KineticEditor(QMainWindow):
         self.timeline.set_active_primitive(self.prim_index)
         if self.tool != "prims":
             self._choose_tool("prims")
-        self.status.setText(tr("{0}: щелчок по карте или по 3D ставит его туда", name))
+        self.status.setText(
+            tr("{0}: на всех сотах; как он меняется — его ключами", name) if kind == "noise"
+            else tr("{0}: щелчок по карте или по 3D ставит его туда", name))
         self._prim_changed()
 
     def _facing(self) -> float:
@@ -1611,6 +1707,9 @@ class KineticEditor(QMainWindow):
         one = self.primitive()
         if one is None:
             self.status.setText(tr("Сначала добавьте примитив"))
+            return
+        if one.kind == "noise":
+            self.status.setText(tr("Шум лежит на всех сотах — его место не ставится"))
             return
         values = one.at(self.frame)
         values[kin_prims.AZIMUTH] = float(azimuth) % 360.0
@@ -2242,7 +2341,7 @@ class KineticEditor(QMainWindow):
                 self.go_to(earlier[-1])
 
     def next_warning(self) -> None:
-        found = [frame for frame, _ in self.composed().violations()]
+        found = [frame for frame, _ in self.desired().violations()]
         if not found:
             return
         later = [f for f in found if f > self.frame]
@@ -2717,7 +2816,7 @@ class KineticEditor(QMainWindow):
         written = km.export_motor_json(self.composed(), path)
         self.settings["export_folder"] = str(written.parent)
         self._write_settings()
-        warnings = self.composed().violations()
+        warnings = self.desired().violations()
         words = tr("Записан {0}", written.name)
         if warnings:
             words += " — " + tr("наклон вне предела на {0} ключах", len(warnings))

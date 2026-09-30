@@ -630,6 +630,31 @@ class MotorsPanel(Panel):
         super().__init__(actions, "qa_kin_motors_panel")
         import kin_sim
         self.column.addWidget(heading(tr("Моторы")))
+        planning = QWidget()
+        line = QHBoxLayout(planning)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(8)
+        self.plan = QCheckBox(tr("План ходов"))
+        self.plan.setObjectName("qa_kin_plan")
+        self.plan.setToolTip(tr(
+            "Симуляция и экспорт получают ходы, которые машина успевает: подъём или "
+            "спуск — одним ходом, заранее, чтобы прийти вовремя, с отдыхом между "
+            "ходами; пик, до которого не успеть, — сколько успевает; фигура, на "
+            "которой кривая стоит, — целиком. Моторы, чьи ключи машина и так "
+            "отработает, не трогаются."))
+        self.plan.toggled.connect(lambda on: actions.set_plan(bool(on)))
+        line.addWidget(self.plan)
+        label = QLabel(tr("допуск"))
+        label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
+        line.addWidget(label)
+        self.tolerance = Scrub(0, 20, 2, "%", "qa_kin_plan_tolerance", 0.5, 1)
+        self.tolerance.setFixedWidth(70)
+        self.tolerance.setToolTip(tr("Дрожь кривой меньше этого — не ход: доля хода мотора"))
+        self.tolerance.released.connect(
+            lambda: actions.set_plan(self.plan.isChecked(), self.tolerance.value() / 100.0))
+        line.addWidget(self.tolerance)
+        line.addStretch(1)
+        self.column.addWidget(planning)
         grid_holder = QWidget()
         grid = QGridLayout(grid_holder)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -695,6 +720,11 @@ class MotorsPanel(Panel):
         self.actions.show_problem(item.data(Qt.ItemDataRole.UserRole))
 
     def refresh(self) -> None:
+        project = self.actions.project
+        self.plan.blockSignals(True)
+        self.plan.setChecked(bool(project.plan))
+        self.plan.blockSignals(False)
+        self.tolerance.set(project.tolerance * 100.0)
         result = self.actions.simulation()
         if result is None:
             self.summary.setText(tr("Симуляция считается…"))
@@ -932,7 +962,8 @@ class PrimsPanel(Panel):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
         for text, name, kind in ((tr("+ Сфера"), "qa_kin_prim_sphere", "sphere"),
-                                 (tr("+ Куб"), "qa_kin_prim_box", "box")):
+                                 (tr("+ Куб"), "qa_kin_prim_box", "box"),
+                                 (tr("+ Шум"), "qa_kin_prim_noise", "noise")):
             button = QPushButton(text)
             button.setObjectName(name)
             button.clicked.connect(lambda _=False, kind=kind: actions.add_primitive(kind))
@@ -1017,17 +1048,17 @@ class PrimsPanel(Panel):
         # Two to a row, a name and its number: where it stands, then how big.
         spec = ((kp.AZIMUTH, tr("Азимут"), -360, 720, "°", 1.0, 1,
                  tr("Где вокруг здания, градусы")),
-                (kp.HEIGHT, tr("Кольцо"), -5, ROWS + 5, "", 0.1, 1,
+                (kp.HEIGHT, tr("Кольцо"), -60, ROWS + 60, "", 0.1, 1,
                  tr("На какой высоте, в кольцах от нижнего")),
-                (kp.OFFSET, tr("Отступ"), -3, 3, tr("м"), 0.02, 2,
+                (kp.OFFSET, tr("Отступ"), -12, 12, tr("м"), 0.02, 2,
                  tr("Центр от поверхности сот, метры; минус — внутрь")),
                 (kp.STRENGTH, tr("Сила"), 0, 100, "%", 5, 0,
                  tr("Насколько соты идут к его поверхности")),
-                (kp.WIDTH, tr("Радиус"), 0.05, 6, tr("м"), 0.02, 2,
+                (kp.WIDTH, tr("Радиус"), 0.05, 20, tr("м"), 0.02, 2,
                  tr("Радиус сферы; у куба — половина ширины вокруг здания")),
-                (kp.TALL, tr("Высота"), 0.05, 6, tr("м"), 0.02, 2,
+                (kp.TALL, tr("Высота"), 0.05, 20, tr("м"), 0.02, 2,
                  tr("Половина высоты куба")),
-                (kp.DEPTH, tr("Глубина"), 0.05, 6, tr("м"), 0.02, 2,
+                (kp.DEPTH, tr("Глубина"), 0.05, 20, tr("м"), 0.02, 2,
                  tr("Половина глубины куба, от здания наружу")))
         for place, (param, text, low, high, unit, step, decimals, hint) in enumerate(spec):
             label = QLabel(text)
@@ -1047,6 +1078,14 @@ class PrimsPanel(Panel):
             self.labels[param] = label
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
+        self.seed_label = QLabel(tr("Зерно"))
+        self.seed_label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
+        self.seed = Scrub(0, 9999, 0, "", "qa_kin_prim_seed", 1)
+        self.seed.setToolTip(tr("Другое зерно — другой узор шума"))
+        self.seed.released.connect(
+            lambda: actions.set_prim_property("seed", int(self.seed.value())))
+        grid.addWidget(self.seed_label, 4, 0)
+        grid.addWidget(self.seed, 4, 1)
         form.addWidget(numbers)
         keys = QWidget()
         line = QHBoxLayout(keys)
@@ -1069,14 +1108,14 @@ class PrimsPanel(Panel):
         line = QHBoxLayout(step)
         line.setContentsMargins(0, 0, 0, 0)
         line.setSpacing(8)
-        label = QLabel(tr("Шаг ключей"))
+        label = QLabel(tr("Шаг выборки"))
         label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
         line.addWidget(label)
         self.step = Scrub(1, 600, km.PRIM_STEP, tr("кадров"), "qa_kin_prim_step", 1)
         self.step.setFixedWidth(96)
         self.step.setToolTip(tr(
-            "Как часто движущийся примитив даёт моторам ключ: они ходят от ключа "
-            "к ключу, так что это то, насколько точно они за ним следуют"))
+            "Как часто снимается движение примитива; план ходов в «Моторах» потом "
+            "делает из этого ходы, которые моторы успевают"))
         self.step.released.connect(lambda: actions.set_prim_step(int(self.step.value())))
         line.addWidget(self.step)
         line.addStretch(1)
@@ -1097,6 +1136,58 @@ class PrimsPanel(Panel):
     def _masked(self, which: str, box: QComboBox, index: int) -> None:
         if not self._filling:
             self.actions.set_prim_property(which, "" if index <= 0 else box.itemText(index))
+
+    def _by_kind(self, kind: str) -> None:
+        """The seven numbers as this kind of primitive means them: where a
+        solid stands and how big it is; how a noise drifts, what it gives,
+        how big and fast it is."""
+        kp = self.kp
+        if kind == "noise":
+            spec = {kp.AZIMUTH: (tr("По кругу"), -180, 180, tr("°/с"), 1.0, 1,
+                                 tr("Дрейф шума вокруг здания, градусы в секунду")),
+                    kp.HEIGHT: (tr("Вверх"), -10, 10, tr("кол/с"), 0.05, 2,
+                                tr("Дрейф шума вверх, кольца в секунду; минус — вниз")),
+                    kp.OFFSET: (tr("Вынос"), 0, 1, tr("м"), 0.01, 2,
+                                tr("Сколько шум выносит соты, метры: от нуля до этого")),
+                    kp.STRENGTH: (tr("Сила"), 0, 100, "%", 5, 0,
+                                  tr("Насколько соты идут к его поверхности")),
+                    kp.WIDTH: (tr("Размер"), 0.5, 50, tr("сот"), 0.25, 1,
+                               tr("Размер пятна шума, в сотах")),
+                    kp.TALL: (tr("Скорость"), 0.05, 10, tr("/с"), 0.05, 2,
+                              tr("Как быстро шум меняется, раз в секунду")),
+                    kp.DEPTH: (tr("Наклон"), 0.05, 45, "°", 0.5, 1,
+                               tr("Насколько шум наклоняет соты, в обе стороны"))}
+        else:
+            spec = {kp.AZIMUTH: (tr("Азимут"), -360, 720, "°", 1.0, 1,
+                                 tr("Где вокруг здания, градусы")),
+                    kp.HEIGHT: (tr("Кольцо"), -60, ROWS + 60, "", 0.1, 1,
+                                tr("На какой высоте, в кольцах от нижнего")),
+                    kp.OFFSET: (tr("Отступ"), -12, 12, tr("м"), 0.02, 2,
+                                tr("Центр от поверхности сот, метры; минус — внутрь")),
+                    kp.STRENGTH: (tr("Сила"), 0, 100, "%", 5, 0,
+                                  tr("Насколько соты идут к его поверхности")),
+                    kp.WIDTH: (tr("Ширина") if kind == "box" else tr("Радиус"),
+                               0.05, 20, tr("м"), 0.02, 2,
+                               tr("Радиус сферы; у куба — половина ширины вокруг здания")),
+                    kp.TALL: (tr("Высота"), 0.05, 20, tr("м"), 0.02, 2,
+                              tr("Половина высоты куба")),
+                    kp.DEPTH: (tr("Глубина"), 0.05, 20, tr("м"), 0.02, 2,
+                               tr("Половина глубины куба, от здания наружу"))}
+        for param, (text, low, high, unit, step, decimals, hint) in spec.items():
+            box = self.boxes[param]
+            self.labels[param].setText(text)
+            self.labels[param].setToolTip(hint)
+            box.setToolTip(hint)
+            box.setDecimals(decimals)
+            box.setRange(low, high)
+            box.setSingleStep(step)
+            box.setSuffix(f" {unit}" if unit else "")
+        shown = kind != "sphere"
+        for param in (kp.TALL, kp.DEPTH):
+            self.boxes[param].setVisible(shown)
+            self.labels[param].setVisible(shown)
+        self.seed.setVisible(kind == "noise")
+        self.seed_label.setVisible(kind == "noise")
 
     def refresh(self) -> None:
         project = self.actions.project
@@ -1128,11 +1219,8 @@ class PrimsPanel(Panel):
                 box.blockSignals(False)
             for box, name in ((self.mask, one.mask), (self.tilt_mask, one.tilt_mask)):
                 box.setCurrentIndex(names.index(name) + 1 if name in names else 0)
-            box_like = one.kind == "box"
-            self.labels[kp.WIDTH].setText(tr("Ширина") if box_like else tr("Радиус"))
-            for param in (kp.TALL, kp.DEPTH):
-                self.boxes[param].setVisible(box_like)
-                self.labels[param].setVisible(box_like)
+            self._by_kind(one.kind)
+            self.seed.set(one.seed)
             values = one.at(self.actions.frame)
             keyed = self.actions.frame in one.frames
             for param, box in self.boxes.items():

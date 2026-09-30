@@ -29,6 +29,14 @@ from what is chosen or painted with the brush. It keeps a primitive, or its
 tilt, to its cells; and in the window, the one chosen for editing keeps
 every edit made at the playhead to its cells (`motor_weights`).
 
+Noise is a primitive too, as Houdini's animated noise: a field of smooth
+random values wrapped round the building, drifting and changing in time,
+that pushes the cells out (positive) or in (negative) and turns them. It
+has the same seven keyed numbers, which for it say: drift round (degrees a
+second), drift up (rings a second), the push it gives (metres), its size
+(cells), how fast it changes (a second), the tilt it gives (degrees), and
+its strength.
+
 Placed in the building's own terms: azimuth round it in degrees (world, as
 the cells' own), height in rings (0 the lowest, fractional between), and
 the centre's distance out from the cells' surface in metres, negative for
@@ -45,7 +53,7 @@ import kin_model as km
 import kinetic
 from kinetic import PER_PUSHER, PER_ROW, ROWS, smoothstep
 
-KINDS = ("sphere", "box")
+KINDS = ("sphere", "box", "noise")
 PARAMS = ("azimuth", "height", "offset", "width", "tall", "depth", "strength")
 AZIMUTH, HEIGHT, OFFSET, WIDTH, TALL, DEPTH, STRENGTH = range(len(PARAMS))
 
@@ -65,7 +73,11 @@ class Primitive:
         self.mask = ""                  # the cells it may move, by mask name
         self.tilt_mask = ""             # the cells it may turn
         self.on = True
-        start = np.array([azimuth, ROWS / 2.0, 0.25, 1.2, 1.2, 1.2, 1.0], np.float64)
+        self.seed = 0                   # the noise's own
+        if self.kind == "noise":
+            start = np.array([0.0, 0.0, 0.3, 6.0, 0.4, 15.0, 1.0], np.float64)
+        else:
+            start = np.array([azimuth, ROWS / 2.0, 0.25, 1.2, 1.2, 1.2, 1.0], np.float64)
         self.frames: list[int] = [0]
         self.values: list[np.ndarray] = [start]
 
@@ -86,8 +98,9 @@ class Primitive:
         a, b = self.values[k], self.values[k + 1]
         t = smoothstep((frame - frames[k]) / max(1, frames[k + 1] - frames[k]))
         out = a + (b - a) * t
-        turn = (b[AZIMUTH] - a[AZIMUTH] + 180.0) % 360.0 - 180.0
-        out[AZIMUTH] = (a[AZIMUTH] + turn * t) % 360.0
+        if self.kind != "noise":            # a noise's first number is a speed
+            turn = (b[AZIMUTH] - a[AZIMUTH] + 180.0) % 360.0 - 180.0
+            out[AZIMUTH] = (a[AZIMUTH] + turn * t) % 360.0
         return out
 
     def write(self, frame: int, values) -> None:
@@ -118,7 +131,7 @@ class Primitive:
     def state(self) -> dict:
         return {"kind": self.kind, "name": self.name, "polarity": self.polarity,
                 "tilt": self.tilt, "mask": self.mask, "tilt_mask": self.tilt_mask,
-                "on": self.on, "frames": list(self.frames),
+                "on": self.on, "seed": int(self.seed), "frames": list(self.frames),
                 "values": [one.copy() for one in self.values]}
 
     @classmethod
@@ -129,6 +142,7 @@ class Primitive:
         one.mask = state.get("mask", "") or ""
         one.tilt_mask = state.get("tilt_mask", "") or ""
         one.on = bool(state.get("on", True))
+        one.seed = int(state.get("seed", 0))
         one.frames = [int(f) for f in state["frames"]]
         one.values = [np.asarray(v, np.float64).copy() for v in state["values"]]
         return one
@@ -137,6 +151,62 @@ class Primitive:
         data = self.state()
         data["values"] = [[round(float(v), 5) for v in one] for one in self.values]
         return data
+
+
+# -- noise ------------------------------------------------------------------------------
+
+def _hash(ix, iy, iz, iw, seed: int) -> np.ndarray:
+    """A lattice point's random value, -1..1, the same every time."""
+    mix = (ix.astype(np.uint64) * np.uint64(0x9E3779B1)
+           ^ iy.astype(np.uint64) * np.uint64(0x85EBCA77)
+           ^ iz.astype(np.uint64) * np.uint64(0xC2B2AE3D)
+           ^ iw.astype(np.uint64) * np.uint64(0x27D4EB2F)
+           ^ np.uint64((seed * 0x165667B1) & 0xFFFFFFFF))
+    mix = (mix ^ (mix >> np.uint64(15))) * np.uint64(0x2C1B3C6D)
+    mix = (mix ^ (mix >> np.uint64(12))) * np.uint64(0x297A2D39)
+    mix = mix ^ (mix >> np.uint64(15))
+    return (mix & np.uint64(0xFFFF)).astype(np.float64) / 32767.5 - 1.0
+
+
+def value_noise(x, y, z, w, seed: int = 0) -> np.ndarray:
+    """Smooth 4D value noise, -1..1: random values on a lattice, eased
+    between (quintic, so it has no creases)."""
+    corners = [np.floor(c) for c in (x, y, z, w)]
+    parts = [c - f for c, f in zip((x, y, z, w), corners)]
+    ease = [p * p * p * (p * (p * 6.0 - 15.0) + 10.0) for p in parts]
+    base = [f.astype(np.int64) for f in corners]
+    out = np.zeros(np.shape(x), np.float64)
+    for corner in range(16):
+        bits = [(corner >> k) & 1 for k in range(4)]
+        weight = np.ones_like(out)
+        for bit, e in zip(bits, ease):
+            weight = weight * (e if bit else 1.0 - e)
+        out += weight * _hash(*(b + bit for b, bit in zip(base, bits)), seed)
+    return out
+
+
+def noise_field(values, frame: float, seed: int = 0) -> np.ndarray:
+    """The noise over every cell at a frame, -1..1, (ROWS, PER_ROW): a
+    field wrapped seamlessly round the building (the cells' own cylinder,
+    a cell to a unit), `size` cells to a feature, drifting round and up and
+    changing at its speed, two octaves."""
+    seconds = float(frame) / km.FPS
+    size = max(0.2, float(values[WIDTH]))
+    azimuth = np.radians(km.cell_azimuths() - values[AZIMUTH] * seconds)
+    radius = PER_ROW / (2.0 * math.pi)
+    rings = np.arange(ROWS, dtype=np.float64)[:, None] * np.ones((1, PER_ROW))
+    up = (rings - values[HEIGHT] * seconds) * math.sqrt(3.0) / 2.0
+    x, y = radius * np.cos(azimuth), radius * np.sin(azimuth)
+    time = seconds * max(0.0, float(values[TALL]))
+    out = np.zeros((ROWS, PER_ROW))
+    amplitude, scale, total = 1.0, 1.0 / size, 0.0
+    for octave in range(2):
+        out += amplitude * value_noise(x * scale, y * scale, up * scale,
+                                       np.full_like(x, time * (1 + octave)), seed + octave)
+        total += amplitude
+        amplitude *= 0.5
+        scale *= 2.0
+    return np.clip(out / total * 1.6, -1.0, 1.0)
 
 
 # -- where the cells look ---------------------------------------------------------
@@ -153,9 +223,16 @@ def rays(lift, base=None):
 
 
 def ring_height(ring: float, base=None, lift=None) -> float:
-    """A fractional ring's height, metres, with the jacks as given."""
+    """A fractional ring's height, metres, with the jacks as given -- and
+    past the lowest and the highest, on at the rings' own pitch, so a solid
+    can stand under the building or over it and pass through."""
     heights = km.ring_heights(np.full(ROWS, km.REST["lift"]) if lift is None else lift,
                               base)
+    ring = float(ring)
+    if ring < 0:
+        return float(heights[0] + ring * km.RING_PITCH_M)
+    if ring > ROWS - 1:
+        return float(heights[-1] + (ring - (ROWS - 1)) * km.RING_PITCH_M)
     return float(np.interp(ring, np.arange(ROWS), heights))
 
 
@@ -244,6 +321,9 @@ def apply(pose: dict, primitives, frame: float, masks: dict | None = None,
         strength = float(values[STRENGTH])
         if strength <= 0:
             continue
+        if one.kind == "noise":
+            push, tilt = _noise(one, values, frame, strength, masks, push, tilt)
+            continue
         t_in, t_out, n_in, n_out = hits(one.kind, values, origin, out, base, lift)
         now = np.repeat(push, PER_PUSHER, axis=1) * REACH_M     # metres out, a cell
         inside = (t_in <= now + 1e-9) & (now < t_out)
@@ -282,6 +362,22 @@ def apply(pose: dict, primitives, frame: float, masks: dict | None = None,
         tilt = np.where(moved, km.clamp_tilt(tilt, lift, push), was_tilt)
     return {"lift": pose["lift"], "push": push.astype(np.float32),
             "tilt": np.asarray(tilt, np.float32)}
+
+
+def _noise(one, values, frame, strength, masks, push, tilt):
+    """A noise over the pose: its push out (or in), 0..its push, a pusher by
+    the middle of its five cells; its tilt either way, a cell by its own."""
+    field = noise_field(values, frame, one.seed)
+    sign = -1.0 if one.polarity == "negative" else 1.0
+    weight = strength * _weights(masks, one.mask)
+    middle = field[:, PER_PUSHER // 2::PER_PUSHER]
+    group_weight = weight.reshape(ROWS, km.GROUPS, PER_PUSHER).max(axis=2)
+    amount = float(values[OFFSET]) / REACH_M
+    push = push + sign * amount * (middle * 0.5 + 0.5) * group_weight
+    if one.tilt:
+        turn = strength * _weights(masks, one.tilt_mask or one.mask)
+        tilt = tilt + field * (float(values[DEPTH]) / kinetic.TILT_DEGREES) * turn
+    return push, tilt
 
 
 def _weights(masks: dict, name: str) -> np.ndarray:
@@ -329,6 +425,10 @@ def _frames_of(primitives, length: int, step: int) -> list:
     frames = set()
     for one in primitives:
         frames.update(one.frames)
+        if one.kind == "noise":
+            # It changes all the time, keys or not.
+            frames.update(range(0, length, step))
+            continue
         for k in range(len(one.frames) - 1):
             if not np.allclose(one.values[k], one.values[k + 1]):
                 frames.update(range(one.frames[k] + step, one.frames[k + 1], step))

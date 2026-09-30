@@ -219,3 +219,68 @@ def test_a_primitive_eases_between_its_keys_the_short_way_round():
     assert one.values[0][kp.WIDTH] < half[kp.WIDTH] < 2.0
     one.move(1, 60)
     assert one.frames == [0, 60]
+
+
+def test_a_primitive_passes_under_and_over_the_building():
+    """Heights past the lowest and highest ring go on at the rings' pitch,
+    so a sphere can start under the building and leave over it."""
+    ball = _sphere(radius=0.8)
+    project = _piece(ball)
+    for ring in (-8.0, 38.0):
+        ball.values[0][kp.HEIGHT] = ring
+        assert not kp.touched_cells(project, ball, 0).any(), ring
+    assert kp.ring_height(-1.0) == pytest.approx(kp.ring_height(0.0) - km.RING_PITCH_M)
+    ball.values[0][kp.HEIGHT] = -0.5
+    touched = kp.touched_cells(project, ball, 0)
+    assert touched[0].any() and not touched[3:].any()
+
+
+def _noise(**values):
+    one = kp.Primitive("noise", "noise")
+    for index, value in values.items():
+        one.values[0][getattr(kp, index.upper())] = value
+    return one
+
+
+def test_noise_moves_the_cells_smoothly_and_changes_in_time():
+    noise = _noise(offset=0.4, depth=20.0, width=6.0, tall=0.5)
+    project = _piece(noise)
+    first = kp.pose_at(project, 0)
+    later = kp.pose_at(project, 120)
+    # Out, never past its push; tilted either way; a different pattern later.
+    assert (first["push"] >= 0).all() and (first["push"] <= 0.4 + 1e-6).all()
+    assert first["push"].std() > 0.03
+    assert (first["tilt"] > 0.02).any() and (first["tilt"] < -0.02).any()
+    assert np.abs(later["push"] - first["push"]).mean() > 0.02
+    # Smooth: neighbours round a ring are nearer than cells far apart.
+    field = kp.noise_field(noise.values[0], 0)
+    near = np.abs(np.diff(field, axis=1)).mean()
+    far = np.abs(field - np.roll(field, PER_ROW // 2, axis=1)).mean()
+    assert near < far * 0.6
+    # Seamless round the building: the last cell and the first are neighbours.
+    assert np.abs(field[:, -1] - field[:, 0]).mean() < far * 0.6
+    # The same seed, the same noise; another seed, another.
+    assert np.allclose(kp.noise_field(noise.values[0], 50, 3),
+                       kp.noise_field(noise.values[0], 50, 3))
+    assert not np.allclose(kp.noise_field(noise.values[0], 50, 3),
+                           kp.noise_field(noise.values[0], 50, 4))
+
+
+def test_noise_presses_in_keeps_to_a_mask_and_is_keyed_through_the_piece():
+    noise = _noise(offset=0.3, depth=10.0)
+    noise.polarity, noise.tilt = "negative", False
+    project = _piece(noise)
+    project.tracks["push"].write(0, np.full(300, 0.5), np.ones(300, bool))
+    pose = kp.pose_at(project, 30)
+    assert (pose["push"] <= 0.5 + 1e-6).all() and (pose["push"] < 0.45).any()
+    assert not np.abs(pose["tilt"]).any()
+    half = np.zeros((ROWS, PER_ROW), np.float32)
+    half[:RING] = 1.0
+    project.masks["low"] = half.reshape(-1)
+    noise.mask = "low"
+    pose = kp.pose_at(project, 30)
+    assert np.allclose(pose["push"][RING + 1:], 0.5)
+    # It changes all the time: keyed every step through the whole piece.
+    project.prim_step = 20
+    motion = kp.compose(project)
+    assert set(range(0, 600, 20)) <= set(motion.tracks["push"].frames)

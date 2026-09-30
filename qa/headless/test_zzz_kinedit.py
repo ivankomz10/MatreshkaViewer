@@ -221,7 +221,10 @@ def test_the_viewer_hands_the_editor_its_flags(monkeypatch):
 # -- the motors' own motion ------------------------------------------------------
 
 def _too_fast(editor):
-    """A band pushed 900 mm in a second, and pulled back while moving."""
+    """A band pushed 900 mm in a second, and pulled back while moving -- the
+    keys as they are, with no plan of moves to make them what the machine
+    carries out."""
+    editor.set_plan(False)
     cells = np.zeros((ROWS, PER_ROW), bool)
     cells[5:25, 5:30] = True
     editor._select(cells, "set")
@@ -1044,9 +1047,15 @@ def test_the_simulation_and_the_export_play_the_layers(fresh):
     _a_wave(fresh)
     fresh.push_down()
     fresh.set_strip_value("rings", 3)
-    motion = fresh.composed()
-    assert not motion.layers
-    assert motion.pose(180)["push"][9, 0] == pytest.approx(0.5)
+    meant = fresh.desired()
+    assert not meant.layers
+    assert meant.pose(180)["push"][9, 0] == pytest.approx(0.5)
+    # Exported as the machine can carry it out: the wave is quicker than a
+    # pusher, so its top is as far as the pusher gets in the time.
+    written = fresh.export_to(OUT / "layers_1_of_1.json")
+    back, _ = km.from_motor_json(written)
+    assert 0.3 < back.pose(180)["push"][9, 0] <= 0.5 + 1e-3
+    fresh.set_plan(False)
     written = fresh.export_to(OUT / "layers_1_of_1.json")
     back, _ = km.from_motor_json(written)
     assert back.pose(180)["push"][9, 0] == pytest.approx(0.5, abs=1e-3)
@@ -1066,3 +1075,90 @@ def test_a_strip_comes_back_as_keys_and_the_layers_bake(fresh):
     assert np.allclose(fresh.project.pose(360)["push"], wanted)
     fresh.set_timeline_view("simple")
     assert not fresh.timeline.layered
+
+
+# -- the picture on the strip, the plan of moves, noise ------------------------------------
+
+def test_the_strip_runs_as_the_3d_view_and_shows_each_cells_patch(fresh, tick):
+    import media
+    import kinedit
+    places, faces, _ = fresh._cells_on_screen()
+    row = 15
+    index = fresh.index_of[row]
+    seen = faces[index]
+    order = np.argsort(places[index, 0][seen])
+    across = fresh.unwrap.places[row, :, 0][seen][order]
+    assert (np.diff(across) > 0).all(), across
+    # In Video the strip is a picture: each cell its own patch.
+    fresh.set_mask(False)
+    assert fresh.unwrap.picture is not None
+    fresh.load_video(str(media.build()["top"]))
+    try:
+        fresh.go_to(20)
+        fresh.touch()
+        tick(0.6)
+        picture = fresh.unwrap.picture
+        assert picture is not None
+        ratio = picture.devicePixelRatio()
+        assert abs(picture.width() / ratio - fresh.unwrap.width()) <= 1
+        # Across a cell the picture changes, as it does on the building: not
+        # one flat colour a cell.
+        screen = fresh.unwrap.screen_places()
+        size = fresh.unwrap._cell()
+        x, y = screen[row, 30]
+        left = picture.pixelColor(int((x - size * 0.3) * ratio), int(y * ratio))
+        right = picture.pixelColor(int((x + size * 0.3) * ratio), int(y * ratio))
+        assert left.alpha() == 255 and right.alpha() == 255
+        assert (left.red(), left.green(), left.blue()) != (right.red(), right.green(),
+                                                           right.blue())
+        # Moved, drawn again for where it is now.
+        before = fresh.unwrap.picture
+        fresh.unwrap.zoom_at(fresh.unwrap._middle(), 2.0)
+        assert fresh.unwrap.picture is not before
+        fresh.unwrap.reset_view()
+        fresh.set_mask(True)
+        assert fresh.unwrap.picture is None
+    finally:
+        fresh.stream.stop()
+        fresh.stream = fresh.screen = fresh.held = None
+        fresh._video_cells = None
+        fresh.solid.clear_video(kinedit.TOP)
+        fresh.set_mask(True)
+
+
+def test_the_plan_of_moves_leaves_nothing_dropped(fresh):
+    _too_fast(fresh)
+    assert fresh.simulation().dropped
+    fresh.set_plan(True)
+    fresh._resimulate()
+    result = fresh.simulation()
+    assert not result.dropped
+    panel = fresh.panels["motors"]
+    panel.refresh()
+    assert panel.plan.isChecked()
+    # The picture's warnings are the piece's own, not the plan's.
+    assert fresh.desired() is not fresh.composed()
+    fresh._step_undo(True)
+    assert not fresh.project.plan
+
+
+def test_noise_from_the_panel(fresh, tick):
+    import kin_prims as kp
+    fresh.add_primitive("noise")
+    one = fresh.primitive()
+    assert one.kind == "noise" and fresh.tool == "prims"
+    panel = fresh.panels["prims"]
+    panel.refresh()
+    assert panel.labels[kp.AZIMUTH].text() == "По кругу"
+    assert panel.seed.isVisible() or not panel.isVisible()
+    first = fresh.shown_now()["push"].copy()
+    fresh.go_to(90)
+    assert np.abs(fresh.shown_now()["push"] - first).mean() > 0.01
+    # It has no place: a click on the strip leaves it as it is.
+    fresh._place_primitive(10.0, 3.0)
+    assert "Шум" in fresh.status.text()
+    assert fresh.prim_outline(one) == []
+    fresh.set_prim_property("seed", 42)
+    assert fresh.primitive().seed == 42
+    fresh.touch()
+    tick(0.1)

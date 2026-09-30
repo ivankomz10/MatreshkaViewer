@@ -105,10 +105,13 @@ VERSION = 1
 READING = "machine"
 NO_JACK = 0
 
-# A moving primitive is keyed this often, in frames, when it is turned into
-# keys: the motors go from one key to the next, so this is how finely they
-# follow it.
-PRIM_STEP = 30
+# A moving primitive is looked at this often, in frames, when it is turned
+# into keys; the plan of moves (`kin_plan`) then makes of that what the
+# motors can carry out.
+PRIM_STEP = 10
+# The plan's tolerance: a wiggle smaller than this, of a motor's travel, is
+# no move of its own.
+PLAN_TOLERANCE = 0.02
 
 
 class ModelError(Exception):
@@ -482,6 +485,10 @@ class Project:
         # strips -- where a clip plays, how, and how strongly.
         self.clips: dict = {}
         self.layers: list = []
+        # Whether the simulation and the export get the piece as a plan of
+        # moves the machine carries out (`kin_plan`), and its tolerance.
+        self.plan = True
+        self.tolerance = PLAN_TOLERANCE
         # Bumped by whatever changes the masks, the primitives or the layers,
         # which have no versions of their own.
         self.revision = 0
@@ -528,13 +535,14 @@ class Project:
         return ({family: track.state() for family, track in self.tracks.items()},
                 self.length, dict(self.profiles), dict(self.masks),
                 [one.state() for one in self.primitives], self.prim_step,
-                dict(self.clips), [one.state() for one in self.layers])
+                dict(self.clips), [one.state() for one in self.layers],
+                self.plan, self.tolerance)
 
     def restore(self, state) -> None:
         import kin_layers
         import kin_prims
         (tracks, self.length, profiles, masks, primitives, self.prim_step,
-         clips, layers) = state
+         clips, layers, self.plan, self.tolerance) = state
         self.profiles = dict(profiles)
         self.masks = dict(masks)
         self.primitives = [kin_prims.Primitive.from_state(one) for one in primitives]
@@ -570,6 +578,7 @@ class Project:
             "prim_step": int(self.prim_step),
             "clips": {name: clip.to_dict() for name, clip in self.clips.items()},
             "layers": [one.state() for one in self.layers],
+            "plan": bool(self.plan), "tolerance": float(self.tolerance),
         }
 
     def save(self, path: str | Path) -> None:
@@ -612,6 +621,8 @@ class Project:
         except (KeyError, TypeError, ValueError) as error:
             raise ModelError(f"{path.name}: {error}") from error
         project.prim_step = int(data.get("prim_step") or PRIM_STEP)
+        project.plan = bool(data.get("plan", True))
+        project.tolerance = float(data.get("tolerance", PLAN_TOLERANCE))
         import kin_layers
         try:
             project.clips = {str(name): kin_layers.Clip.from_dict(one, path.name)

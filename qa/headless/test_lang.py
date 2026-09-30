@@ -18,7 +18,7 @@ MODULES = ("main.py", "timeline.py", "show.py", "kinetic.py", "sound.py",
            # The kinetic editor.
            "kinedit.py", "kin_model.py", "kin_tools.py", "kin_timeline.py",
            "kin_unwrap.py", "kin_sim.py", "kin_gizmo.py", "kin_overlay.py",
-           "kin_prims.py", "kin_layers.py", "kin_sample.py")
+           "kin_prims.py", "kin_layers.py", "kin_sample.py", "kin_plan.py")
 # Said once, at import, and put through tr() where they are shown.
 CONSTANTS = {"MODE_LABEL", "LAYER_LABEL", "CALLED", "SAID", "TRANSPORT",
              "WRITE_SIZE_HINT", "FLAT_SCALES", "KEYS", "EDIT_KEYS",

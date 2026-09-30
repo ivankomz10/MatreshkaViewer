@@ -686,6 +686,10 @@ class KeyTimeline(QWidget):
         brush.setBrush(colour)
         if one.kind == "sphere":
             brush.drawEllipse(QRectF(22, top + height / 2 - 4, 8, 8))
+        elif one.kind == "noise":
+            middle = top + height / 2
+            brush.drawPolygon(QPolygonF([QPointF(26, middle - 5), QPointF(31, middle),
+                                         QPointF(26, middle + 5), QPointF(21, middle)]))
         else:
             brush.drawRect(QRectF(22, top + height / 2 - 4, 8, 8))
         brush.setFont(theme.ui(9))

@@ -768,10 +768,7 @@ EN: dict = {
         'Key the primitive at the playhead, where it is now',
     'Снять ключ': 'Remove key',
     'Убрать ключ примитива на плейхеде': "Take away the primitive's key at the playhead",
-    'Шаг ключей': 'Key step',
     'кадров': 'frames',
-    'Как часто движущийся примитив даёт моторам ключ: они ходят от ключа к ключу, так что это то, насколько точно они за ним следуют':
-        'How often a moving primitive gives the motors a key: they go from key to key, so this is how closely they follow it',
     'Запечь примитивы в ключи': 'Bake primitives into keys',
     'Что делают включённые примитивы — в ключи моторов, а сами они выключаются. Отменяется Ctrl+Z.':
         "What the primitives that are on do goes into the motors' keys, and they are turned off. Ctrl+Z undoes it.",
@@ -909,4 +906,47 @@ EN: dict = {
         '{0}: frames {1}–{2}, {3}, strength {4:.0f} %',
     'Ключи: кадр {0}': 'Keys: frame {0}',
     'Ключи: {0}, кадры {1}–{2}': 'Keys: {0}, frames {1}–{2}',
+    # -- the plan of moves, noise ---------------------------------------------
+    'Шум {0}':
+        'Noise {0}',
+    'Шум лежит на всех сотах — его место не ставится':
+        'A noise lies on every cell: it has no place to put',
+    'План ходов':
+        'Plan the moves',
+    'Симуляция и экспорт получают ходы, которые машина успевает: подъём или спуск — одним ходом, заранее, чтобы прийти вовремя, с отдыхом между ходами; пик, до которого не успеть, — сколько успевает; фигура, на которой кривая стоит, — целиком. Моторы, чьи ключи машина и так отработает, не трогаются.':
+        'The simulation and the export get moves the machine carries out: a rise or a fall as one move, started early to arrive on time, with a rest between moves; a peak there is no time for, as far as there is; a shape the curve stands at, in full. Motors whose keys the machine carries out as they are stay as they are.',
+    'допуск':
+        'tolerance',
+    'Дрожь кривой меньше этого — не ход: доля хода мотора':
+        "A wiggle of the curve smaller than this is no move: a share of the motor's travel",
+    'Зерно':
+        'Seed',
+    'Другое зерно — другой узор шума':
+        'Another seed, another pattern of noise',
+    'Шаг выборки':
+        'Sampling step',
+    'Как часто снимается движение примитива; план ходов в «Моторах» потом делает из этого ходы, которые моторы успевают':
+        "How often the primitive's motion is looked at; the plan of moves in Motors then makes moves of it the motors carry out",
+    '+ Шум':
+        '+ Noise',
+    'кол/с':
+        'rings/s',
+    '°/с': '°/s',
+    '/с': '/s',
+    'Вверх':
+        'Up',
+    'Дрейф шума вокруг здания, градусы в секунду':
+        "The noise's drift round the building, degrees a second",
+    'Дрейф шума вверх, кольца в секунду; минус — вниз':
+        "The noise's drift up, rings a second; minus is down",
+    'Сколько шум выносит соты, метры: от нуля до этого':
+        'How far the noise pushes the cells, metres: from nothing to this',
+    'Размер пятна шума, в сотах':
+        "The size of the noise's patches, in cells",
+    'Как быстро шум меняется, раз в секунду':
+        'How fast the noise changes, times a second',
+    'Насколько шум наклоняет соты, в обе стороны':
+        'How far the noise tilts the cells, either way',
+    '{0}: на всех сотах; как он меняется — его ключами':
+        '{0}: on every cell; how it changes, by its keys',
 }

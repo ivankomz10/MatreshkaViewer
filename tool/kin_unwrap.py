@@ -44,9 +44,12 @@ MARGIN = 10
 
 def cell_places(front: float = 0.0) -> np.ndarray:
     """Every cell's (across, up) in cells: across 0..50 with `front`, the
-    azimuth the camera looks at, in the middle; up 0 at the lowest ring."""
+    azimuth the camera looks at, in the middle; up 0 at the lowest ring.
+    Across runs the way the azimuth does -- left to right as the building
+    is seen from outside, and as its picture runs -- not mirrored as from
+    within."""
     azimuth = km.cell_azimuths()
-    across = ((front + 180.0 - azimuth) % 360.0) / 360.0 * PER_ROW
+    across = ((azimuth - front + 180.0) % 360.0) / 360.0 * PER_ROW
     up = np.repeat(np.arange(ROWS, dtype=np.float64)[:, None], PER_ROW,
                    axis=1) * RING_PITCH
     return np.stack([across, up], axis=-1)
@@ -98,6 +101,7 @@ class Unwrap(QWidget):
         self.lag = np.zeros((ROWS, PER_ROW), bool)
         self.tool = "brush"            # brush | select | place
         self.marker = None             # the chosen primitive's centre, (across, up)
+        self.picture = None            # the video on the cells, a QImage, or None
         self.radius = 2.5              # cells
         self.hardness = 0.5
         self.grain = "cell"            # cell | group | ring: what a click takes
@@ -137,12 +141,25 @@ class Unwrap(QWidget):
         self.selection = np.asarray(cells, bool).reshape(ROWS, PER_ROW)
         self.update()
 
+    def set_picture(self, image) -> None:
+        """The cells as the video paints them -- each its own patch of the
+        picture -- drawn under the outlines; None for the flat colours."""
+        self.picture = image
+        self.update()
+
+    def view(self) -> tuple:
+        """What a picture of the strip is drawn for: (centre, middle, pixels
+        a cell, width, height), in the widget's own pixels."""
+        middle = self._middle()
+        return ((float(self.centre[0]), float(self.centre[1])),
+                (middle.x(), middle.y()), self._cell(), self.width(), self.height())
+
     def set_marker(self, azimuth=None, ring=None) -> None:
         """Where the chosen primitive stands, drawn as a ring; None for none."""
         if azimuth is None:
             self.marker = None
         else:
-            across = ((self.front + 180.0 - azimuth) % 360.0) / 360.0 * PER_ROW
+            across = ((azimuth - self.front + 180.0) % 360.0) / 360.0 * PER_ROW
             self.marker = (across, float(ring) * RING_PITCH)
         self.update()
 
@@ -150,7 +167,7 @@ class Unwrap(QWidget):
         """(azimuth in degrees, ring) of a point on the widget: where a
         primitive put there stands."""
         across, up = self.to_cells(point)
-        return ((self.front + 180.0 - across / PER_ROW * 360.0) % 360.0,
+        return ((self.front - 180.0 + across / PER_ROW * 360.0) % 360.0,
                 up / RING_PITCH)
 
     def set_lift(self, lift) -> None:
@@ -267,19 +284,30 @@ class Unwrap(QWidget):
         over = self.over
         screen = self.screen_places()
         reach_x, reach_y = self.width() + size, self.height() + size
+        pictured = self.picture is not None
+        if pictured:
+            brush.drawImage(QRectF(0, 0, self.width(), self.height()), self.picture)
         for row in range(ROWS):
             for which in range(PER_ROW):
                 x, y = screen[row, which]
                 if x < MARGIN_LEFT - size or x > reach_x or y < -size or y > reach_y:
                     continue
                 centre = QPointF(x, y)
-                fill = QColor(*colours[row, which])
                 weight = over[row, which, 3]
-                if weight > 0.0:
-                    lay = over[row, which, :3]
-                    mixed = colours[row, which] * (1 - weight) + lay * 255.0 * weight
-                    fill = QColor(*np.clip(mixed, 0, 255).astype(int))
-                brush.setBrush(fill)
+                if pictured:
+                    # The picture is there already: only what lies over it.
+                    if weight > 0.0:
+                        lay = np.clip(over[row, which, :3] * 255.0, 0, 255).astype(int)
+                        brush.setBrush(QColor(*lay, int(weight * 255)))
+                    else:
+                        brush.setBrush(Qt.BrushStyle.NoBrush)
+                else:
+                    fill = QColor(*colours[row, which])
+                    if weight > 0.0:
+                        lay = over[row, which, :3]
+                        mixed = colours[row, which] * (1 - weight) + lay * 255.0 * weight
+                        fill = QColor(*np.clip(mixed, 0, 255).astype(int))
+                    brush.setBrush(fill)
                 if self.selection[row, which]:
                     brush.setPen(QPen(QColor("#ffffff"), max(1.0, size * 0.1)))
                 elif self.warn[row, which]:
@@ -288,6 +316,8 @@ class Unwrap(QWidget):
                     brush.setPen(QPen(QColor(theme.WARN), max(1.0, size * 0.1)))
                 else:
                     brush.setPen(Qt.PenStyle.NoPen)
+                    if pictured and weight <= 0.0:
+                        continue
                 brush.drawPolygon(QPolygonF([centre + one for one in hexagon]))
         # The rings, numbered as the file numbers them, down a column of their
         # own that stays put however the strip is moved -- every one when
