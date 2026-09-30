@@ -1,35 +1,38 @@
-"""The kinetic editor's tools, each a panel down the right of the window.
+"""The kinetic editor's panel: what is chosen, and the tool's own settings.
 
-  Кисть     paints one family at a time: the value to paint towards, how
-            big, how hard, how strongly; paint, smooth or erase
-  Выбор     cells, groups of five or whole rings, and values set on them:
-            a ring's height, a group's push, a cell's tilt -- and the
-            auto-rotate, which lays the cells along the shape
-  Профиль   the vase: a curve from the lowest ring to the top, how far out
-            each ring is pushed, and the cells tilted along it
-  Кольца    thirty rings, each at one of its jack's four places
+Down the right of the window, in three parts:
 
-A panel does nothing itself. It calls the window (`actions`), which knows
-the frame, writes the keys and keeps the undo -- so every tool edits the
-piece the same way, and a change from a panel is a change like any other.
+  Выбрано      always there: what is chosen -- rings, groups, cells -- and
+               where its motors stand at the playhead, a row a family: the
+               jack's four places, the pusher's millimetres, the tilt's
+               degrees with the stretch its gaps allow painted on the
+               slider. Changing a row keys the chosen motors of that family
+               there; ◆ keys them where they stand
+  Позы         the pose library: the piece as it stands, saved under a name
+               and put back as a key -- on the chosen cells, or all of them
+  the tool     the brush's paint, the selection's size, the vase's options,
+               the motors' pace and what went wrong
+
+Numbers are dragged as well as typed: press on one and pull left or right,
+Shift for fine steps, as in Blender. A panel does nothing itself; it calls
+the window (`actions`), which knows the frame, writes the keys and keeps the
+undo -- so a change from here is a change like any other.
 """
 from __future__ import annotations
 
-import math
-
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QDoubleSpinBox,
-                               QGridLayout, QHBoxLayout, QLabel, QPushButton,
-                               QScrollArea, QSlider, QSpinBox, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox,
+                               QDoubleSpinBox, QGridLayout, QHBoxLayout,
+                               QLabel, QListWidget, QListWidgetItem,
+                               QPushButton, QSlider, QVBoxLayout, QWidget)
 
 import kin_model as km
 import kinetic
 import theme
 from kin_timeline import FAMILY_COLOUR, FAMILY_NAME
-from kinetic import ROWS
+from kinetic import PER_PUSHER, PER_ROW, ROWS
 from lang import tr
 
 LIFT_MM = tuple(int(kinetic.JACK_STATE_MM[state]) for state in range(4))
@@ -38,7 +41,7 @@ LIFT_MM = tuple(int(kinetic.JACK_STATE_MM[state]) for state in range(4))
 def heading(text: str) -> QLabel:
     label = QLabel(text)
     label.setFont(theme.heading())
-    label.setStyleSheet(f"color:{theme.TEXT}; padding-top:6px;")
+    label.setStyleSheet(f"color:{theme.TEXT}; padding-top:4px;")
     return label
 
 
@@ -49,14 +52,14 @@ def note(text: str = "") -> QLabel:
     return label
 
 
-def segments(names, name: str, on_pick, checked: int = 0):
+def segments(names, name: str, on_pick, checked: int = 0, exclusive: bool = True):
     """A row of buttons of which one is on, as the viewer's level switch."""
     holder = QWidget()
     row = QHBoxLayout(holder)
     row.setContentsMargins(0, 0, 0, 0)
     row.setSpacing(2)
     group = QButtonGroup(holder)
-    group.setExclusive(True)
+    group.setExclusive(exclusive)
     buttons = []
     for index, text in enumerate(names):
         button = QPushButton(str(text))
@@ -73,71 +76,6 @@ def segments(names, name: str, on_pick, checked: int = 0):
     return holder
 
 
-class Slider(QWidget):
-    """A slider with its number beside it, in the value's own units.
-
-    `pressed` and `released` bracket a drag, so the window can make one undo
-    step of it rather than one a pixel.
-    """
-
-    moved = Signal(float)
-    pressed = Signal()
-    released = Signal()
-
-    def __init__(self, low: float, high: float, value: float, unit: str,
-                 name: str, step: float = 1.0, decimals: int = 0) -> None:
-        super().__init__()
-        self.low, self.high, self.step = low, high, step
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setObjectName(name)
-        self.slider.setRange(0, int(round((high - low) / step)))
-        self.number = QDoubleSpinBox()
-        self.number.setObjectName(name + "_number")
-        self.number.setRange(low, high)
-        self.number.setDecimals(decimals)
-        self.number.setSingleStep(step)
-        self.number.setSuffix(f" {unit}" if unit else "")
-        self.number.setFixedWidth(96)
-        self.number.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-        row.addWidget(self.slider, 1)
-        row.addWidget(self.number)
-        self.set(value)
-        self.slider.valueChanged.connect(self._slid)
-        self.slider.sliderPressed.connect(self.pressed)
-        self.slider.sliderReleased.connect(self.released)
-        self.number.editingFinished.connect(self._typed)
-
-    def value(self) -> float:
-        return float(self.number.value())
-
-    def set(self, value: float) -> None:
-        for widget in (self.slider, self.number):
-            widget.blockSignals(True)
-        self.slider.setValue(int(round((value - self.low) / self.step)))
-        self.number.setValue(value)
-        for widget in (self.slider, self.number):
-            widget.blockSignals(False)
-
-    def _slid(self, position: int) -> None:
-        value = self.low + position * self.step
-        self.number.blockSignals(True)
-        self.number.setValue(value)
-        self.number.blockSignals(False)
-        self.moved.emit(value)
-
-    def _typed(self) -> None:
-        value = self.value()
-        self.slider.blockSignals(True)
-        self.slider.setValue(int(round((value - self.low) / self.step)))
-        self.slider.blockSignals(False)
-        self.pressed.emit()
-        self.moved.emit(value)
-        self.released.emit()
-
-
 def labelled(text: str, widget: QWidget) -> QWidget:
     holder = QWidget()
     column = QVBoxLayout(holder)
@@ -150,16 +88,184 @@ def labelled(text: str, widget: QWidget) -> QWidget:
     return holder
 
 
+# -- numbers pulled by the mouse --------------------------------------------------
+
+class Scrub(QDoubleSpinBox):
+    """A number that is dragged as well as typed.
+
+    Press on it and pull sideways: a step a few pixels, a tenth of one with
+    Shift. A press that does not move is a click, and the number is there
+    to type into. `pressed` and `released` bracket a drag -- and a typed
+    number, which is a change of one step -- so it makes one undo step.
+    """
+
+    pressed = Signal()
+    released = Signal()
+    moved = Signal(float)
+
+    PIXELS_A_STEP = 3.0
+
+    def __init__(self, low: float, high: float, value: float, unit: str,
+                 name: str, step: float = 1.0, decimals: int = 0) -> None:
+        super().__init__()
+        self.setObjectName(name)
+        self.setRange(low, high)
+        self.setDecimals(decimals)
+        self.setSingleStep(step)
+        self.setSuffix(f" {unit}" if unit else "")
+        self.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        self.setValue(value)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.lineEdit().setCursor(Qt.CursorShape.SizeHorCursor)
+        self.lineEdit().installEventFilter(self)
+        self._from = None
+        self._scrubbing = False
+        self.editingFinished.connect(self._typed)
+
+    def eventFilter(self, watched, event):          # noqa: N802
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            self._from = (event.globalPosition().x(), self.value())
+            self._scrubbing = False
+            return False
+        if kind == QEvent.Type.MouseMove and self._from is not None:
+            moved = event.globalPosition().x() - self._from[0]
+            if not self._scrubbing and abs(moved) > 3:
+                self._scrubbing = True
+                self.pressed.emit()
+                self.lineEdit().deselect()
+            if self._scrubbing:
+                fine = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                steps = moved / self.PIXELS_A_STEP * (0.1 if fine else 1.0)
+                value = self._from[1] + steps * self.singleStep()
+                self.blockSignals(True)
+                self.setValue(value)
+                self.blockSignals(False)
+                self.moved.emit(self.value())
+                return True
+        if kind == QEvent.Type.MouseButtonRelease and self._from is not None:
+            self._from = None
+            if self._scrubbing:
+                self._scrubbing = False
+                self.clearFocus()
+                self.released.emit()
+                return True
+        return super().eventFilter(watched, event)
+
+    def _typed(self) -> None:
+        if self._scrubbing:
+            return
+        self.pressed.emit()
+        self.moved.emit(self.value())
+        self.released.emit()
+
+    def set(self, value: float) -> None:
+        self.blockSignals(True)
+        self.setValue(value)
+        self.blockSignals(False)
+
+
+class RangeSlider(QSlider):
+    """A slider that paints the stretch a value may take: outside it,
+    darkened -- a tilt's slider shows how far the gaps let the chosen cells
+    go, down and up."""
+
+    def __init__(self) -> None:
+        super().__init__(Qt.Orientation.Horizontal)
+        self.allowed = None              # (low, high) in the slider's units
+
+    def paintEvent(self, event) -> None:          # noqa: N802
+        super().paintEvent(event)
+        if self.allowed is None or self.maximum() == self.minimum():
+            return
+        brush = QPainter(self)
+        span = self.maximum() - self.minimum()
+        inset = 7.0
+        wide = self.width() - 2 * inset
+        low, high = self.allowed
+
+        def x_of(value):
+            return inset + (value - self.minimum()) / span * wide
+
+        shade = QColor(theme.ERROR)
+        shade.setAlpha(70)
+        middle = self.height() / 2
+        left, right = x_of(low), x_of(high)
+        if left > inset:
+            brush.fillRect(QRectF(inset, middle - 3, left - inset, 6), shade)
+        if right < inset + wide:
+            brush.fillRect(QRectF(right, middle - 3, inset + wide - right, 6), shade)
+        brush.end()
+
+
+class Slider(QWidget):
+    """A slider with its number beside it, in the value's own units; the
+    number is dragged too. `pressed` and `released` bracket a drag, so the
+    window makes one undo step of it rather than one a pixel."""
+
+    moved = Signal(float)
+    pressed = Signal()
+    released = Signal()
+
+    def __init__(self, low: float, high: float, value: float, unit: str,
+                 name: str, step: float = 1.0, decimals: int = 0) -> None:
+        super().__init__()
+        self.low, self.high, self.step = low, high, step
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        self.slider = RangeSlider()
+        self.slider.setObjectName(name)
+        self.slider.setRange(0, int(round((high - low) / step)))
+        self.number = Scrub(low, high, value, unit, name + "_number", step, decimals)
+        self.number.setFixedWidth(88)
+        row.addWidget(self.slider, 1)
+        row.addWidget(self.number)
+        self.set(value)
+        self.slider.valueChanged.connect(self._slid)
+        self.slider.sliderPressed.connect(self.pressed)
+        self.slider.sliderReleased.connect(self.released)
+        self.number.pressed.connect(self.pressed)
+        self.number.released.connect(self.released)
+        self.number.moved.connect(self._scrubbed)
+
+    def value(self) -> float:
+        return float(self.number.value())
+
+    def set(self, value: float) -> None:
+        self.slider.blockSignals(True)
+        self.slider.setValue(int(round((value - self.low) / self.step)))
+        self.slider.blockSignals(False)
+        self.number.set(value)
+
+    def set_allowed(self, low, high) -> None:
+        """The stretch the value may take, or None for all of it."""
+        self.slider.allowed = (None if low is None else
+                               ((low - self.low) / self.step, (high - self.low) / self.step))
+        self.slider.update()
+
+    def _slid(self, position: int) -> None:
+        value = self.low + position * self.step
+        self.number.set(value)
+        self.moved.emit(value)
+
+    def _scrubbed(self, value: float) -> None:
+        self.slider.blockSignals(True)
+        self.slider.setValue(int(round((value - self.low) / self.step)))
+        self.slider.blockSignals(False)
+        self.moved.emit(value)
+
+
 class Panel(QWidget):
-    """A tool's column: its controls stacked, room to spare at the foot."""
+    """A column of controls, room to spare at the foot."""
 
     def __init__(self, actions, name: str) -> None:
         super().__init__()
         self.setObjectName(name)
         self.actions = actions
         self.column = QVBoxLayout(self)
-        self.column.setContentsMargins(14, 8, 14, 14)
-        self.column.setSpacing(10)
+        self.column.setContentsMargins(14, 8, 14, 10)
+        self.column.setSpacing(8)
 
     def finish(self) -> None:
         self.column.addStretch(1)
@@ -168,66 +274,252 @@ class Panel(QWidget):
         """Say again what the piece is at the playhead. Nothing by default."""
 
 
-# -- the brush ------------------------------------------------------------------
+def _key_button(name: str, call) -> QPushButton:
+    button = QPushButton("◆")
+    button.setObjectName(name)
+    button.setFixedSize(28, 26)
+    button.setStyleSheet("padding:0px;")
+    button.setProperty("fixed_words", True)
+    button.setToolTip(tr("Ключ выбранным моторам слоя там, где они стоят"))
+    button.clicked.connect(call)
+    return button
+
+
+# -- what is chosen -------------------------------------------------------------------
+
+class Inspector(Panel):
+    """What is chosen, and where its motors stand at the playhead."""
+
+    def __init__(self, actions) -> None:
+        super().__init__(actions, "qa_kin_inspector")
+        self.column.setContentsMargins(14, 10, 14, 8)
+        self.title = QLabel()
+        self.title.setObjectName("qa_kin_chosen")
+        self.title.setFont(theme.heading())
+        self.title.setWordWrap(True)
+        self.column.addWidget(self.title)
+
+        grid_holder = QWidget()
+        grid = QGridLayout(grid_holder)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        self.names = {}
+        for row, family in enumerate(km.FAMILIES):
+            name = QLabel(tr(FAMILY_NAME[family]))
+            name.setStyleSheet(f"color:{FAMILY_COLOUR[family]};")
+            grid.addWidget(name, row * 2, 0)
+            self.names[family] = name
+        self.lift = segments([str(mm) for mm in LIFT_MM], "qa_kin_set_lift",
+                             lambda i: actions.set_selected("lift", float(i)),
+                             checked=-1, exclusive=False)
+        grid.addWidget(self.lift, 0, 1)
+        grid.addWidget(_key_button("qa_kin_key_lift",
+                                   lambda: actions.key_selected("lift")), 0, 2)
+        self.push = Slider(0, 1000, 0, tr("мм"), "qa_kin_set_push", 10)
+        self.push.pressed.connect(actions.begin_edit)
+        self.push.moved.connect(
+            lambda v: actions.set_selected("push", v / 1000.0, live=True))
+        self.push.released.connect(actions.end_edit)
+        grid.addWidget(self.push, 2, 1)
+        grid.addWidget(_key_button("qa_kin_key_push",
+                                   lambda: actions.key_selected("push")), 2, 2)
+        self.push_note = note()
+        grid.addWidget(self.push_note, 3, 1)
+        self.tilt = Slider(-45, 45, 0, "°", "qa_kin_set_tilt", 0.5, 1)
+        self.tilt.pressed.connect(actions.begin_edit)
+        self.tilt.moved.connect(
+            lambda v: actions.set_selected("tilt", v / 90.0, live=True))
+        self.tilt.released.connect(actions.end_edit)
+        grid.addWidget(self.tilt, 4, 1)
+        grid.addWidget(_key_button("qa_kin_key_tilt",
+                                   lambda: actions.key_selected("tilt")), 4, 2)
+        self.tilt_note = note()
+        grid.addWidget(self.tilt_note, 5, 1)
+        grid.setColumnStretch(1, 1)
+        self.column.addWidget(grid_holder)
+
+        auto = QWidget()
+        line = QHBoxLayout(auto)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(8)
+        run = QPushButton(tr("Авторотейт"))
+        run.setObjectName("qa_kin_auto_rotate")
+        run.setToolTip(tr(
+            "Как rotate_auto в Houdini: каждая сота ложится вдоль поверхности, "
+            "которую сейчас составляют подъём и вынос, в пределах своих зазоров. "
+            "Без выбора — все соты. 100 % — ровно по поверхности."))
+        self.gain = Scrub(10, 300, 100, "%", "qa_kin_auto_gain", 5)
+        self.gain.setFixedWidth(76)
+        run.clicked.connect(lambda: actions.auto_rotate(self.gain.value() / 100.0))
+        line.addWidget(run, 1)
+        line.addWidget(self.gain)
+        self.column.addWidget(auto)
+        self.rows = [self.lift, self.push, self.tilt]
+
+    def refresh(self) -> None:
+        cells = self.actions.selection
+        rings = int(cells.any(axis=1).sum())
+        groups = int(km.cell_mask_for("push", cells).sum())
+        count = int(cells.sum())
+        if not count:
+            self.title.setText(tr("Ничего не выбрано — 1 кольца, 2 группы, 3 соты"))
+        else:
+            self.title.setText(tr("Выбрано: колец {0} · групп {1} · сот {2}",
+                                  rings, groups, count))
+        for family, name in self.names.items():
+            active = family == self.actions.family
+            name.setStyleSheet(f"color:{FAMILY_COLOUR[family]};"
+                               + (" font-weight:600;" if active else ""))
+        pose = self.actions.pose_now()
+        for widget in self.rows:
+            widget.setEnabled(bool(count))
+        if pose is None or not count:
+            for button in self.lift.buttons:
+                button.setChecked(False)
+            self.push_note.setText("")
+            self.tilt_note.setText("")
+            self.tilt.set_allowed(None, None)
+            return
+        # The jacks of the chosen rings: one of the four lit when they agree.
+        rows = cells.any(axis=1)
+        lift = np.round(pose["lift"][rows]).astype(int)
+        agreed = int(lift[0]) if len(set(lift.tolist())) == 1 else None
+        for index, button in enumerate(self.lift.buttons):
+            button.blockSignals(True)
+            button.setChecked(bool(agreed == index))
+            button.blockSignals(False)
+        push = pose["push"].reshape(-1)[km.cell_mask_for("push", cells)] * 1000.0
+        self.push.set(float(np.mean(push)))
+        self.push_note.setText("" if np.ptp(push) < 1 else
+                               tr("разные: {0:.0f}–{1:.0f} мм", push.min(), push.max()))
+        tilt = pose["tilt"][cells] * 90.0
+        self.tilt.set(float(np.mean(tilt)))
+        low, high = km.tilt_bounds(pose["lift"], pose["push"])
+        down = float(high[cells].min()) * 90.0
+        up = float(-low[cells].max()) * 90.0
+        self.tilt.set_allowed(-up, down)
+        spread = "" if np.ptp(tilt) < 0.1 else tr(
+            "разные: {0:+.1f}…{1:+.1f}° · ", tilt.min(), tilt.max())
+        self.tilt_note.setText(spread + tr("можно: вниз до {0:.0f}°, вверх до {1:.0f}°",
+                                           down, up))
+
+
+# -- the pose library -----------------------------------------------------------------
+
+class Poses(Panel):
+    """Poses saved under a name and put back as keys."""
+
+    def __init__(self, actions) -> None:
+        super().__init__(actions, "qa_kin_poses")
+        self.column.setContentsMargins(14, 2, 14, 8)
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(6)
+        label = QLabel(tr("Позы"))
+        label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
+        line.addWidget(label)
+        self.choice = QComboBox()
+        self.choice.setObjectName("qa_kin_pose_choice")
+        line.addWidget(self.choice, 1)
+        for text, name, call, hint in (
+                (tr("Поставить"), "qa_kin_pose_put", actions.put_pose,
+                 tr("Ключ позой на плейхеде: выбранным сотам или всем")),
+                ("+", "qa_kin_pose_save", actions.save_pose,
+                 tr("Сохранить, как стоит сейчас")),
+                ("−", "qa_kin_pose_drop", actions.drop_pose,
+                 tr("Убрать позу из библиотеки"))):
+            button = QPushButton(text)
+            button.setObjectName(name)
+            button.setToolTip(hint)
+            if text in "+−":
+                button.setFixedWidth(30)
+                button.setStyleSheet("padding:4px 0px;")
+                button.setProperty("fixed_words", True)
+            button.clicked.connect(call)
+            line.addWidget(button)
+        self.column.addWidget(row)
+
+    def refresh(self) -> None:
+        names = self.actions.pose_names()
+        current = self.choice.currentText()
+        self.choice.blockSignals(True)
+        self.choice.clear()
+        self.choice.addItems(names)
+        if current in names:
+            self.choice.setCurrentText(current)
+        self.choice.blockSignals(False)
+
+
+# -- the tools ------------------------------------------------------------------------
 
 class BrushPanel(Panel):
-    FAMILIES = ("Подъём", "Вынос", "Наклон")
     MODES = ("Красить", "Сгладить", "Стереть")
     MODE_KEYS = ("paint", "smooth", "erase")
 
     def __init__(self, actions) -> None:
         super().__init__(actions, "qa_kin_brush_panel")
-        self.column.addWidget(heading(tr("Кисть")))
-        self.layer = segments([tr(x) for x in self.FAMILIES], "qa_kin_brush_layer",
-                              lambda i: actions.set_family(km.FAMILIES[i]), 2)
-        self.column.addWidget(labelled(tr("Слой"), self.layer))
-
-        # What is painted towards, in the family's own units: one of four
-        # places for a jack, millimetres for a pusher, degrees for a tilt.
-        self.lift = segments([f"{mm}" for mm in LIFT_MM], "qa_kin_brush_lift",
+        self.title = heading("")
+        self.column.addWidget(self.title)
+        # What is painted towards, in the active layer's own units: one of
+        # four places for a jack, millimetres for a pusher, degrees for a tilt.
+        self.lift = segments([str(mm) for mm in LIFT_MM], "qa_kin_brush_lift",
                              lambda i: setattr(actions, "brush_lift", i), 1)
-        self.lift_box = labelled(tr("Положение домкрата, мм"), self.lift)
         self.push = Slider(0, 1000, 500, tr("мм"), "qa_kin_brush_push", 10)
         self.push.moved.connect(lambda v: setattr(actions, "brush_push", v / 1000.0))
-        self.push_box = labelled(tr("Вынос, мм"), self.push)
         self.tilt = Slider(-45, 45, 10, "°", "qa_kin_brush_tilt", 0.5, 1)
         self.tilt.moved.connect(lambda v: setattr(actions, "brush_tilt", v / 90.0))
-        self.tilt_box = labelled(tr("Наклон, градусы"), self.tilt)
-        for box in (self.lift_box, self.push_box, self.tilt_box):
+        self.weights = {"lift": labelled(tr("Вес: положение домкрата, мм"), self.lift),
+                        "push": labelled(tr("Вес: вынос, мм"), self.push),
+                        "tilt": labelled(tr("Вес: наклон, градусы"), self.tilt)}
+        for box in self.weights.values():
             self.column.addWidget(box)
-
         self.mode = segments([tr(x) for x in self.MODES], "qa_kin_brush_mode",
                              lambda i: setattr(actions, "brush_mode",
                                                self.MODE_KEYS[i]))
-        self.column.addWidget(labelled(tr("Как"), self.mode))
-        self.radius = Slider(0.5, 15, 2.5, tr("сот"), "qa_kin_brush_radius", 0.5, 1)
+        self.column.addWidget(self.mode)
+        grid_holder = QWidget()
+        grid = QGridLayout(grid_holder)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        self.radius = Scrub(0.5, 15, 2.5, tr("сот"), "qa_kin_brush_radius", 0.5, 1)
         self.radius.moved.connect(actions.set_brush_radius)
-        self.column.addWidget(labelled(tr("Размер"), self.radius))
-        self.hardness = Slider(0, 100, 50, "%", "qa_kin_brush_hardness", 5)
+        self.hardness = Scrub(0, 100, 50, "%", "qa_kin_brush_hardness", 5)
         self.hardness.moved.connect(actions.set_brush_hardness)
-        self.column.addWidget(labelled(tr("Жёсткость"), self.hardness))
-        self.strength = Slider(5, 100, 60, "%", "qa_kin_brush_strength", 5)
+        self.strength = Scrub(5, 100, 60, "%", "qa_kin_brush_strength", 5)
         self.strength.moved.connect(
             lambda v: setattr(actions, "brush_strength", v / 100.0))
-        self.column.addWidget(labelled(tr("Сила"), self.strength))
-        self.column.addWidget(note(tr("Красит слой, выбранный выше, на кадре под плейхедом: ключ ставится "
-            "только тем моторам, которых коснулась кисть. Пушер слушается самой "
-            "закрашенной из своих пяти сот, домкрат — кольца, закрашенного больше "
-            "чем наполовину. Ctrl+колесо — размер.")))
+        for column, (text, box) in enumerate(((tr("Размер"), self.radius),
+                                              (tr("Жёсткость"), self.hardness),
+                                              (tr("Сила"), self.strength))):
+            label = QLabel(text)
+            label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
+            grid.addWidget(label, 0, column)
+            grid.addWidget(box, 1, column)
+        self.column.addWidget(grid_holder)
+        self.inside = QCheckBox(tr("Только выбранное"))
+        self.inside.setObjectName("qa_kin_brush_inside")
+        self.inside.setToolTip(tr(
+            "Кисть красит лишь выбранные соты, как paint по группе в Houdini"))
+        self.inside.toggled.connect(lambda on: setattr(actions, "brush_inside", on))
+        self.column.addWidget(self.inside)
+        self.column.addWidget(note(tr(
+            "Ключ ставится только тем моторам, которых коснулась кисть. Пушер "
+            "слушается самой закрашенной из своих пяти сот, домкрат — кольца, "
+            "закрашенного больше чем наполовину. Ctrl+колесо — размер.")))
         self.finish()
         self.show_family("tilt")
 
     def show_family(self, family: str) -> None:
-        self.layer.buttons[km.FAMILIES.index(family)].setChecked(True)
-        self.lift_box.setVisible(family == "lift")
-        self.push_box.setVisible(family == "push")
-        self.tilt_box.setVisible(family == "tilt")
+        self.title.setText(tr("Кисть · {0}", tr(FAMILY_NAME[family])))
+        for one, box in self.weights.items():
+            box.setVisible(one == family)
 
     def show_radius(self, radius: float) -> None:
         self.radius.set(radius)
 
-
-# -- the selection ----------------------------------------------------------------
 
 class SelectPanel(Panel):
     GRAINS = ("Сота", "Группа", "Кольцо")
@@ -238,6 +530,7 @@ class SelectPanel(Panel):
         self.column.addWidget(heading(tr("Выбор")))
         self.grain = segments([tr(x) for x in self.GRAINS], "qa_kin_grain",
                               lambda i: actions.set_grain(self.GRAIN_KEYS[i]))
+        self.grain.setToolTip(tr("3 — соты, 2 — группы, 1 — кольца"))
         self.column.addWidget(labelled(tr("Щелчок берёт"), self.grain))
         buttons = QWidget()
         row = QHBoxLayout(buttons)
@@ -252,71 +545,157 @@ class SelectPanel(Panel):
             button.clicked.connect(call)
             row.addWidget(button)
         self.column.addWidget(buttons)
-        self.count = note()
-        self.column.addWidget(self.count)
-
-        self.column.addWidget(heading(tr("Выбранному")))
-        self.lift = segments([f"{mm}" for mm in LIFT_MM], "qa_kin_set_lift",
-                             lambda i: actions.set_selected("lift", float(i)), 1)
-        self.column.addWidget(labelled(tr("Подъём колец, мм"), self.lift))
-        self.push = Slider(0, 1000, 0, tr("мм"), "qa_kin_set_push", 10)
-        self.push.pressed.connect(actions.begin_edit)
-        self.push.moved.connect(lambda v: actions.set_selected("push", v / 1000.0,
-                                                               live=True))
-        self.push.released.connect(actions.end_edit)
-        self.column.addWidget(labelled(tr("Вынос групп, мм"), self.push))
-        self.tilt = Slider(-45, 45, 0, "°", "qa_kin_set_tilt", 0.5, 1)
-        self.tilt.pressed.connect(actions.begin_edit)
-        self.tilt.moved.connect(lambda v: actions.set_selected("tilt", v / 90.0,
-                                                               live=True))
-        self.tilt.released.connect(actions.end_edit)
-        self.column.addWidget(labelled(tr("Наклон сот, градусы"), self.tilt))
-
-        self.column.addWidget(heading(tr("Авторотейт")))
-        gain = QWidget()
-        line = QHBoxLayout(gain)
-        line.setContentsMargins(0, 0, 0, 0)
-        line.setSpacing(8)
-        self.gain = QSpinBox()
-        self.gain.setObjectName("qa_kin_auto_gain")
-        self.gain.setRange(10, 300)
-        self.gain.setValue(100)
-        self.gain.setSuffix(" %")
-        self.gain.setFixedWidth(84)
-        run = QPushButton(tr("Наклонить по форме"))
-        run.setObjectName("qa_kin_auto_rotate")
-        run.clicked.connect(lambda: actions.auto_rotate(self.gain.value() / 100.0))
-        line.addWidget(self.gain)
-        line.addWidget(run, 1)
-        self.column.addWidget(gain)
-        self.column.addWidget(note(tr("Как rotate_auto в Houdini: каждая сота ложится вдоль поверхности, "
-            "которую сейчас составляют подъём и вынос, в пределах своих зазоров. "
-            "Без выбора — все соты. 100 % — ровно по поверхности.")))
+        self.column.addWidget(note(tr(
+            "Щелчок — выбрать, рамка — несколько, Shift — добавить, Ctrl — убрать. "
+            "Значения выбранного — в блоке «Выбрано» наверху.")))
         self.finish()
 
+
+class ProfilePanel(Panel):
+    def __init__(self, actions) -> None:
+        super().__init__(actions, "qa_kin_profile_panel")
+        self.column.addWidget(heading(tr("Профиль вазы")))
+        self.tangent = QCheckBox(tr("Наклон по касательной"))
+        self.tangent.setObjectName("qa_kin_profile_tangent")
+        self.tangent.setChecked(True)
+        self.column.addWidget(self.tangent)
+        self.column.addWidget(note(tr(
+            "Кривая — рядом с картой, кольцо к кольцу: насколько вынесено каждое "
+            "кольцо, все десять его пушеров разом; с выбором — только выбранные "
+            "группы. Двойной щелчок — точка, правый — убрать.")))
+        self.finish()
+
+
+class MotorsPanel(Panel):
+    """The simulation: how fast each family goes and rests, which of the two
+    is the ghost, what went wrong -- a list to click through -- and putting
+    the motion onto the keys."""
+
+    GHOSTS = ("Ключи", "Симуляция")
+    GHOST_KEYS = ("keys", "sim")
+    LISTED = 400
+
+    def __init__(self, actions) -> None:
+        super().__init__(actions, "qa_kin_motors_panel")
+        import kin_sim
+        self.column.addWidget(heading(tr("Моторы")))
+        grid_holder = QWidget()
+        grid = QGridLayout(grid_holder)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        for column, text in ((1, tr("ход, с")), (2, tr("отдых, с"))):
+            label = QLabel(text)
+            label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
+            grid.addWidget(label, 0, column)
+        self.boxes = {}
+        for row, family in enumerate(km.FAMILIES, start=1):
+            name = QLabel(tr(FAMILY_NAME[family]))
+            name.setStyleSheet(f"color:{FAMILY_COLOUR[family]};")
+            grid.addWidget(name, row, 0)
+            travel, rest = kin_sim.PACE[family]
+            pair = []
+            for column, value in ((1, travel), (2, rest)):
+                box = Scrub(0.0 if column == 2 else 0.05, 120.0, value, "",
+                            f"qa_kin_pace_{family}_{column}", 0.05, 2)
+                box.setFixedWidth(76)
+                box.released.connect(self._paced)
+                grid.addWidget(box, row, column)
+                pair.append(box)
+            self.boxes[family] = pair
+        grid_holder.setToolTip(tr(
+            "Как их считает Cinema 4D: ход не быстрее мотора — полный ход за "
+            "столько секунд, половина за половину; после каждого хода отдых; "
+            "команда, пришедшая во время хода или отдыха, пропускается."))
+        self.column.addWidget(grid_holder)
+        self.ghost = segments([tr(x) for x in self.GHOSTS], "qa_kin_ghost",
+                              lambda i: actions.set_ghost(self.GHOST_KEYS[i]), 0)
+        self.column.addWidget(labelled(tr("Призраком в «Оба»"), self.ghost))
+        self.summary = note()
+        self.summary.setObjectName("qa_kin_sim_summary")
+        self.summary.setStyleSheet(f"color:{theme.SECOND}; font-size:11.5px;")
+        self.column.addWidget(self.summary)
+        self.problems = QListWidget()
+        self.problems.setObjectName("qa_kin_problems")
+        self.problems.setStyleSheet(
+            f"QListWidget {{ background:{theme.SUNKEN}; border:1px solid {theme.EDGE};"
+            f" font-size:11.5px; }} QListWidget::item {{ padding:2px 4px; }}"
+            f" QListWidget::item:selected {{ background:{theme.ACCENT}; }}")
+        self.problems.itemClicked.connect(self._picked)
+        self.column.addWidget(self.problems, 1)
+        self.bake = QPushButton(tr("Перенести симуляцию в ключи"))
+        self.bake.setObjectName("qa_kin_bake")
+        self.bake.setToolTip(tr(
+            "Ключи встанут там, где моторы на самом деле начинают и заканчивают "
+            "ход; пропущенные команды уйдут. Экспорт после этого — то, что "
+            "сыграет площадка. Отменяется Ctrl+Z."))
+        self.bake.clicked.connect(actions.bake_simulation)
+        self.column.addWidget(self.bake)
+        self._shown = None
+
+    def pace(self) -> dict:
+        return {family: (boxes[0].value(), boxes[1].value())
+                for family, boxes in self.boxes.items()}
+
+    def _paced(self) -> None:
+        self.actions.set_pace(self.pace())
+
+    def _picked(self, item) -> None:
+        self.actions.show_problem(item.data(Qt.ItemDataRole.UserRole))
+
     def refresh(self) -> None:
-        cells = self.actions.selection
-        rings = int(cells.any(axis=1).sum())
-        groups = int(km.cell_mask_for("push", cells).sum())
-        self.count.setText(tr("Выбрано сот {0}, групп {1}, колец {2}",
-                              int(cells.sum()), groups, rings))
-        pose = self.actions.pose_now()
-        if pose is None or not cells.any():
+        result = self.actions.simulation()
+        if result is None:
+            self.summary.setText(tr("Симуляция считается…"))
             return
-        rows = cells.any(axis=1)
-        lift = pose["lift"][rows]
-        if len(set(np.round(lift).astype(int).tolist())) == 1:
-            self.lift.buttons[int(round(lift[0]))].setChecked(True)
-        push = pose["push"].reshape(-1)[km.cell_mask_for("push", cells)]
-        self.push.set(float(np.mean(push)) * 1000.0)
-        tilt = pose["tilt"].reshape(-1)[cells.reshape(-1)]
-        self.tilt.set(float(np.mean(tilt)) * 90.0)
+        counts = result.by_family()
+        dropped = sum(one["dropped"] for one in counts.values())
+        late = sum(one["late"] for one in counts.values())
+        self.summary.setText(tr(
+            "Пропущено {0} · опоздали {1} · наклон сверх зазоров на {2} кадрах",
+            dropped, late, len(result.clashes)))
+        self.bake.setEnabled(bool(dropped or late))
+        if self._shown is result:
+            return
+        self._shown = result
+        self.problems.clear()
+        found = []
+        for one in result.dropped:
+            found.append((one.frame, ("dropped", one.family, one.motor, one.frame)))
+        for one in result.late:
+            found.append((one.due, ("late", one.family, one.motor, one.due,
+                                    one.arrives)))
+        for frame, count in result.clashes:
+            found.append((frame, ("clash", frame, count)))
+        found.sort(key=lambda pair: pair[0])
+        for _, problem in found[:self.LISTED]:
+            item = QListWidgetItem(self._say(problem))
+            item.setData(Qt.ItemDataRole.UserRole, problem)
+            self.problems.addItem(item)
+        if len(found) > self.LISTED:
+            self.problems.addItem(tr("…и ещё {0}", len(found) - self.LISTED))
+
+    @staticmethod
+    def _say(problem) -> str:
+        kind = problem[0]
+        if kind == "clash":
+            return tr("кадр {0} · наклон сверх зазоров · сот {1}", problem[1], problem[2])
+        family, motor = problem[1], problem[2]
+        row, which = km.motor_address(family, motor)
+        where = (tr("кольцо {0}", row + 1) if family == "lift"
+                 else tr("кольцо {0}, мотор {1}", row + 1, which + 1))
+        if kind == "dropped":
+            return tr("кадр {0} · {1} · {2} · команда пропущена", problem[3],
+                      tr(FAMILY_NAME[family]), where)
+        return tr("кадр {0} · {1} · {2} · опоздал на {3:.1f} с", problem[3],
+                  tr(FAMILY_NAME[family]), where, (problem[4] - problem[3]) / km.FPS)
 
 
-# -- the vase ------------------------------------------------------------------------
+# -- the vase, beside the strip ---------------------------------------------------------
 
-class ProfileCurve(QWidget):
-    """The vase's side: ring height up, push across, points to drag.
+class ProfileStrip(QWidget):
+    """The vase's side, standing beside the strip of cells ring for ring:
+    push across, the rings up at the very heights the strip draws them.
 
     Double-click adds a point, right click takes one away; there are always
     at least two. What the rings are pushed to now is drawn faintly behind,
@@ -325,61 +704,60 @@ class ProfileCurve(QWidget):
 
     changed = Signal(object, bool)       # points, and whether the drag is over
 
-    def __init__(self) -> None:
+    WIDTH = 170
+
+    def __init__(self, strip) -> None:
         super().__init__()
         self.setObjectName("qa_kin_profile_curve")
-        self.setMinimumHeight(300)
+        self.setFixedWidth(self.WIDTH)
         self.setMouseTracking(True)
+        self.strip = strip
         self.points = [(0.0, 0.0), (0.5, 0.3), (1.0, 0.0)]
         self.now = np.zeros(ROWS, np.float32)     # each ring's push, now
         self._held = None
 
-    def _box(self) -> QRectF:
-        return QRectF(28, 10, max(10, self.width() - 40), max(10, self.height() - 34))
+    def _ring_y(self, ring: float) -> float:
+        """The height the strip draws a ring at, on this widget."""
+        from kin_unwrap import RING_PITCH
+        return self.strip.to_screen(0.0, ring * RING_PITCH).y()
 
     def _to_screen(self, height: float, reach: float) -> QPointF:
-        box = self._box()
-        return QPointF(box.left() + reach * box.width(),
-                       box.bottom() - height * box.height())
+        left, wide = 10.0, self.width() - 20.0
+        return QPointF(left + reach * wide, self._ring_y(height * (ROWS - 1)))
 
     def _from_screen(self, point: QPointF):
-        box = self._box()
-        reach = (point.x() - box.left()) / box.width()
-        height = (box.bottom() - point.y()) / box.height()
+        left, wide = 10.0, self.width() - 20.0
+        bottom, top = self._ring_y(0), self._ring_y(ROWS - 1)
+        height = (point.y() - bottom) / (top - bottom) if top != bottom else 0.0
+        reach = (point.x() - left) / wide
         return (min(1.0, max(0.0, height)), min(1.0, max(0.0, reach)))
 
     def paintEvent(self, event) -> None:          # noqa: N802
         brush = QPainter(self)
         brush.setRenderHint(QPainter.RenderHint.Antialiasing)
-        brush.fillRect(self.rect(), QColor(theme.SUNKEN))
-        box = self._box()
+        brush.fillRect(self.rect(), QColor(theme.DEEP))
         brush.setPen(QPen(QColor(theme.SEAM)))
-        for step in range(0, 11, 2):
-            x = box.left() + box.width() * step / 10
-            brush.drawLine(QPointF(x, box.top()), QPointF(x, box.bottom()))
-        brush.setFont(theme.mono(7.5))
+        brush.drawLine(0, 0, 0, self.height())
+        left, wide = 10.0, self.width() - 20.0
+        for step in range(0, 11, 5):
+            x = left + wide * step / 10
+            brush.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+        brush.setFont(theme.mono(7))
         brush.setPen(QPen(QColor(theme.QUIET)))
         for step in (0, 500, 1000):
-            x = box.left() + box.width() * step / 1000
-            brush.drawText(QRectF(x - 30, box.bottom() + 4, 60, 14),
+            x = left + wide * step / 1000
+            brush.drawText(QRectF(x - 30, self.height() - 16, 60, 14),
                            Qt.AlignmentFlag.AlignCenter, f"{step}")
-        for ring in (1, 10, 20, 30):
-            y = box.bottom() - box.height() * (ring - 1) / (ROWS - 1)
-            brush.drawText(QRectF(0, y - 7, 24, 14),
-                           Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                           str(ring))
-        # What the rings are at now.
+        # What the rings are pushed to now.
         brush.setPen(Qt.PenStyle.NoPen)
         brush.setBrush(QColor(95, 194, 122, 60))
         for ring in range(ROWS):
-            y = box.bottom() - box.height() * ring / (ROWS - 1)
-            brush.drawRect(QRectF(box.left(), y - 2, box.width() * float(self.now[ring]), 4))
-        # The curve, sampled at the rings.
+            y = self._ring_y(ring)
+            brush.drawRect(QRectF(left, y - 2, wide * float(self.now[ring]), 4))
         curve = km.profile_curve(self.points)
         brush.setPen(QPen(QColor(FAMILY_COLOUR["push"]), 2))
-        line = QPolygonF([self._to_screen(ring / (ROWS - 1), float(curve[ring]))
-                          for ring in range(ROWS)])
-        brush.drawPolyline(line)
+        brush.drawPolyline(QPolygonF([self._to_screen(ring / (ROWS - 1), float(curve[ring]))
+                                      for ring in range(ROWS)]))
         brush.setBrush(QColor(FAMILY_COLOUR["push"]))
         for ring in range(ROWS):
             brush.drawEllipse(self._to_screen(ring / (ROWS - 1), float(curve[ring])), 2, 2)
@@ -416,234 +794,12 @@ class ProfileCurve(QWidget):
     def mouseMoveEvent(self, event) -> None:      # noqa: N802
         if self._held is None:
             return
-        height, reach = self._from_screen(event.position())
-        self.points[self._held] = (height, reach)
+        self.points[self._held] = self._from_screen(event.position())
         self.update()
         self.changed.emit(list(self.points), False)
 
     def mouseReleaseEvent(self, event) -> None:   # noqa: N802
         if self._held is not None:
             self._held = None
-            order = sorted(range(len(self.points)), key=lambda i: self.points[i])
-            self.points = [self.points[i] for i in order]
+            self.points.sort()
             self.changed.emit(list(self.points), True)
-
-
-class ProfilePanel(Panel):
-    def __init__(self, actions) -> None:
-        super().__init__(actions, "qa_kin_profile_panel")
-        self.column.addWidget(heading(tr("Профиль вазы")))
-        self.curve = ProfileCurve()
-        self.curve.changed.connect(self._changed)
-        self.column.addWidget(self.curve, 1)
-        self.tangent = QCheckBox(tr("Наклон по касательной"))
-        self.tangent.setObjectName("qa_kin_profile_tangent")
-        self.tangent.setChecked(True)
-        self.column.addWidget(self.tangent)
-        self.column.addWidget(note(tr("Кривая от нижнего кольца до верхнего: насколько вынесено каждое "
-            "кольцо, все десять его пушеров разом. С выбором — только выбранные "
-            "группы. Наклон по касательной кладёт соты вдоль получившейся "
-            "поверхности, в пределах их зазоров. Двойной щелчок — точка, правый — "
-            "убрать.")))
-        self._editing = False
-        self.finish()
-
-    def _changed(self, points, done: bool) -> None:
-        if not self._editing:
-            self.actions.begin_edit()
-            self._editing = True
-        self.actions.apply_profile(points, self.tangent.isChecked())
-        if done:
-            self.actions.end_edit()
-            self._editing = False
-
-    def refresh(self) -> None:
-        pose = self.actions.pose_now()
-        if pose is not None:
-            self.curve.now = pose["push"].mean(axis=1)
-            self.curve.update()
-        points = self.actions.profile_here()
-        if points and self.curve._held is None:
-            self.curve.points = [tuple(p) for p in points]
-            self.curve.update()
-
-
-# -- the rings -----------------------------------------------------------------------
-
-class RingsPanel(Panel):
-    """Every ring at one of its jack's four places, top ring first."""
-
-    def __init__(self, actions) -> None:
-        super().__init__(actions, "qa_kin_rings_panel")
-        self.column.addWidget(heading(tr("Кольца")))
-        self.column.addWidget(note(tr(
-            "Зазор под кольцом, мм. Домкрат стоит только в четырёх положениях; "
-            "между ключами он переходит плавно. Нижнее кольцо стоит на "
-            "основании — домкрата под ним нет.")))
-        everything = segments([f"{mm}" for mm in LIFT_MM], "qa_kin_rings_all",
-                              lambda i: actions.set_rings(np.ones(ROWS, bool), i), 1)
-        self.column.addWidget(labelled(tr("Все кольца"), everything))
-        grid_holder = QWidget()
-        grid = QGridLayout(grid_holder)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(2)
-        grid.setVerticalSpacing(1)
-        self.rows = []
-        for place, ring in enumerate(reversed(range(ROWS))):
-            label = QLabel(str(ring + 1))
-            label.setFont(theme.mono(8))
-            label.setStyleSheet(f"color:{theme.QUIET};")
-            grid.addWidget(label, place, 0)
-            # Not exclusive: a jack between two keys is in none of its places,
-            # and an exclusive group cannot show that.
-            group = QButtonGroup(grid_holder)
-            group.setExclusive(False)
-            buttons = []
-            for state in range(4):
-                button = QPushButton(str(LIFT_MM[state]))
-                button.setObjectName(f"qa_kin_ring_{ring + 1}_{state}")
-                button.setCheckable(True)
-                button.setProperty("segment", True)
-                button.setFixedHeight(20)
-                button.setStyleSheet("padding:0px 4px; font-size:11px;")
-                # The lowest ring stands on the base, with no jack under it.
-                button.setEnabled(ring != km.NO_JACK)
-                group.addButton(button, state)
-                grid.addWidget(button, place, state + 1)
-                buttons.append(button)
-            group.idClicked.connect(
-                lambda state, ring=ring: actions.set_rings(
-                    np.arange(ROWS) == ring, state))
-            self.rows.append((ring, buttons))
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(grid_holder)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        self.column.addWidget(scroll, 1)
-
-    def refresh(self) -> None:
-        pose = self.actions.pose_now()
-        if pose is None:
-            return
-        lift = pose["lift"]
-        for ring, buttons in self.rows:
-            value = float(lift[ring])
-            state = int(round(value))
-            between = abs(value - state) > 1e-3
-            for index, button in enumerate(buttons):
-                button.blockSignals(True)
-                button.setChecked(index == state and not between)
-                button.blockSignals(False)
-
-
-# -- the motors ---------------------------------------------------------------------
-
-class MotorsPanel(Panel):
-    """The simulation: how fast each family goes and rests, which of the two
-    is the ghost, what went wrong, and putting the motion onto the keys."""
-
-    GHOSTS = ("Ключи", "Симуляция")
-    GHOST_KEYS = ("keys", "sim")
-
-    def __init__(self, actions) -> None:
-        super().__init__(actions, "qa_kin_motors_panel")
-        import kin_sim
-        self.column.addWidget(heading(tr("Моторы")))
-        self.column.addWidget(note(tr(
-            "Как их считает Cinema 4D: ход не быстрее мотора — полный ход за "
-            "столько секунд, половина за половину; после каждого хода отдых; "
-            "команда, пришедшая во время хода или отдыха, пропускается.")))
-        grid_holder = QWidget()
-        grid = QGridLayout(grid_holder)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(4)
-        for column, text in ((1, tr("ход, с")), (2, tr("отдых, с"))):
-            label = QLabel(text)
-            label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
-            grid.addWidget(label, 0, column)
-        self.boxes = {}
-        for row, family in enumerate(km.FAMILIES, start=1):
-            name = QLabel(tr(FAMILY_NAME[family]))
-            name.setStyleSheet(f"color:{FAMILY_COLOUR[family]};")
-            grid.addWidget(name, row, 0)
-            travel, rest = kin_sim.PACE[family]
-            pair = []
-            for column, value in ((1, travel), (2, rest)):
-                box = QDoubleSpinBox()
-                box.setObjectName(f"qa_kin_pace_{family}_{column}")
-                box.setRange(0.0 if column == 2 else 0.05, 120.0)
-                box.setDecimals(2)
-                box.setSingleStep(0.05)
-                box.setValue(value)
-                box.setFixedWidth(84)
-                box.editingFinished.connect(self._paced)
-                grid.addWidget(box, row, column)
-                pair.append(box)
-            self.boxes[family] = pair
-        self.column.addWidget(grid_holder)
-
-        self.ghost = segments([tr(x) for x in self.GHOSTS], "qa_kin_ghost",
-                              lambda i: actions.set_ghost(self.GHOST_KEYS[i]), 0)
-        self.column.addWidget(labelled(tr("Призраком в «Оба»"), self.ghost))
-
-        self.column.addWidget(heading(tr("Что получилось")))
-        self.summary = note()
-        self.summary.setObjectName("qa_kin_sim_summary")
-        self.summary.setStyleSheet(f"color:{theme.SECOND}; font-size:11.5px;")
-        self.column.addWidget(self.summary)
-        buttons = QWidget()
-        line = QHBoxLayout(buttons)
-        line.setContentsMargins(0, 0, 0, 0)
-        line.setSpacing(6)
-        back = QPushButton(tr("◀ ошибка"))
-        back.setObjectName("qa_kin_problem_back")
-        back.clicked.connect(lambda: actions.step_problem(-1))
-        on = QPushButton(tr("ошибка ▶"))
-        on.setObjectName("qa_kin_problem_next")
-        on.clicked.connect(lambda: actions.step_problem(1))
-        line.addWidget(back)
-        line.addWidget(on)
-        self.column.addWidget(buttons)
-        self.bake = QPushButton(tr("Перенести симуляцию в ключи"))
-        self.bake.setObjectName("qa_kin_bake")
-        self.bake.clicked.connect(actions.bake_simulation)
-        self.column.addWidget(self.bake)
-        self.column.addWidget(note(tr(
-            "Ключи встанут там, где моторы на самом деле начинают и заканчивают "
-            "ход; пропущенные команды уйдут. Экспорт после этого — то, что "
-            "сыграет площадка. Отменяется Ctrl+Z.")))
-        self.finish()
-
-    def pace(self) -> dict:
-        return {family: (boxes[0].value(), boxes[1].value())
-                for family, boxes in self.boxes.items()}
-
-    def _paced(self) -> None:
-        self.actions.set_pace(self.pace())
-
-    def refresh(self) -> None:
-        result = self.actions.simulation()
-        if result is None:
-            self.summary.setText(tr("Симуляция считается…"))
-            return
-        counts = result.by_family()
-        dropped = sum(one["dropped"] for one in counts.values())
-        late = sum(one["late"] for one in counts.values())
-        lines = [tr("Пропущено команд: {0} (подъём {1}, вынос {2}, наклон {3})",
-                    dropped, counts["lift"]["dropped"], counts["push"]["dropped"],
-                    counts["tilt"]["dropped"]),
-                 tr("Опоздали ходов: {0} (подъём {1}, вынос {2}, наклон {3})",
-                    late, counts["lift"]["late"], counts["push"]["late"],
-                    counts["tilt"]["late"])]
-        worst = result.worst_late()
-        if worst is not None:
-            row, which = km.motor_address(worst.family, worst.motor)
-            lines.append(tr("Дольше всех: {0}, кольцо {1}, мотор {2} — на {3:.1f} с "
-                            "позже, кадр {4}", tr(FAMILY_NAME[worst.family]),
-                            row + 1, which + 1,
-                            (worst.arrives - worst.due) / km.FPS, worst.due))
-        lines.append(tr("Наклон сверх зазоров в движении: кадров {0}",
-                        len(result.clashes)))
-        self.summary.setText("\n".join(lines))
-        self.bake.setEnabled(bool(dropped or late))

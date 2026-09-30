@@ -526,7 +526,6 @@ EN: dict = {
     'Кисть': 'Brush',
     'Выбор': 'Select',
     'Профиль': 'Profile',
-    'Кольца': 'Rings',
     'к ключу назад / вперёд': 'to the key before / after',
     'ключ всем моторам слоя': 'key every motor of the layer',
     'ключ всем моторам всех слоёв': 'key every motor of every layer',
@@ -603,38 +602,20 @@ EN: dict = {
     'Сота': 'Cell',
     'Группа': 'Group',
     'Кольцо': 'Ring',
-    'Положение домкрата, мм': 'Jack position, mm',
     'мм': 'mm',
-    'Вынос, мм': 'Push, mm',
-    'Наклон, градусы': 'Tilt, degrees',
     'сот': 'cells',
-    'Наклонить по форме': 'Tilt to the shape',
-    'Выбрано сот {0}, групп {1}, колец {2}': 'Chosen: {0} cells, {1} groups, {2} rings',
     'Наклон по касательной': 'Tilt along the tangent',
-    'Слой': 'Layer',
-    'Как': 'How',
     'Размер': 'Size',
     'Жёсткость': 'Hardness',
     'Сила': 'Strength',
-    'Красит слой, выбранный выше, на кадре под плейхедом: ключ ставится только тем моторам, которых коснулась кисть. Пушер слушается самой закрашенной из своих пяти сот, домкрат — кольца, закрашенного больше чем наполовину. Ctrl+колесо — размер.':
-        'Paints the layer chosen above at the frame under the playhead: only the motors the brush touched get a key. A pusher answers to the most painted of its five cells, a jack to a ring painted over more than half. Ctrl+wheel sets the size.',
     'Щелчок берёт': 'A click takes',
     'Всё': 'All',
     'Снять': 'None',
     'Обратить': 'Invert',
-    'Выбранному': 'To the chosen',
-    'Подъём колец, мм': 'Ring lift, mm',
-    'Вынос групп, мм': 'Group push, mm',
-    'Наклон сот, градусы': 'Cell tilt, degrees',
     'Авторотейт': 'Auto-rotate',
     'Как rotate_auto в Houdini: каждая сота ложится вдоль поверхности, которую сейчас составляют подъём и вынос, в пределах своих зазоров. Без выбора — все соты. 100 % — ровно по поверхности.':
         "As Houdini's rotate_auto: each cell lies along the surface the lift and the push make now, within its gaps. With nothing chosen, every cell. 100 % lies exactly along the surface.",
     'Профиль вазы': 'Vase profile',
-    'Кривая от нижнего кольца до верхнего: насколько вынесено каждое кольцо, все десять его пушеров разом. С выбором — только выбранные группы. Наклон по касательной кладёт соты вдоль получившейся поверхности, в пределах их зазоров. Двойной щелчок — точка, правый — убрать.':
-        'A curve from the lowest ring to the top: how far out each ring is pushed, all ten of its pushers at once. With a selection, only the chosen groups. Tilt along the tangent lays the cells along the surface made, within their gaps. Double-click adds a point, right click takes one away.',
-    'Зазор под кольцом, мм. Домкрат стоит только в четырёх положениях; между ключами он переходит плавно. Нижнее кольцо стоит на основании — домкрата под ним нет.':
-        'The gap under the ring, mm. A jack stands in four places only; between keys it moves smoothly. The lowest ring stands on the base, with no jack under it.',
-    'Все кольца': 'All rings',
     '{0}: кадр {1}, моторов {2} из {3}': '{0}: frame {1}, {2} motors of {3}',
     'Кисть {0:.1f} соты': 'Brush {0:.1f} cells',
     '{0}: {1:g} к/с, а редактор работает в {2} к/с':
@@ -653,7 +634,6 @@ EN: dict = {
     'Ключи': 'Keys',
     'Симуляция': 'Simulation',
     'Оба': 'Both',
-    'кисть, выбор, профиль, кольца, моторы': 'brush, select, profile, rings, motors',
     'Что на сотах: ключи, как их сыграют моторы, или оба — второе призраком':
         'What the cells show: the keys, the motors playing them, or both, the second as a ghost',
     'Изнанка': 'Backs',
@@ -663,26 +643,15 @@ EN: dict = {
     'Моторы: пропущено команд {0}, опоздали ходов {1}, наклон сверх зазоров на {2} кадрах — «Перенести в ключи» в панели «Моторы»':
         'Motors: {0} commands dropped, {1} moves late, tilt past the gaps on {2} frames; see Motors to put the simulation onto the keys',
     'моторы пропустят команд: {0}': 'the motors will drop {0} commands',
-    '◀ ошибка': '◀ problem',
-    'ошибка ▶': 'problem ▶',
     'Перенести симуляцию в ключи': 'Put the simulation onto the keys',
-    'Пропущено команд: {0} (подъём {1}, вынос {2}, наклон {3})':
-        'Commands dropped: {0} (lift {1}, push {2}, tilt {3})',
-    'Опоздали ходов: {0} (подъём {1}, вынос {2}, наклон {3})':
-        'Moves late: {0} (lift {1}, push {2}, tilt {3})',
-    'Наклон сверх зазоров в движении: кадров {0}':
-        'Tilt past the gaps while moving: {0} frames',
     'Как их считает Cinema 4D: ход не быстрее мотора — полный ход за столько секунд, половина за половину; после каждого хода отдых; команда, пришедшая во время хода или отдыха, пропускается.':
         'As Cinema 4D reckons them: no move faster than the motor, a full travel in so many seconds and half of one in half; a rest after every move; a command arriving during a move or a rest is dropped.',
     'ход, с': 'travel, s',
     'отдых, с': 'rest, s',
     'Призраком в «Оба»': 'The ghost in Both',
-    'Что получилось': 'What came out',
     'Ключи встанут там, где моторы на самом деле начинают и заканчивают ход; пропущенные команды уйдут. Экспорт после этого — то, что сыграет площадка. Отменяется Ctrl+Z.':
         'The keys go where the motors really start and finish their moves; the dropped commands go. The export is then what the site will play. Ctrl+Z undoes it.',
     'Симуляция считается…': 'Simulating…',
-    'Дольше всех: {0}, кольцо {1}, мотор {2} — на {3:.1f} с позже, кадр {4}':
-        'Latest: {0}, ring {1}, motor {2}, {3:.1f} s behind, frame {4}',
     'Простой': 'Simple',
     'Подробный': 'Detailed',
     'Простой — три дорожки, чтобы набрасывать формы; подробный — кольца, группы и соты, чтобы работать с частями ключей':
@@ -691,4 +660,61 @@ EN: dict = {
     'Группа {0} · соты {1}–{2}': 'Group {0} · cells {1}–{2}',
     'Сота {0}': 'Cell {0}',
     '{0}: ключей {1}, кадры {2}–{3}': '{0}: {1} keys, frames {2}–{3}',
+    'выбор: кольца, группы, соты': 'selection: rings, groups, cells',
+    'кольца': 'rings',
+    'группы': 'groups',
+    'отдельные соты': 'single cells',
+    'Выбор: {0}': 'Selection: {0}',
+    'кисть, выбор, профиль, моторы': 'brush, select, profile, motors',
+    'ПКМ по карте': 'RMB on the map',
+    'сдвиг; колесо — ближе; двойной ПКМ — вся карта':
+        'slide; the wheel zooms; double RMB shows the whole map',
+    'Слой, с которым работаем: Q, W, E': 'The layer being worked on: Q, W, E',
+    'Все три слоя в цветах Houdini: R подъём, G вынос, B наклон; иначе — только слой, с которым работаем':
+        "All three layers in Houdini's colours: R lift, G push, B tilt; otherwise only the layer being worked on",
+    'Поза «{0}» сохранена': 'Pose "{0}" saved',
+    'Поза «{0}» поставлена на кадр {1}': 'Pose "{0}" keyed at frame {1}',
+    'Имя позы:': 'Pose name:',
+    'Сначала сохраните позу': 'Save a pose first',
+    'Ключ выбранным моторам слоя там, где они стоят':
+        "Key the layer's chosen motors where they stand",
+    'кадр {0} · {1} · {2} · опоздал на {3:.1f} с':
+        'frame {0} · {1} · {2} · {3:.1f} s late',
+    'разные: {0:+.1f}…{1:+.1f}° · ': 'mixed: {0:+.1f}…{1:+.1f}° · ',
+    'Позы': 'Poses',
+    'Только выбранное': 'Only the chosen',
+    'Кисть красит лишь выбранные соты, как paint по группе в Houdini':
+        'The brush paints only the chosen cells, as Houdini paints on a group',
+    'Кисть · {0}': 'Brush · {0}',
+    '3 — соты, 2 — группы, 1 — кольца': '3 cells, 2 groups, 1 rings',
+    'Пропущено {0} · опоздали {1} · наклон сверх зазоров на {2} кадрах':
+        '{0} dropped · {1} late · tilt past the gaps on {2} frames',
+    'кадр {0} · наклон сверх зазоров · сот {1}':
+        'frame {0} · tilt past the gaps · {1} cells',
+    'кольцо {0}': 'ring {0}',
+    'кольцо {0}, мотор {1}': 'ring {0}, motor {1}',
+    'кадр {0} · {1} · {2} · команда пропущена':
+        'frame {0} · {1} · {2} · command dropped',
+    'Ничего не выбрано — 1 кольца, 2 группы, 3 соты':
+        'Nothing chosen: 1 rings, 2 groups, 3 cells',
+    'Выбрано: колец {0} · групп {1} · сот {2}':
+        'Chosen: {0} rings · {1} groups · {2} cells',
+    'разные: {0:.0f}–{1:.0f} мм': 'mixed: {0:.0f}–{1:.0f} mm',
+    'можно: вниз до {0:.0f}°, вверх до {1:.0f}°':
+        'allowed: down to {0:.0f}°, up to {1:.0f}°',
+    'Поставить': 'Put',
+    'Ключ позой на плейхеде: выбранным сотам или всем':
+        'Key the pose at the playhead: on the chosen cells, or all of them',
+    'Сохранить, как стоит сейчас': 'Save it as it stands now',
+    'Убрать позу из библиотеки': 'Take the pose out of the library',
+    'Вес: положение домкрата, мм': 'Weight: jack position, mm',
+    'Вес: вынос, мм': 'Weight: push, mm',
+    'Вес: наклон, градусы': 'Weight: tilt, degrees',
+    'Ключ ставится только тем моторам, которых коснулась кисть. Пушер слушается самой закрашенной из своих пяти сот, домкрат — кольца, закрашенного больше чем наполовину. Ctrl+колесо — размер.':
+        'Only the motors the brush touched get a key. A pusher answers to the most painted of its five cells, a jack to a ring painted over more than half. Ctrl+wheel sets the size.',
+    'Щелчок — выбрать, рамка — несколько, Shift — добавить, Ctrl — убрать. Значения выбранного — в блоке «Выбрано» наверху.':
+        'Click to choose, draw a box for several, Shift adds, Ctrl takes away. The values of what is chosen are in Chosen at the top.',
+    'Кривая — рядом с картой, кольцо к кольцу: насколько вынесено каждое кольцо, все десять его пушеров разом; с выбором — только выбранные группы. Двойной щелчок — точка, правый — убрать.':
+        'The curve stands beside the map, ring for ring: how far out each ring is pushed, all ten of its pushers at once; with a selection, only the chosen groups. Double-click adds a point, right click takes one away.',
+    '…и ещё {0}': '…and {0} more',
 }

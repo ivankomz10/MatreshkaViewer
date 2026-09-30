@@ -18,7 +18,7 @@ import pytest
 from conftest import HOME, TOOL, settle
 
 import kin_model as km
-from kinetic import PER_ROW, ROWS
+from kinetic import PER_PUSHER, PER_ROW, ROWS
 
 OUT = HOME / "kinedit"
 CYR = re.compile("[А-Яа-яЁё]")
@@ -56,7 +56,7 @@ def fresh(editor, tick):
     editor._choose_tool("brush")
     editor.select_none()
     editor.set_mask(True)
-    editor.set_layer("rgb")
+    editor.set_show_all(True)
     editor.go_to(0)
     tick(0.1)
     return editor
@@ -130,7 +130,8 @@ def test_the_3d_view_finds_the_cell_under_the_pointer(fresh):
 def test_the_mask_is_what_the_cells_show(fresh, tick):
     track = fresh.project.tracks["push"]
     track.write(0, np.full(track.size, 1.0), np.ones(track.size, bool))
-    fresh.set_layer("push")
+    fresh.set_family("push")
+    fresh.set_show_all(False)
     fresh._changed(keys=True)
     tick(0.2)
     picture = fresh.solid.to_array(480, 480)[..., :3].astype(int)
@@ -343,3 +344,198 @@ def test_a_lanes_name_picks_its_cells(fresh):
     fresh._lane_picked(("tilt", "r", 9))
     assert fresh.family == "tilt" and fresh.selection[9].all()         and fresh.selection.sum() == PER_ROW
     fresh.select_none()
+
+
+# -- selection's sizes and the layers on the keyboard; the strip's view ---------------
+
+def _press(editor, key):
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    return editor._key(QKeyEvent(QEvent.Type.KeyPress, key,
+                                 Qt.KeyboardModifier.NoModifier))
+
+
+def test_one_two_three_are_selections_sizes_and_q_w_e_the_layers(fresh):
+    from PySide6.QtCore import Qt
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[4, 12] = True
+    fresh._select(cells, "set")
+    assert _press(fresh, Qt.Key.Key_2)
+    assert fresh.tool == "select" and fresh.unwrap.grain == "group"
+    assert fresh.selection.sum() == 5 and fresh.selection[4, 10:15].all()
+    assert _press(fresh, Qt.Key.Key_1)
+    assert fresh.unwrap.grain == "ring" and fresh.selection[4].all() \
+        and fresh.selection.sum() == PER_ROW
+    assert _press(fresh, Qt.Key.Key_3) and fresh.unwrap.grain == "cell"
+    for key, family in ((Qt.Key.Key_Q, "lift"), (Qt.Key.Key_W, "push"),
+                        (Qt.Key.Key_E, "tilt")):
+        assert _press(fresh, key) and fresh.family == family
+    fresh.select_none()
+
+
+def test_the_strip_zooms_where_it_points_and_goes_round(fresh, tick):
+    from PySide6.QtCore import QPointF
+    strip = fresh.unwrap
+    strip.reset_view()
+    tick(0.05)
+    point = QPointF(strip.width() * 0.6, strip.height() * 0.4)
+    before = strip.to_cells(point)
+    strip.zoom_at(point, 3.0)
+    after = strip.to_cells(point)
+    assert strip.zoom == pytest.approx(3.0)
+    assert abs((after[0] - before[0] + 25) % 50 - 25) < 1e-6 \
+        and after[1] == pytest.approx(before[1], abs=1e-6)
+    # Every cell is found where it is drawn, zoomed in and moved round past
+    # the seam.
+    strip.centre = [0.3, strip.centre[1]]
+    strip._hold()
+    screen = strip.screen_places()
+    for row, which in ((0, 0), (12, 49), (20, 25), (29, 1)):
+        x, y = screen[row, which]
+        if 0 <= x < strip.width() and 0 <= y < strip.height():
+            assert strip.cell_at(QPointF(x, y)) == (row, which)
+    # A box round the seam takes cells from both ends of the strip.
+    middle = strip._middle()
+    size = strip._cell()
+    across = strip.places[..., 0]
+    box = (QPointF(middle.x() - 2 * size, 0), QPointF(middle.x() + 2 * size,
+                                                    strip.height()))
+    reach = size * 0.5
+    got = ((screen[..., 0] >= box[0].x() - reach) & (screen[..., 0] <= box[1].x() + reach))
+    assert (across[got] < 3).any() and (across[got] > 47).any()
+    strip.reset_view()
+    assert strip.zoom == 1.0
+
+
+# -- the panel: what is chosen, poses, the tools ------------------------------------------
+
+def test_the_inspector_says_and_sets_what_is_chosen(fresh):
+    ins = fresh.inspector
+    assert "1 кольца" in ins.title.text() and not ins.tilt.isEnabled()
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[6, :] = True
+    fresh._select(cells, "set")
+    assert ins.title.text() == "Выбрано: колец 1 · групп 10 · сот 50"
+    assert ins.lift.buttons[1].isChecked()          # every jack at 330 mm
+    # The tilt's slider shows the gaps' stretch: 10 degrees either way.
+    low, high = ins.tilt.slider.allowed
+    assert (low * 0.5 - 45, high * 0.5 - 45) == pytest.approx((-10, 10))
+    fresh.go_to(120)
+    fresh.set_selected("push", 0.4)
+    assert "разные" not in ins.push_note.text()
+    assert fresh.pose_now()["push"][6].min() == pytest.approx(0.4)
+    fresh.go_to(240)
+    fresh.key_selected("push")
+    track = fresh.project.tracks["push"]
+    assert 240 in track.frames and track.keyed_count(track.index(240)) == km.GROUPS
+    fresh.select_none()
+
+
+def test_the_brush_can_keep_to_what_is_chosen(fresh):
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[10, :] = True
+    fresh._select(cells, "set")
+    fresh.set_family("tilt")
+    fresh.brush_tilt = 0.08
+    fresh.brush_strength = 1.0
+    fresh.brush_inside = True
+    fresh.go_to(60)
+    weights = np.ones((ROWS, PER_ROW), np.float32)
+    fresh._dab(weights)
+    tilt = fresh.pose_now()["tilt"]
+    assert np.allclose(tilt[10], 0.08) and not np.delete(tilt, 10, axis=0).any()
+    fresh.brush_inside = False
+    fresh.select_none()
+
+
+def test_the_jacks_are_set_down_the_strips_column(fresh):
+    fresh.go_to(90)
+    strip = fresh.unwrap
+    strip.jacks_started.emit()
+    for ring in (14, 15, 16):
+        strip.jack_set.emit(ring, 3)
+    strip.jacks_finished.emit()
+    lift = fresh.pose_now()["lift"]
+    assert (lift[14:17] == 3).all() and lift[13] == 1 and lift[17] == 1
+    assert strip.lift[15] == 3
+    fresh._step_undo(True)
+    assert (fresh.pose_now()["lift"][14:17] == 1).all(), "the drag was not one step"
+
+
+def test_a_pose_is_kept_and_put_back(fresh):
+    import kinedit
+    fresh.go_to(0)
+    track = fresh.project.tracks["push"]
+    track.write(0, np.full(track.size, 0.35), np.ones(track.size, bool))
+    fresh._changed(keys=True)
+    fresh.save_pose("тест")
+    assert "тест" in fresh.pose_names()
+    assert (HOME / kinedit.POSES).is_file()
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[2] = True
+    fresh._select(cells, "set")
+    fresh.go_to(600)
+    track.write(600, np.zeros(track.size), np.ones(track.size, bool))
+    fresh.go_to(900)
+    fresh.put_pose("тест")
+    push = fresh.pose_now()["push"]
+    assert np.allclose(push[2], 0.35) and np.allclose(push[3], 0.0)
+    fresh.drop_pose("тест")
+    assert "тест" not in fresh.pose_names()
+    fresh.select_none()
+
+
+def test_a_problem_clicked_goes_to_its_frame_and_its_cells(fresh):
+    _too_fast(fresh)
+    fresh._choose_tool("motors")
+    panel = fresh.panels["motors"]
+    panel.refresh()
+    assert panel.problems.count() > 0
+    first = panel.problems.item(0)
+    problem = first.data(Qt_user_role())
+    fresh.show_problem(problem)
+    assert fresh.frame == problem[3]
+    assert fresh.selection.sum() == PER_PUSHER
+
+
+def Qt_user_role():
+    from PySide6.QtCore import Qt
+    return Qt.ItemDataRole.UserRole
+
+
+def test_the_keys_card_opens_on_question_mark(fresh):
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Question,
+                      Qt.KeyboardModifier.NoModifier, "?")
+    assert fresh._key(event) and fresh.keys_card.isVisible()
+    assert "1 2 3" in fresh.keys_card.text() and "Q W E" in fresh.keys_card.text()
+    fresh._key(event)
+    assert not fresh.keys_card.isVisible()
+
+
+def test_a_number_is_pulled_by_the_mouse(fresh):
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    number = fresh.panels["brush"].hardness
+    number.set(50)
+    got = []
+    number.moved.connect(got.append)
+    line = number.lineEdit()
+
+    def mouse(kind, x, buttons, mods=Qt.KeyboardModifier.NoModifier):
+        return QMouseEvent(kind, QPointF(5, 5), QPointF(x, 5), Qt.MouseButton.LeftButton,
+                           buttons, mods)
+
+    held = Qt.MouseButton.LeftButton
+    number.eventFilter(line, mouse(QEvent.Type.MouseButtonPress, 100, held))
+    number.eventFilter(line, mouse(QEvent.Type.MouseMove, 130, held))
+    assert number.value() == pytest.approx(50 + 10 * 5)       # 30 px, 3 a step
+    number.eventFilter(line, mouse(QEvent.Type.MouseMove, 115, held,
+                                   Qt.KeyboardModifier.ShiftModifier))
+    # A tenth of a step a few pixels, shown to the number's own places.
+    assert number.value() == pytest.approx(50 + 0.5 * 5, abs=0.51)
+    number.eventFilter(line, mouse(QEvent.Type.MouseButtonRelease, 115,
+                                   Qt.MouseButton.NoButton))
+    assert got and got[-1] == pytest.approx(number.value())
+    number.moved.disconnect(got.append)

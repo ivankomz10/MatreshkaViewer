@@ -7,6 +7,11 @@ building's own (the rows' origins differ by 18 degrees, two and a half cells).
 The seam is put behind the building, so the middle of the strip is what the
 file's camera looks at.
 
+Down the left, by each ring's number, its jack: four steps, as many lit as
+the gap under the ring is open. Click one to put the jack there, or draw
+down the column to put a run of rings there at once. The lowest ring stands
+on the base and has none.
+
 Distances are in cells: across, one cell is 7.2 degrees; up, one ring is
 0.866 of that, the honeycomb's own pitch (27.8 cm over 31.8 cm on the
 building). The brush and the selection are both measured in them, which is
@@ -27,7 +32,10 @@ from kinetic import PER_PUSHER, PER_ROW, ROWS
 from lang import tr
 
 RING_PITCH = math.sqrt(3.0) / 2.0     # one ring, in cells across
-MARGIN_LEFT = 34
+FAMILY_COLOUR_LIFT = "#e0605a"        # the jacks' red, as on the timeline
+NUMBERS = 24                          # the rings' numbers
+JACKS = (28, 76)                      # the jacks' column, left to right
+MARGIN_LEFT = 84
 MARGIN = 10
 
 
@@ -66,6 +74,11 @@ class Unwrap(QWidget):
     stroke_finished = Signal()
     selected = Signal(object, str)     # (ROWS, PER_ROW) bool, how: set/add/take
     hovered = Signal(int, int)         # row, id -- or -1, -1
+    radius_changed = Signal(float)     # the brush, sized with Ctrl+wheel here
+    jacks_started = Signal()
+    jack_set = Signal(int, int)        # ring, state
+    jacks_finished = Signal()
+    view_changed = Signal()            # zoomed or moved: the vase follows
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -83,9 +96,17 @@ class Unwrap(QWidget):
         self.radius = 2.5              # cells
         self.hardness = 0.5
         self.grain = "cell"            # cell | group | ring: what a click takes
+        # The view: how far in, and which point of the strip is in the middle,
+        # in cells. Across it wraps -- the strip is a ring, and dragging it
+        # along goes on round the building for as long as the hand does.
+        self.zoom = 1.0
+        self.centre = self._home()
         self._pressed = None
         self._box = None
         self._pointer = None
+        self._panning = None
+        self.lift = np.full(ROWS, km.REST["lift"], np.float32)
+        self._jacking = None               # the state a drag down the column puts
 
     # -- what the window hands over ------------------------------------------
 
@@ -111,31 +132,92 @@ class Unwrap(QWidget):
         self.selection = np.asarray(cells, bool).reshape(ROWS, PER_ROW)
         self.update()
 
+    def set_lift(self, lift) -> None:
+        """Where each ring's jack stands now, for its column."""
+        self.lift = np.asarray(lift, np.float32).reshape(ROWS)
+        self.update()
+
     # -- the layout -----------------------------------------------------------
 
-    def _cell(self) -> float:
-        """How wide a cell is drawn, in pixels, to fit the widget."""
+    @staticmethod
+    def _home() -> list:
+        """The middle of the strip: the front across, half way up."""
+        return [PER_ROW / 2.0, (ROWS - 1) * RING_PITCH / 2.0]
+
+    def _fit(self) -> float:
+        """How wide a cell is when the whole strip fits the widget."""
         wide = (self.width() - MARGIN_LEFT - MARGIN) / (PER_ROW + 0.5)
         tall = (self.height() - 2 * MARGIN) / ((ROWS - 1) * RING_PITCH + 1.155)
         return max(2.0, min(wide, tall))
 
-    def _origin(self, size: float):
-        wide = (PER_ROW + 0.5) * size
-        tall = ((ROWS - 1) * RING_PITCH + 1.155) * size
-        left = MARGIN_LEFT + max(0.0, (self.width() - MARGIN_LEFT - MARGIN - wide) / 2)
-        bottom = self.height() - MARGIN - max(
-            0.0, (self.height() - 2 * MARGIN - tall) / 2) - 0.577 * size
-        return left + 0.5 * size, bottom
+    def _cell(self) -> float:
+        """How wide a cell is drawn, in pixels, at this zoom."""
+        return self._fit() * self.zoom
+
+    def _middle(self) -> QPointF:
+        """Where on the widget the view's centre is drawn."""
+        return QPointF(MARGIN_LEFT + (self.width() - MARGIN_LEFT - MARGIN) / 2.0,
+                       self.height() / 2.0)
+
+    def _hold(self) -> None:
+        """Keep the view on the strip: round and round across, but up and
+        down no further than its first and last rings."""
+        self.centre[0] %= PER_ROW
+        size = self._cell()
+        half = (self.height() / 2.0 - MARGIN) / size
+        top = (ROWS - 1) * RING_PITCH
+        low, high = half - 0.6, top - half + 0.6
+        mid = top / 2.0
+        self.centre[1] = mid if low > high else min(high, max(low, self.centre[1]))
 
     def to_screen(self, across: float, up: float) -> QPointF:
+        """A point of the strip on the widget, at its copy nearest the view."""
         size = self._cell()
-        left, bottom = self._origin(size)
-        return QPointF(left + across * size, bottom - up * size)
+        middle = self._middle()
+        gap = (across - self.centre[0] + PER_ROW / 2.0) % PER_ROW - PER_ROW / 2.0
+        return QPointF(middle.x() + gap * size,
+                       middle.y() - (up - self.centre[1]) * size)
 
     def to_cells(self, point: QPointF):
         size = self._cell()
-        left, bottom = self._origin(size)
-        return ((point.x() - left) / size, (bottom - point.y()) / size)
+        middle = self._middle()
+        across = (self.centre[0] + (point.x() - middle.x()) / size) % PER_ROW
+        return (across, self.centre[1] - (point.y() - middle.y()) / size)
+
+    def screen_places(self) -> np.ndarray:
+        """Every cell's middle on the widget, (ROWS, PER_ROW, 2)."""
+        size = self._cell()
+        middle = self._middle()
+        gap = ((self.places[..., 0] - self.centre[0] + PER_ROW / 2.0) % PER_ROW
+               - PER_ROW / 2.0)
+        return np.stack([middle.x() + gap * size,
+                         middle.y() - (self.places[..., 1] - self.centre[1]) * size],
+                        axis=-1)
+
+    def reset_view(self) -> None:
+        self.zoom = 1.0
+        self.centre = self._home()
+        self.update()
+        self.view_changed.emit()
+
+    def zoom_at(self, point: QPointF, factor: float) -> None:
+        """In or out, keeping the cell under the pointer where it is."""
+        held = self.to_cells(point)
+        self.zoom = float(min(10.0, max(1.0, self.zoom * factor)))
+        size = self._cell()
+        middle = self._middle()
+        self.centre = [held[0] - (point.x() - middle.x()) / size,
+                       held[1] + (point.y() - middle.y()) / size]
+        if self.zoom == 1.0:
+            self.centre[1] = self._home()[1]
+        self._hold()
+        self.update()
+        self.view_changed.emit()
+
+    def _ring_at(self, y: float):
+        """The ring drawn at a height on the widget, or None."""
+        ring = int(round(self.to_cells(QPointF(MARGIN_LEFT, y))[1] / RING_PITCH))
+        return ring if 0 <= ring < ROWS else None
 
     def cell_at(self, point: QPointF):
         """(row, id) under a point, or None."""
@@ -162,9 +244,14 @@ class Unwrap(QWidget):
                    for k in range(6)]
         colours = np.clip(self.colours * 255.0, 0, 255).astype(int)
         over = self.over
+        screen = self.screen_places()
+        reach_x, reach_y = self.width() + size, self.height() + size
         for row in range(ROWS):
             for which in range(PER_ROW):
-                centre = self.to_screen(*self.places[row, which])
+                x, y = screen[row, which]
+                if x < MARGIN_LEFT - size or x > reach_x or y < -size or y > reach_y:
+                    continue
+                centre = QPointF(x, y)
                 fill = QColor(*colours[row, which])
                 weight = over[row, which, 3]
                 if weight > 0.0:
@@ -181,19 +268,54 @@ class Unwrap(QWidget):
                 else:
                     brush.setPen(Qt.PenStyle.NoPen)
                 brush.drawPolygon(QPolygonF([centre + one for one in hexagon]))
-        # The rings, numbered as the file numbers them, beside the strip --
-        # every one when there is room, the first of every five when not.
+        # The rings, numbered as the file numbers them, down a column of their
+        # own that stays put however the strip is moved -- every one when
+        # there is room, the first of every five when not.
+        brush.fillRect(QRectF(0, 0, MARGIN_LEFT - 4, self.height()), QColor(theme.DEEP))
         brush.setFont(theme.mono(7.5))
-        brush.setPen(QPen(QColor(theme.QUIET)))
-        left = max(30.0, self.to_screen(0, 0).x() - size)
         crowded = size * RING_PITCH < 12
+        tall = max(3.0, min(size * RING_PITCH * 0.72, 11.0))
+        lit = QColor(FAMILY_COLOUR_LIFT)
+        dim = QColor(theme.RAISED)
+        step = (JACKS[1] - JACKS[0]) / 4.0
         for row in range(ROWS):
-            if crowded and row % 5 and row != ROWS - 1:
-                continue
             y = self.to_screen(0, row * RING_PITCH).y()
-            brush.drawText(QRectF(left - 30, y - 7, 26, 14),
-                           Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                           str(row + 1))
+            if not -8 <= y <= self.height() + 8:
+                continue
+            if not crowded or row % 5 == 0 or row == ROWS - 1:
+                brush.setPen(QPen(QColor(theme.QUIET)))
+                brush.drawText(QRectF(0, y - 7, NUMBERS, 14),
+                               Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                               str(row + 1))
+            # The jack: four steps, as many lit as it stands at -- part of
+            # one between two places, while it moves.
+            brush.setPen(Qt.PenStyle.NoPen)
+            state = float(self.lift[row])
+            for place in range(4):
+                box = QRectF(JACKS[0] + place * step + 0.5, y - tall / 2,
+                             step - 1.5, tall)
+                if row == km.NO_JACK:
+                    brush.setBrush(QColor(theme.LANE_EDGE))
+                    brush.drawRect(box)
+                    continue
+                brush.setBrush(dim)
+                brush.drawRect(box)
+                share = min(1.0, max(0.0, state - place + 1.0)) if place else 0.0
+                if place == 0 and state >= 0:
+                    share = 1.0 if state < 0.5 else 0.0
+                    if share:
+                        brush.setBrush(QColor(theme.QUIET))
+                        brush.drawRect(box)
+                    continue
+                if share > 0:
+                    brush.setBrush(lit)
+                    brush.drawRect(QRectF(box.left(), box.top(),
+                                          box.width() * share, box.height()))
+        if self.zoom > 1.001:
+            brush.setFont(theme.mono(7.5))
+            brush.setPen(QPen(QColor(theme.DIM)))
+            brush.drawText(QRectF(self.width() - 90, self.height() - 18, 84, 14),
+                           Qt.AlignmentFlag.AlignRight, f"×{self.zoom:.1f}")
         if self._box is not None:
             first, last = self._box
             brush.setPen(QPen(QColor(theme.LINE), 1, Qt.PenStyle.DashLine))
@@ -234,9 +356,23 @@ class Unwrap(QWidget):
         return "set"
 
     def mousePressEvent(self, event) -> None:   # noqa: N802
+        if event.button() == Qt.MouseButton.RightButton:
+            # The right hand moves the strip, as it moves the timeline.
+            self._panning = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
         if event.button() != Qt.MouseButton.LeftButton:
             return
         point = event.position()
+        if JACKS[0] - 2 <= point.x() <= JACKS[1] + 2:
+            ring = self._ring_at(point.y())
+            if ring is not None and ring != km.NO_JACK:
+                step = (JACKS[1] - JACKS[0]) / 4.0
+                self._jacking = int(min(3, max(0, (point.x() - JACKS[0]) // step)))
+                self._jacked = {ring}
+                self.jacks_started.emit()
+                self.jack_set.emit(ring, self._jacking)
+            return
         self._pressed = point
         if self.tool == "brush":
             self.stroke_started.emit()
@@ -247,6 +383,22 @@ class Unwrap(QWidget):
 
     def mouseMoveEvent(self, event) -> None:    # noqa: N802
         point = event.position()
+        if self._panning is not None:
+            size = self._cell()
+            moved = point - self._panning
+            self._panning = point
+            self.centre[0] -= moved.x() / size
+            self.centre[1] += moved.y() / size
+            self._hold()
+            self.update()
+            self.view_changed.emit()
+            return
+        if self._jacking is not None:
+            ring = self._ring_at(point.y())
+            if ring is not None and ring != km.NO_JACK and ring not in self._jacked:
+                self._jacked.add(ring)
+                self.jack_set.emit(ring, self._jacking)
+            return
         self._pointer = point
         got = self.cell_at(point)
         self.hovered.emit(*(got if got else (-1, -1)))
@@ -258,6 +410,14 @@ class Unwrap(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.RightButton and self._panning is not None:
+            self._panning = None
+            self.unsetCursor()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self._jacking is not None:
+            self._jacking = None
+            self.jacks_finished.emit()
+            return
         if event.button() != Qt.MouseButton.LeftButton or self._pressed is None:
             return
         point = event.position()
@@ -271,13 +431,15 @@ class Unwrap(QWidget):
                 if got is not None:
                     cells[got] = True
             else:
-                low = self.to_cells(QPointF(min(first.x(), point.x()),
-                                            max(first.y(), point.y())))
-                high = self.to_cells(QPointF(max(first.x(), point.x()),
-                                             min(first.y(), point.y())))
-                across, up = self.places[..., 0], self.places[..., 1]
-                cells = ((across >= low[0] - 0.5) & (across <= high[0] + 0.5)
-                         & (up >= low[1] - 0.5) & (up <= high[1] + 0.5))
+                # On the widget rather than on the strip: a box may straddle
+                # the seam, and the cells either side of it are neighbours.
+                box = QRectF(first, point).normalized()
+                reach = self._cell() * 0.5
+                screen = self.screen_places()
+                cells = ((screen[..., 0] >= box.left() - reach)
+                         & (screen[..., 0] <= box.right() + reach)
+                         & (screen[..., 1] >= box.top() - reach)
+                         & (screen[..., 1] <= box.bottom() + reach))
             self.selected.emit(self._grain(cells), self._how(event))
             self._box = None
         self._pressed = None
@@ -289,10 +451,24 @@ class Unwrap(QWidget):
         self.update()
 
     def wheelEvent(self, event) -> None:         # noqa: N802
-        if self.tool != "brush":
-            return
         steps = event.angleDelta().y() / 120.0
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+        if (event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                and self.tool == "brush"):
             self.radius = float(np.clip(self.radius * (1.15 ** steps), 0.5, 25.0))
+            self.radius_changed.emit(self.radius)
             self.update()
             self.setToolTip(tr("Кисть {0:.1f} соты", self.radius))
+            return
+        if steps:
+            self.zoom_at(event.position(), 1.2 ** steps)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.RightButton:
+            self.reset_view()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def resizeEvent(self, event) -> None:        # noqa: N802
+        self._hold()
+        super().resizeEvent(event)
+        self.view_changed.emit()

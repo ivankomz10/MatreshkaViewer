@@ -69,18 +69,23 @@ UNDO_DEPTH = 80
 
 # Houdini's red for the four jack places: the mask is millimetres over 130.
 LIFT_LEVEL = np.array([0.0, 33.0 / 130.0, 66.0 / 130.0, 1.0])
-LAYERS = ("rgb", "lift", "push", "tilt")
-LAYER_NAMES = ("RGB", "Подъём", "Вынос", "Наклон")
-TOOLS = ("brush", "select", "profile", "rings", "motors")
-TOOL_NAMES = ("Кисть", "Выбор", "Профиль", "Кольца", "Моторы")
+# One layer is worked on at a time, Q W E; the picture shows it alone, or
+# all three together in Houdini's colours with RGB on.
+LAYER_NAMES = ("Подъём", "Вынос", "Наклон")
+TOOLS = ("brush", "select", "profile", "motors")
+TOOL_NAMES = ("Кисть", "Выбор", "Профиль", "Моторы")
 TOOL_KEYS = {Qt.Key.Key_B: "brush", Qt.Key.Key_V: "select",
-             Qt.Key.Key_P: "profile", Qt.Key.Key_R: "rings",
-             Qt.Key.Key_S: "motors"}
+             Qt.Key.Key_P: "profile", Qt.Key.Key_S: "motors"}
+POSES = "kinedit_poses.json"
 # What the picture shows: the keys, the motors' own motion, or both -- one
 # of them then a ghost.
 VIEWS = ("keys", "sim", "both")
 VIEW_NAMES = ("Ключи", "Симуляция", "Оба")
 TIMELINE_NAMES = ("Простой", "Подробный")
+# Selection's three sizes on 1 2 3, as Blender's modes; the layers on Q W E.
+GRAIN_KEYS = {Qt.Key.Key_1: "ring", Qt.Key.Key_2: "group", Qt.Key.Key_3: "cell"}
+GRAIN_NAMES = {"ring": "кольца", "group": "группы", "cell": "отдельные соты"}
+LAYER_KEYS = {Qt.Key.Key_Q: "lift", Qt.Key.Key_W: "push", Qt.Key.Key_E: "tilt"}
 # Behind the building: a little off black, so the dark backs of the panels
 # and the canopy read against it.
 BACKGROUND = (0.137, 0.141, 0.157)
@@ -98,10 +103,13 @@ KEYS = [
     ("Delete", "удалить выбранные ключи"),
     ("Ctrl+C / Ctrl+V", "копировать позу слоя / вставить на плейхед"),
     ("Ctrl+Z / Ctrl+Y", "отменить / вернуть"),
-    ("B V P R S", "кисть, выбор, профиль, кольца, моторы"),
-    ("1 2 3", "слой: подъём, вынос, наклон"),
+    ("B V P S", "кисть, выбор, профиль, моторы"),
+    ("1 2 3", "выбор: кольца, группы, соты"),
+    ("Q W E", "слой: подъём, вынос, наклон"),
     ("M", "видео или маска"),
     ("ПКМ по 3D", "облёт; СКМ или Shift — сдвиг; колесо — ближе"),
+    ("ПКМ по карте", "сдвиг; колесо — ближе; двойной ПКМ — вся карта"),
+    ("?", "эта подсказка"),
 ]
 
 
@@ -193,7 +201,8 @@ class KineticEditor(QMainWindow):
         self.project = km.Project()
         self.frame = 0
         self.family = "tilt"
-        self.layer = "rgb"
+        self.show_all = True               # RGB: all three layers together
+        self.brush_inside = False          # paint only what is chosen
         self.show_mask = True
         self.tool = "brush"
         self.selection = np.zeros((ROWS, PER_ROW), bool)
@@ -359,6 +368,16 @@ class KineticEditor(QMainWindow):
             "pointer_up", "double_click", "pointer_leave")
         beside.addWidget(self.canvas, 1)
         body.addWidget(left)
+        self.left = left
+        # The card of keys, over the picture, on ?.
+        self.keys_card = QLabel(left)
+        self.keys_card.setObjectName("qa_kin_keys_card")
+        self.keys_card.setProperty("fixed_words", True)
+        self.keys_card.setFont(theme.mono(8.5))
+        self.keys_card.setStyleSheet(
+            f"QLabel {{ background:{theme.CARD}; color:{theme.SECOND};"
+            f" border:1px solid {theme.EDGE}; border-radius:6px; padding:10px 14px; }}")
+        self.keys_card.hide()
 
         right = QSplitter(Qt.Orientation.Vertical)
         right.setObjectName("qa_kin_right")
@@ -372,24 +391,47 @@ class KineticEditor(QMainWindow):
         self.unwrap.stroke_finished.connect(self.end_edit)
         self.unwrap.selected.connect(self._select)
         self.unwrap.hovered.connect(self._hovered)
+        self.unwrap.radius_changed.connect(self._radius_from_strip)
+        self.unwrap.jacks_started.connect(self.begin_edit)
+        self.unwrap.jack_set.connect(self._set_jack)
+        self.unwrap.jacks_finished.connect(self.end_edit)
         across.addWidget(self.unwrap, 1)
+        # The vase stands beside the strip, ring for ring, in its own tool.
+        self.profile_strip = kin_tools.ProfileStrip(self.unwrap)
+        self.profile_strip.changed.connect(self._profile_drawn)
+        self.unwrap.view_changed.connect(self.profile_strip.update)
+        self._profiling = False
+        across.addWidget(self.profile_strip)
 
+        # The panel: what is chosen, the poses, and the tool's own settings.
+        side = QWidget()
+        side.setObjectName("qa_kin_side")
+        side.setFixedWidth(340)
+        side.setStyleSheet(f"QWidget#qa_kin_side {{ background:{theme.CARD};"
+                           f" border-left:1px solid {theme.SEAM}; }}")
+        stacked = QVBoxLayout(side)
+        stacked.setContentsMargins(0, 0, 0, 0)
+        stacked.setSpacing(0)
+        self.inspector = kin_tools.Inspector(self)
+        stacked.addWidget(self.inspector)
+        self.poses = kin_tools.Poses(self)
+        stacked.addWidget(self.poses)
+        seam = QFrame()
+        seam.setFixedHeight(1)
+        seam.setStyleSheet(f"background:{theme.SEAM};")
+        stacked.addWidget(seam)
         self.panels = {
             "brush": kin_tools.BrushPanel(self),
             "select": kin_tools.SelectPanel(self),
             "profile": kin_tools.ProfilePanel(self),
-            "rings": kin_tools.RingsPanel(self),
             "motors": kin_tools.MotorsPanel(self),
         }
         self.panel_stack = QStackedWidget()
         self.panel_stack.setObjectName("qa_kin_panels")
-        self.panel_stack.setFixedWidth(330)
-        self.panel_stack.setStyleSheet(
-            f"QStackedWidget {{ background:{theme.CARD};"
-            f" border-left:1px solid {theme.SEAM}; }}")
         for tool in TOOLS:
             self.panel_stack.addWidget(self.panels[tool])
-        across.addWidget(self.panel_stack)
+        stacked.addWidget(self.panel_stack, 1)
+        across.addWidget(side)
         right.addWidget(upper)
 
         lower = QWidget()
@@ -466,10 +508,23 @@ class KineticEditor(QMainWindow):
             (tr("Видео"), tr("Маска")), "qa_kin_view",
             lambda i: self.set_mask(i == 1), 1)
         row.addWidget(self.view_switch)
+        # The layer being worked on, Q W E -- the brush's, the key's, the
+        # picture's -- and RGB to see all three at once.
         self.layer_switch = kin_tools.segments(
             [tr(one) for one in LAYER_NAMES], "qa_kin_layer",
-            lambda i: self.set_layer(LAYERS[i]), 0)
+            lambda i: self.set_family(km.FAMILIES[i]), 2)
+        self.layer_switch.setToolTip(tr("Слой, с которым работаем: Q, W, E"))
         row.addWidget(self.layer_switch)
+        self.rgb = QPushButton("RGB")
+        self.rgb.setObjectName("qa_kin_rgb")
+        self.rgb.setProperty("pill", True)
+        self.rgb.setProperty("fixed_words", True)
+        self.rgb.setCheckable(True)
+        self.rgb.setChecked(self.show_all)
+        self.rgb.setToolTip(tr("Все три слоя в цветах Houdini: R подъём, G вынос, "
+                               "B наклон; иначе — только слой, с которым работаем"))
+        self.rgb.clicked.connect(lambda on: self.set_show_all(on))
+        row.addWidget(self.rgb)
         row.addWidget(_divider())
         self.view_choice = kin_tools.segments(
             [tr(one) for one in VIEW_NAMES], "qa_kin_show",
@@ -515,7 +570,7 @@ class KineticEditor(QMainWindow):
         column.setContentsMargins(6, 10, 6, 10)
         column.setSpacing(6)
         self.tool_buttons = {}
-        for tool, text, key in zip(TOOLS, TOOL_NAMES, "BVPRS"):
+        for tool, text, key in zip(TOOLS, TOOL_NAMES, "BVPS"):
             button = QPushButton(tr(text))
             button.setObjectName(f"qa_kin_tool_{tool}")
             button.setCheckable(True)
@@ -650,7 +705,15 @@ class KineticEditor(QMainWindow):
             self.timeline.update()
             self._say_title()
             self.sim_timer.start(SIM_WAIT_MS)
+        self.inspector.refresh()
         self.panels[self.tool].refresh()
+        if self.tool == "profile":
+            strip = self.profile_strip
+            strip.now = self.pose_now()["push"].mean(axis=1)
+            points = self.profile_here()
+            if points and strip._held is None:
+                strip.points = [tuple(one) for one in points]
+            strip.update()
         self._say_clock()
         self.touch()
 
@@ -789,6 +852,7 @@ class KineticEditor(QMainWindow):
         if result is not None and self.view != "keys":
             lag = kin_sim.differs(self.project, result.project, self.frame)
         self.unwrap.set_colours(colours, over, warn, lag)
+        self.unwrap.set_lift(pose["lift"])
         self.unwrap.set_selection(self.selection)
         if self.solid is not None:
             solid = over.copy()
@@ -932,24 +996,27 @@ class KineticEditor(QMainWindow):
             button.setChecked(name == tool)
         self.panel_stack.setCurrentWidget(self.panels[tool])
         self.unwrap.tool = "brush" if tool == "brush" else "select"
-        self.unwrap.grain = "ring" if tool == "rings" else self.unwrap.grain
+        self.profile_strip.setVisible(tool == "profile")
         self._under = None
         self.panels[tool].refresh()
         self._changed()
 
+    @property
+    def layer(self) -> str:
+        """What the cells are coloured by: all three, or the layer worked on."""
+        return "rgb" if self.show_all else self.family
+
     def set_family(self, family: str) -> None:
+        """The layer worked on: the brush's, the keys', the picture's."""
         self.family = family
         self.timeline.set_family(family)
         self.panels["brush"].show_family(family)
-        if self.layer != "rgb":
-            self.set_layer(family)
+        self.layer_switch.buttons[km.FAMILIES.index(family)].setChecked(True)
+        self._changed()
 
-    def set_layer(self, layer: str) -> None:
-        self.layer = layer
-        self.layer_switch.buttons[LAYERS.index(layer)].setChecked(True)
-        if layer != "rgb" and layer != self.family:
-            self.set_family(layer)
-            return
+    def set_show_all(self, on: bool) -> None:
+        self.show_all = bool(on)
+        self.rgb.setChecked(self.show_all)
         self._changed()
 
     def set_mask(self, on: bool) -> None:
@@ -964,23 +1031,173 @@ class KineticEditor(QMainWindow):
         self.unwrap.radius = self.brush_radius
         self.unwrap.update()
 
+    def _radius_from_strip(self, radius: float) -> None:
+        self.brush_radius = float(radius)
+        self.panels["brush"].show_radius(self.brush_radius)
+
     def set_brush_hardness(self, percent: float) -> None:
         self.brush_hardness = float(percent) / 100.0
         self.unwrap.hardness = self.brush_hardness
 
-    def set_grain(self, grain: str) -> None:
+    def set_grain(self, grain: str, take_tool: bool = False) -> None:
+        """What a click takes: a ring, a group of five or a cell. Keys 1 2 3
+        also take up the selection tool, and grow what is chosen to the new
+        size -- a cell chosen, going to rings, is its whole ring -- as
+        Blender's selection modes do."""
         self.unwrap.grain = grain
+        panel = self.panels["select"]
+        panel.grain.buttons[panel.GRAIN_KEYS.index(grain)].setChecked(True)
+        if take_tool and self.tool != "select":
+            self._choose_tool("select")
+        if self.selection.any():
+            self.selection = self.unwrap._grain(self.selection)
+            self._changed()
+        self.status.setText(tr("Выбор: {0}", tr(GRAIN_NAMES[grain])))
 
     def _target(self) -> float:
         return {"lift": float(self.brush_lift), "push": self.brush_push,
                 "tilt": self.brush_tilt}[self.family]
 
     def _dab(self, weights) -> None:
+        if self.brush_inside and self.selection.any():
+            # Only what is chosen takes paint, as Houdini paints on a group.
+            weights = np.asarray(weights, np.float32) * self.selection
         track = self.project.tracks[self.family]
         values, mask = km.brush(track, self.frame, weights, self._target(),
                                 self.brush_strength, self.brush_mode)
         self._write(self.family, values, mask)
         self._changed()
+
+    def _set_jack(self, ring: int, state: int) -> None:
+        """A ring's jack put in one of its places, off the strip's column."""
+        rings = np.zeros(ROWS, bool)
+        rings[ring] = True
+        self._write("lift", np.full(ROWS, float(state)), rings)
+        self._changed()
+
+    def _profile_drawn(self, points, done: bool) -> None:
+        """The vase drawn beside the strip: one undo step a drag."""
+        if not self._profiling:
+            self.begin_edit()
+            self._profiling = True
+        self.apply_profile(points, self.panels["profile"].tangent.isChecked())
+        if done:
+            self.end_edit()
+            self._profiling = False
+
+    # -- the pose library --------------------------------------------------------------
+
+    def _pose_file(self) -> Path:
+        return logfile.app_dir() / POSES
+
+    def _read_poses(self) -> dict:
+        try:
+            data = json.loads(self._pose_file().read_text("utf-8"))
+            return data.get("poses", {}) if isinstance(data, dict) else {}
+        except Exception:  # noqa: BLE001 -- none yet, or broken by hand
+            return {}
+
+    def _write_poses(self, poses: dict) -> None:
+        try:
+            self._pose_file().write_text(json.dumps({"poses": poses}, ensure_ascii=False),
+                                         "utf-8")
+        except OSError as error:
+            logfile.write(f"kinetic editor: poses not written: {error}")
+
+    def pose_names(self) -> list:
+        return sorted(self._read_poses())
+
+    def save_pose(self, name: str | None = None) -> None:
+        """The piece as it stands at the playhead, kept under a name -- in a
+        library beside the program, so every project has it."""
+        if name is None:
+            from PySide6.QtWidgets import QInputDialog
+            name, ok = QInputDialog.getText(self, APP_NAME, tr("Имя позы:"))
+            if not ok:
+                return
+        name = str(name).strip()
+        if not name:
+            return
+        poses = self._read_poses()
+        pose = self.pose_now()
+        poses[name] = {family: [round(float(v), 5) for v in pose[family].reshape(-1)]
+                       for family in km.FAMILIES}
+        self._write_poses(poses)
+        self.poses.refresh()
+        self.poses.choice.setCurrentText(name)
+        self.status.setText(tr("Поза «{0}» сохранена", name))
+
+    def put_pose(self, name: str | None = None) -> None:
+        """A pose from the library as a key at the playhead: on the chosen
+        cells if any are, on all of them if not."""
+        name = name or self.poses.choice.currentText()
+        pose = self._read_poses().get(name)
+        if not pose:
+            self.status.setText(tr("Сначала сохраните позу"))
+            return
+        self._record()
+        chosen = self.selection if self.selection.any() else np.ones((ROWS, PER_ROW), bool)
+        for family in ("lift", "push", "tilt"):
+            values = np.asarray(pose[family], np.float32)
+            self._write(family, values, km.cell_mask_for(family, chosen))
+        self.status.setText(tr("Поза «{0}» поставлена на кадр {1}", name, self.frame))
+        self._changed(keys=True)
+
+    def drop_pose(self, name: str | None = None) -> None:
+        name = name or self.poses.choice.currentText()
+        poses = self._read_poses()
+        if name in poses:
+            del poses[name]
+            self._write_poses(poses)
+            self.poses.refresh()
+
+    # -- what went wrong, one at a time -------------------------------------------------
+
+    def show_problem(self, problem) -> None:
+        """A row of the problems list: to its frame, its cells chosen."""
+        if not problem:
+            return
+        cells = np.zeros((ROWS, PER_ROW), bool)
+        if problem[0] == "clash":
+            frame = int(problem[1])
+            self.go_to(frame)
+            pose = self.sim_pose() or self.pose_now()
+            cells = km.over_limit(pose["tilt"], pose["lift"], pose["push"])
+        else:
+            family, motor, frame = problem[1], int(problem[2]), int(problem[3])
+            self.set_family(family)
+            self.go_to(frame)
+            row, which = km.motor_address(family, motor)
+            if family == "lift":
+                cells[row] = True
+            elif family == "push":
+                cells[row, which * PER_PUSHER:(which + 1) * PER_PUSHER] = True
+            else:
+                cells[row, which] = True
+        self._select(cells, "set")
+
+    def toggle_keys_card(self) -> None:
+        card = self.keys_card
+        if card.isVisible():
+            card.hide()
+            return
+        listed = [(tr(key), tr(what)) for key, what in KEYS]
+        width = max(len(key) for key, _ in listed) + 2
+        card.setText("\n".join(f"{key:<{width}}{what}" for key, what in listed))
+        card.adjustSize()
+        card.move(96, 12)
+        card.show()
+        card.raise_()
+
+    def key_selected(self, family: str) -> None:
+        """◆: the chosen motors of a family keyed where they stand."""
+        if not self.selection.any():
+            self.status.setText(tr("Сначала выберите соты"))
+            return
+        self._record()
+        mask = km.cell_mask_for(family, self.selection)
+        self._write(family, self.pose_now()[family].reshape(-1), mask)
+        self._changed(keys=True)
 
     def _write(self, family: str, values, mask) -> None:
         """Key `values` for the motors in `mask` at the playhead, in bounds."""
@@ -998,8 +1215,6 @@ class KineticEditor(QMainWindow):
             self.selection = self.selection & ~cells
         else:
             self.selection = np.asarray(cells, bool).copy()
-        if self.tool == "rings" and cells.any():
-            pass
         self._changed()
 
     def select_all(self) -> None:
@@ -1333,7 +1548,11 @@ class KineticEditor(QMainWindow):
         mods = event.modifiers()
         control = bool(mods & Qt.KeyboardModifier.ControlModifier)
         shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
-        if key == Qt.Key.Key_Space:
+        if event.text() == "?" or key == Qt.Key.Key_Question                 or (key == Qt.Key.Key_Slash and shift):
+            self.toggle_keys_card()
+        elif key == Qt.Key.Key_Escape and self.keys_card.isVisible():
+            self.keys_card.hide()
+        elif key == Qt.Key.Key_Space:
             self.toggle_play()
         elif key == Qt.Key.Key_Left:
             self.go_to(self.frame - (km.FPS if shift else 1))
@@ -1371,8 +1590,10 @@ class KineticEditor(QMainWindow):
             self.set_mask(not self.show_mask)
         elif key in TOOL_KEYS and not shift:
             self._choose_tool(TOOL_KEYS[key])
-        elif key in (Qt.Key.Key_1, Qt.Key.Key_2, Qt.Key.Key_3):
-            self.set_family(km.FAMILIES[int(key) - int(Qt.Key.Key_1)])
+        elif key in GRAIN_KEYS:
+            self.set_grain(GRAIN_KEYS[key], take_tool=True)
+        elif key in LAYER_KEYS:
+            self.set_family(LAYER_KEYS[key])
         else:
             return False
         return True
@@ -1601,6 +1822,9 @@ class KineticEditor(QMainWindow):
                 if said is not None:
                     widget.setSuffix(f" {said}")
         self.length_box.setSuffix(tr(" с"))
+        # What is said out of pieces, said again.
+        self.panels["brush"].show_family(self.family)
+        self.panels["motors"]._shown = None
         self.status.setText("")
         self.settings["language"] = code
         self._write_settings()
