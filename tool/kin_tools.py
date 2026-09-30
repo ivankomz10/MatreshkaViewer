@@ -22,7 +22,7 @@ undo -- so a change from here is a change like any other.
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox,
                                QDoubleSpinBox, QGridLayout, QHBoxLayout,
@@ -87,6 +87,26 @@ def labelled(text: str, widget: QWidget) -> QWidget:
     column.addWidget(label)
     column.addWidget(widget)
     return holder
+
+
+class Elided(QLabel):
+    """A line of words that never pushes the window wider: what does not
+    fit is cut with an ellipsis. The status line and the words under the
+    pointer are these -- as plain labels, a long line made the right half
+    of the window claim more room, and the 3D view jumped narrower and back
+    as the pointer went over the cells."""
+
+    def minimumSizeHint(self) -> QSize:            # noqa: N802
+        return QSize(0, super().minimumSizeHint().height())
+
+    def paintEvent(self, event) -> None:            # noqa: N802
+        brush = QPainter(self)
+        said = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight,
+                                             max(0, self.width()))
+        self.style().drawItemText(brush, self.rect(), int(self.alignment()),
+                                  self.palette(), self.isEnabled(), said,
+                                  self.foregroundRole())
+        brush.end()
 
 
 # -- numbers pulled by the mouse --------------------------------------------------

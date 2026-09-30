@@ -573,8 +573,9 @@ EN: dict = {
     'Звук…': 'Sound…',
     'Видео': 'Video',
     'Маска': 'Mask',
-    'Во вьюере': 'In the viewer',
-    'Сохранить JSON и открыть его во вьюере': 'Save the JSON and open it in the viewer',
+    'Во вьюере…': 'In the viewer…',
+    'Сохранить JSON и открыть его во вьюере — вместо того, что загружено во вьюере сейчас':
+        'Save the JSON and open it in the viewer, in place of what the viewer has loaded now',
     'Вид': 'View',
     'Вернуть камеру': 'Put the camera back',
     'Ключ': 'Key',
@@ -823,4 +824,7 @@ EN: dict = {
         "The box's half depth, out from the building",
     'Симуляция перенесена в ключи, примитивы в ней — выключены':
         'The simulation is on the keys; the primitives it had are turned off',
+    'Вьюер откроется в «Просмотре» с этой кинетикой и заменит свои строки {0}: то, что в них загружено сейчас, придётся открыть заново. Открыть во вьюере?':
+        'The viewer opens in Quick look with this kinetic and replaces its rows {0}: what they hold now will have to be opened again. Open in the viewer?',
+    'Открыть во вьюере': 'Open in the viewer',
 }

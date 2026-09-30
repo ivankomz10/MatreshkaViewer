@@ -865,3 +865,75 @@ def test_masks_and_primitives_are_kept_in_the_project_file(fresh):
     assert fresh.panels["prims"].step.value() == 15 or fresh.tool != "prims"
     del kp
     fresh.select_none()
+
+
+# -- the video on the strip, the viewer asked first, a window that holds still ---------------
+
+def test_the_video_is_on_the_strip_as_on_the_cells(fresh, tick):
+    import media
+    import kinedit
+    assert fresh.sampler is not None
+    # With no video, the strip shows what the cells show: the calibration.
+    fresh.set_mask(False)
+    calibration = fresh.video_cells()
+    assert calibration is not None and calibration.std() > 0.05
+    assert np.allclose(fresh.unwrap.colours, calibration)
+    fresh.load_video(str(media.build()["top"]))
+    try:
+        fresh.go_to(0)
+        fresh.touch()
+        tick(0.6)
+        first = fresh.video_cells()
+        assert np.allclose(fresh.unwrap.colours, first)
+        # A quarter of the clip is transparent -- black on the cells -- and
+        # the rest is lit.
+        assert (first.max(axis=-1) < 0.03).sum() > 100
+        assert first[..., 0].max() > 0.5
+        # A band of blue walks in as the clip runs: the strip follows the frame.
+        fresh.go_to(59)
+        fresh.touch()
+        tick(0.6)
+        later = fresh.video_cells()
+        assert later[..., 2].mean() > first[..., 2].mean() + 0.2
+        assert np.allclose(fresh.unwrap.colours, later)
+        fresh.set_mask(True)
+        assert not np.allclose(fresh.unwrap.colours, later)
+    finally:
+        fresh.stream.stop()
+        fresh.stream = fresh.screen = fresh.held = None
+        fresh._video_cells = None
+        fresh.solid.clear_video(kinedit.TOP)
+        fresh.set_mask(True)
+
+
+def test_the_viewer_is_opened_only_when_asked(fresh, monkeypatch):
+    import kinedit
+    from PySide6.QtWidgets import QPushButton
+    launched = []
+    monkeypatch.setattr(kinedit.subprocess, "Popen",
+                        lambda command, **_: launched.append(command))
+    # The warning closed without "Open": nothing is written, nothing started.
+    monkeypatch.setattr(kinedit.QMessageBox, "exec", lambda self: 0)
+    assert fresh.show_in_viewer() is False and not launched
+    assert fresh.show_in_viewer(asked=True) and "--motors" in launched[0]
+    # It stands with the files now, by the export, away from «Вид».
+    button = fresh.findChild(QPushButton, "qa_kin_viewer")
+    export = fresh.findChild(QPushButton, "qa_kin_export")
+    home = fresh.findChild(QPushButton, "qa_kin_home")
+    assert button.text() == "Во вьюере…"
+    assert 0 < button.x() - export.x() < 250 and home.x() - button.x() > 600
+
+
+def test_long_words_under_the_pointer_do_not_move_the_3d_view(fresh, tick):
+    tick(0.2)
+    before = fresh.body.sizes()
+    fresh.hover_label.setText("кольцо 16, сота 19: зазор под ним 1300 мм " * 8)
+    fresh.status.setText("Моторы: пропущено команд 5, опоздали ходов 12 " * 8)
+    fresh.warn_button.setText("Вне предела: 12345")
+    fresh.warn_button.setVisible(True)
+    fresh.go_to(123456)
+    tick(0.3)
+    assert fresh.body.sizes() == before
+    fresh.hover_label.setText("")
+    fresh.status.setText("")
+    fresh._changed(keys=True)

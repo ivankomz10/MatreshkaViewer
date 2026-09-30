@@ -54,6 +54,7 @@ import kin_model as km
 import kin_gizmo
 import kin_overlay
 import kin_prims
+import kin_sample
 import kin_sim
 import kin_tools
 import kinetic
@@ -265,6 +266,9 @@ class KineticEditor(QMainWindow):
         self._edit_base = None          # the pose an edit under way began at
         self._composed = None
         self._shown_cache = None
+        self.sampler = None             # the video, a colour a cell, for the strip
+        self._video_cells = None
+        self._strip_layers = (None, None, None)
         self._prims_seen = None
         # The motors' own motion, worked out a moment after the keys change.
         self.view = "both"
@@ -368,6 +372,16 @@ class KineticEditor(QMainWindow):
         self.solid.dark_backs(True)
         self.solid.clear = BACKGROUND
         self.overlay = kin_overlay.Overlay(self.device, self.format)
+        try:
+            piece = next(one for one in self.mesh.pieces
+                         if one.name == scene3d.KINETIC_SCREEN)
+            places = kin_sample.cell_places(
+                self.mesh.raw[f"{scene3d.KINETIC_SCREEN}__uv"], piece.cell,
+                len(self.cell_is))
+            self.sampler = kin_sample.CellSampler(self.device, places)
+        except Exception as error:  # noqa: BLE001 -- the strip keeps the mask
+            self.sampler = None
+            logfile.write(f"kinetic editor: no video on the strip: {error}")
         self._aim_camera()
         self.canvas.request_draw(self._draw)
 
@@ -561,7 +575,10 @@ class KineticEditor(QMainWindow):
                  tr("Проект редактора (.kin) или моторный JSON")),
                 (tr("Сохранить"), "qa_kin_save", self.save, "Ctrl+S"),
                 (tr("Экспорт JSON…"), "qa_kin_export", self.export_dialog,
-                 tr("Моторный JSON для вьюера и площадки, Ctrl+E"))):
+                 tr("Моторный JSON для вьюера и площадки, Ctrl+E")),
+                (tr("Во вьюере…"), "qa_kin_viewer", self.show_in_viewer,
+                 tr("Сохранить JSON и открыть его во вьюере — вместо того, что "
+                    "загружено во вьюере сейчас"))):
             row.addWidget(_button(text, name_, call, hint))
         row.addWidget(_divider())
         row.addWidget(_button(tr("Видео…"), "qa_kin_video", self.video_dialog,
@@ -619,8 +636,6 @@ class KineticEditor(QMainWindow):
         self.gizmo_button.clicked.connect(lambda on: self.set_gizmos(on))
         row.addWidget(self.gizmo_button)
         row.addStretch(1)
-        row.addWidget(_button(tr("Во вьюере"), "qa_kin_viewer", self.show_in_viewer,
-                              tr("Сохранить JSON и открыть его во вьюере")))
         row.addWidget(_button(tr("Вид"), "qa_kin_home", self.home_view,
                               tr("Вернуть камеру")))
         for code, text in (("ru", "RU"), ("en", "EN")):
@@ -679,7 +694,8 @@ class KineticEditor(QMainWindow):
         self.clock_label.setObjectName("qa_kin_clock")
         self.clock_label.setFont(theme.mono(10))
         self.clock_label.setProperty("fixed_words", True)
-        self.clock_label.setMinimumWidth(170)
+        self.clock_label.setFixedWidth(self.clock_label.fontMetrics().horizontalAdvance(
+            "00:00:00:00  " + tr("кадр {0}", 999999)) + 12)
         row.addWidget(self.clock_label)
         row.addWidget(_divider())
         for text, name, call, hint in (
@@ -696,6 +712,8 @@ class KineticEditor(QMainWindow):
         self.warn_button = _button("", "qa_kin_warnings", self.next_warning,
                                    tr("К следующему ключу, где наклон вне предела"))
         self.warn_button.setStyleSheet(f"color:{theme.ERROR}; border-color:#5a2a26;")
+        # Coming and going with the warnings, it must not push the window wider.
+        self.warn_button.setMinimumWidth(1)
         row.addWidget(self.warn_button)
         row.addStretch(1)
         length_label = QLabel(tr("Длина"))
@@ -719,12 +737,12 @@ class KineticEditor(QMainWindow):
                           f" border-top:1px solid {theme.SEAM}; }}")
         row = QHBoxLayout(bar)
         row.setContentsMargins(14, 0, 14, 0)
-        self.status = QLabel()
+        self.status = kin_tools.Elided()
         self.status.setObjectName("qa_kin_status")
         self.status.setFont(theme.mono(8.5))
         self.status.setStyleSheet(f"color:{theme.QUIET};")
         row.addWidget(self.status, 1)
-        self.hover_label = QLabel()
+        self.hover_label = kin_tools.Elided()
         self.hover_label.setObjectName("qa_kin_hover")
         self.hover_label.setFont(theme.mono(8.5))
         self.hover_label.setStyleSheet(f"color:{theme.SECOND};")
@@ -951,8 +969,11 @@ class KineticEditor(QMainWindow):
         motion is not where the keys want it are ringed."""
         pose, _ = self._shown()
         painting_mask = self.tool == "brush" and self.brush_target == "mask"
+        video = None if painting_mask or self.show_mask else self.video_cells()
         if painting_mask:
             colours = weight_colours(self.mask_weights())
+        elif video is not None:
+            colours = video
         else:
             colours = mask_colours(pose, self.layer)
         over = np.zeros((ROWS, PER_ROW, 4), np.float32)
@@ -983,6 +1004,7 @@ class KineticEditor(QMainWindow):
         if result is not None and self.view != "keys":
             lag = kin_sim.differs(self.composed(), result.project, self.frame)
         self.unwrap.set_colours(colours, over, warn, lag)
+        self._strip_layers = (over, warn, lag)
         self.unwrap.set_lift(pose["lift"])
         self.unwrap.set_selection(self.selection)
         if self.solid is not None:
@@ -1101,6 +1123,7 @@ class KineticEditor(QMainWindow):
                 stream.give_back(held)
             self.held = got
             self.screen.upload([memoryview(b) for b in got.buffers])
+            self._video_on_strip()
         if (self.held is None or self.held.index < wanted) and stream.rate:
             QTimer.singleShot(8, self.touch)
 
@@ -1224,7 +1247,38 @@ class KineticEditor(QMainWindow):
         self.view_switch.buttons[1 if on else 0].setChecked(True)
         if self.solid is not None:
             self.solid.show_paint(self.show_mask)
+        self._paint()
         self.touch()
+
+    def video_cells(self):
+        """What each cell shows of the video now, (ROWS, PER_ROW, 3) -- the
+        calibration picture when there is no video -- or None."""
+        if self.sampler is None or self.solid is None:
+            return None
+        screen = self.screen
+        key = (id(screen), getattr(self.held, "index", None)) if screen else ("calibration",)
+        if self._video_cells is not None and self._video_cells[0] == key:
+            return self._video_cells[1]
+        if screen is not None:
+            got = self.sampler.read(screen.planes[0].texture, screen.planes[1].texture,
+                                    screen.ycocg, screen.alpha_from, screen.uv_scale)
+        else:
+            texture = self.solid.calibration.get(TOP)
+            if texture is None:
+                return None
+            got = self.sampler.read(texture, texture, False, 0)
+        colours = np.zeros((ROWS, PER_ROW, 3), np.float32)
+        colours[self.cell_is[:, 0], self.cell_is[:, 1]] = got
+        self._video_cells = (key, colours)
+        return colours
+
+    def _video_on_strip(self) -> None:
+        """A new frame of the video, onto the strip as well as the cells."""
+        if self.show_mask or (self.tool == "brush" and self.brush_target == "mask"):
+            return
+        colours = self.video_cells()
+        if colours is not None:
+            self.unwrap.set_colours(colours, *self._strip_layers)
 
     def set_brush_radius(self, radius: float) -> None:
         self.brush_radius = float(radius)
@@ -2346,7 +2400,22 @@ class KineticEditor(QMainWindow):
         logfile.write(f"kinetic editor: exported {written}")
         return written
 
-    def show_in_viewer(self) -> None:
+    def show_in_viewer(self, asked: bool = False) -> bool:
+        """The piece exported and opened in the viewer, with its video and
+        sound -- on the viewer's own rows, in place of what they hold, so
+        it is asked first."""
+        if not asked:
+            replaced = ["Kinetic"] + (["Top"] if self.project.video else []) + (
+                ["Sound"] if self.project.sound else [])
+            box = QMessageBox(QMessageBox.Icon.Warning, APP_NAME, tr(
+                "Вьюер откроется в «Просмотре» с этой кинетикой и заменит свои "
+                "строки {0}: то, что в них загружено сейчас, придётся открыть "
+                "заново. Открыть во вьюере?", ", ".join(replaced)), parent=self)
+            go = box.addButton(tr("Открыть во вьюере"), QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(tr("Отмена"), QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is not go:
+                return False
         folder = (self.project.path.parent if self.project.path
                   else logfile.app_dir())
         written = self.export_to(folder / f"{self.project.name}_1_of_1.json")
@@ -2360,6 +2429,7 @@ class KineticEditor(QMainWindow):
         if self.project.sound:
             command += ["--sound", self.project.sound]
         subprocess.Popen(command, close_fds=True)
+        return True
 
     def video_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -2379,6 +2449,7 @@ class KineticEditor(QMainWindow):
         if self.stream is not None:
             self.stream.stop()
             self.stream = self.screen = self.held = None
+        self._video_cells = None
         try:
             texture = self.solid.calibration.get(TOP)
             pixels = (tuple(texture.size)[:2] if texture is not None
