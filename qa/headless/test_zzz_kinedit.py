@@ -937,3 +937,132 @@ def test_long_words_under_the_pointer_do_not_move_the_3d_view(fresh, tick):
     fresh.hover_label.setText("")
     fresh.status.setText("")
     fresh._changed(keys=True)
+
+
+# -- layers under the keys, as Blender's NLA -----------------------------------------------
+
+def _a_wave(fresh, ring=6, at=120):
+    push = fresh.project.tracks["push"]
+    mask = np.zeros(push.size, bool)
+    mask[ring * km.GROUPS:(ring + 1) * km.GROUPS] = True
+    for frame, value in ((at, 0.0), (at + 60, 0.5), (at + 120, 0.0)):
+        push.write(frame, np.full(push.size, value), mask)
+    fresh._changed(keys=True)
+
+
+def test_the_keys_go_into_a_clip_and_the_timeline_shows_the_layers(fresh, tick):
+    _a_wave(fresh)
+    before = fresh.project.pose(180)["push"].copy()
+    fresh.push_down()
+    assert fresh.tool == "layers" and fresh.timeline.layered
+    assert fresh.timeline_mode.buttons[2].isChecked()
+    assert fresh.strip_key == (0, 0) and fresh.strip().clip in fresh.project.clips
+    assert np.allclose(fresh.pose_now()["push"] if fresh.frame == 180 else
+                       fresh.project.pose(180)["push"], before)
+    keys = [lane.key for lane, _ in fresh.timeline.lanes()]
+    assert keys[:2] == [("keys",), ("layer", 0)]
+    # A second, from the chosen keys alone, goes on top.
+    _a_wave(fresh, ring=12, at=400)
+    fresh.timeline.chosen = {(("push",), 400), (("push",), 460)}
+    fresh.push_down()
+    assert len(fresh.project.layers) == 2
+    assert fresh.project.tracks["push"].frames == [520], "the unchosen key stays"
+    keys = [lane.key for lane, _ in fresh.timeline.lanes()]
+    assert keys[:3] == [("keys",), ("layer", 1), ("layer", 0)]
+    # The panel says it; one undo step puts the keys back.
+    panel = fresh.panels["layers"]
+    panel.refresh()
+    assert panel.body.isEnabled() and "Слой 2" in panel.title.text()
+    fresh._step_undo(True)
+    assert len(fresh.project.layers) == 1 and 460 in fresh.project.tracks["push"].frames
+    fresh.touch()
+    tick(0.1)
+
+
+def test_a_strip_is_set_up_dragged_and_stretched(fresh):
+    _a_wave(fresh)
+    fresh.push_down()
+    fresh.add_layer()
+    assert len(fresh.project.layers) == 2 and fresh.layer_index == 1
+    strip = fresh.strip()
+    fresh.set_strip_property("mode", "add")
+    fresh.set_strip_value("influence", 0.5)
+    fresh.set_strip_value("fade_in", 30)
+    assert (strip.mode, strip.influence, strip.fade_in) == ("add", 0.5, 30)
+    panel = fresh.panels["layers"]
+    panel.refresh()
+    assert panel.mode.buttons[1].isChecked() and panel.boxes["influence"].value() == 50
+    # Dragged along and onto the layer above; stretched by its right end.
+    fresh.timeline.strip_moved.emit((0, 0), 1, 60)
+    assert fresh.strip_key == (1, 0) and not fresh.project.layers[0].strips
+    strip = fresh.strip()
+    assert strip.start == 180
+    clip = fresh.project.clips[strip.clip]
+    fresh.timeline.strip_stretched.emit((1, 0), clip.length * 2)
+    assert strip.speed == pytest.approx(0.5) and strip.length(clip) == clip.length * 2
+    # Delete takes the strip when the layers are shown.
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier)
+    assert fresh._key(event)
+    assert not fresh.project.layers[1].strips and fresh.strip() is None
+    # A layer's switch mutes it; its name makes it the one clips go on.
+    fresh.timeline.layer_muted.emit(0)
+    assert fresh.project.layers[0].muted
+    fresh.timeline.layer_picked.emit(0)
+    assert fresh.layer_index == 0
+
+
+def test_a_clip_goes_to_the_library_and_back_anywhere(fresh):
+    import kinedit
+    _a_wave(fresh)
+    fresh.push_down()
+    fresh.save_clip("волна")
+    assert "волна" in fresh.clip_names() and (HOME / kinedit.CLIPS).is_file()
+    # Into a new piece: its rest would hide the clip, so it goes.
+    fresh.dirty = False
+    fresh.new_project()
+    fresh.go_to(600)
+    fresh.put_clip("волна")
+    assert all(not len(track) for track in fresh.project.tracks.values())
+    strip = fresh.strip()
+    assert strip.start == 600 and "поставлен" in fresh.status.text()
+    assert fresh.project.pose(660)["push"][6, 0] == pytest.approx(0.5)
+    # Moved round and up from the panel.
+    fresh.set_strip_value("round", 1)
+    fresh.set_strip_value("rings", 2)
+    assert fresh.project.pose(660)["push"][8, 0] == pytest.approx(0.5)
+    # Keys over it are said.
+    fresh.key_all(True)
+    fresh.put_clip("волна")
+    assert "перекрывают" in fresh.status.text()
+    fresh.drop_clip("волна")
+    assert "волна" not in fresh.clip_names()
+
+
+def test_the_simulation_and_the_export_play_the_layers(fresh):
+    _a_wave(fresh)
+    fresh.push_down()
+    fresh.set_strip_value("rings", 3)
+    motion = fresh.composed()
+    assert not motion.layers
+    assert motion.pose(180)["push"][9, 0] == pytest.approx(0.5)
+    written = fresh.export_to(OUT / "layers_1_of_1.json")
+    back, _ = km.from_motor_json(written)
+    assert back.pose(180)["push"][9, 0] == pytest.approx(0.5, abs=1e-3)
+
+
+def test_a_strip_comes_back_as_keys_and_the_layers_bake(fresh):
+    _a_wave(fresh)
+    fresh.push_down()
+    fresh.set_strip_value("start", 300)
+    fresh.strip_to_keys()
+    assert fresh.project.tracks["push"].frames == [300, 360, 420]
+    assert not fresh.project.layers[0].strips
+    fresh.push_down()
+    wanted = fresh.project.pose(360)["push"].copy()
+    fresh.bake_layers()
+    assert not fresh.project.layers and "сведены" in fresh.status.text()
+    assert np.allclose(fresh.project.pose(360)["push"], wanted)
+    fresh.set_timeline_view("simple")
+    assert not fresh.timeline.layered

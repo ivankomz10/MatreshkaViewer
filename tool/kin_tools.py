@@ -1142,3 +1142,228 @@ class PrimsPanel(Panel):
                 box.setStyleSheet(f"color:{theme.WARN};" if keyed else "")
         finally:
             self._filling = False
+
+
+# -- the layers ------------------------------------------------------------------------------
+
+class LayersPanel(Panel):
+    """The layers under the keys, as Blender's NLA: the layers themselves,
+    the strip chosen on the timeline, and the library of clips."""
+
+    MODES = ("Замена", "Сложение", "Максимум")
+    MODE_KEYS = ("replace", "add", "max")
+
+    def __init__(self, actions) -> None:
+        super().__init__(actions, "qa_kin_layers_panel")
+        self._filling = False
+        self.column.addWidget(heading(tr("Слои")))
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(6)
+        for text, name, call, hint in (
+                (tr("+ Слой"), "qa_kin_layer_add", actions.add_layer, tr("Новый слой сверху")),
+                ("−", "qa_kin_layer_drop", actions.drop_layer, tr("Удалить слой со всеми полосами")),
+                ("▲", "qa_kin_layer_up", lambda: actions.move_layer(1), tr("Слой выше")),
+                ("▼", "qa_kin_layer_down", lambda: actions.move_layer(-1), tr("Слой ниже"))):
+            button = QPushButton(text)
+            button.setObjectName(name)
+            button.setToolTip(hint)
+            if len(text) == 1:
+                button.setFixedWidth(30)
+                button.setStyleSheet("padding:4px 0px;")
+                button.setProperty("fixed_words", True)
+            button.clicked.connect(lambda _=False, call=call: call())
+            line.addWidget(button, 1 if len(text) > 1 else 0)
+        self.column.addWidget(row)
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(6)
+        down = QPushButton(tr("Ключи в клип"))
+        down.setObjectName("qa_kin_push_down")
+        down.setToolTip(tr(
+            "Ключи с таймлайна — выбранные, если есть, иначе все — уходят в клип "
+            "на новом слое сверху, как Push Down в Blender"))
+        down.clicked.connect(lambda: actions.push_down())
+        line.addWidget(down, 1)
+        flat = QPushButton(tr("Свести в ключи"))
+        flat.setObjectName("qa_kin_layers_bake")
+        flat.setToolTip(tr("Все слои — в ключи таймлайна насовсем; слои уходят. "
+                           "Отменяется Ctrl+Z."))
+        flat.clicked.connect(lambda: actions.bake_layers())
+        line.addWidget(flat, 1)
+        self.column.addWidget(row)
+
+        self.column.addWidget(heading(tr("Полоса")))
+        self.title = QLabel()
+        self.title.setObjectName("qa_kin_strip_title")
+        self.title.setStyleSheet(f"color:{theme.SECOND};")
+        self.title.setWordWrap(True)
+        self.column.addWidget(self.title)
+        self.body = QWidget()
+        form = QVBoxLayout(self.body)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(6)
+        self.mode = segments([tr(x) for x in self.MODES], "qa_kin_strip_mode",
+                             lambda i: actions.set_strip_property("mode", self.MODE_KEYS[i]))
+        self.mode.setToolTip(tr(
+            "Замена — клип вместо того, что под ним; сложение — его отход от покоя "
+            "прибавляется; максимум — большее из двух"))
+        form.addWidget(self.mode)
+        numbers = QWidget()
+        grid = QGridLayout(numbers)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(4)
+        self.boxes = {}
+        spec = (("influence", tr("Сила"), 0, 100, "%", 5, 0, 100.0,
+                 tr("Насколько полоса ложится на то, что под ней")),
+                ("start", tr("Начало"), 0, 10 ** 6, tr("кадр"), 1, 0, 1.0,
+                 tr("Кадр, с которого играет")),
+                ("fade_in", tr("Вход"), 0, 10 ** 5, tr("кадров"), 1, 0, 1.0,
+                 tr("Плавный вход: сила растёт от нуля за столько кадров")),
+                ("fade_out", tr("Выход"), 0, 10 ** 5, tr("кадров"), 1, 0, 1.0,
+                 tr("Плавный выход: сила падает к нулю за столько кадров")),
+                ("repeat", tr("Повторы"), 1, 100, "×", 1, 0, 1.0,
+                 tr("Сколько раз подряд играет клип")),
+                ("speed", tr("Скорость"), 10, 1000, "%", 5, 0, 100.0,
+                 tr("Быстрее или медленнее; правый край полосы на таймлайне тянет её же")),
+                ("round", tr("По кругу"), -9, 9, tr("гр."), 1, 0, 1.0,
+                 tr("Сдвиг вокруг здания, целыми группами по пять сот (36°)")),
+                ("rings", tr("По кольцам"), -29, 29, "", 1, 0, 1.0,
+                 tr("Сдвиг вверх или вниз, целыми кольцами")))
+        for place, (name, text, low, high, unit, step, decimals, scale, hint) in enumerate(spec):
+            label = QLabel(text)
+            label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
+            label.setToolTip(hint)
+            box = Scrub(low, high, low, unit, f"qa_kin_strip_{name}", step, decimals)
+            box.setToolTip(hint)
+            box.setMinimumWidth(70)
+            box.scale = scale
+            box.pressed.connect(actions.begin_edit)
+            box.moved.connect(lambda v, name=name, scale=scale: actions.set_strip_value(
+                name, v / scale, live=True))
+            box.released.connect(actions.end_edit)
+            grid.addWidget(label, place // 2, (place % 2) * 2)
+            grid.addWidget(box, place // 2, (place % 2) * 2 + 1)
+            self.boxes[name] = box
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+        form.addWidget(numbers)
+        flags = QWidget()
+        line = QHBoxLayout(flags)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(10)
+        self.flags = {}
+        for name, text, hint in (
+                ("reverse", tr("Обратно"), tr("Играть задом наперёд: ин становится аутом")),
+                ("hold", tr("Держать"), tr("После конца держать последний кадр клипа")),
+                ("muted", tr("Выкл"), tr("Полоса не играет"))):
+            box = QCheckBox(text)
+            box.setObjectName(f"qa_kin_strip_{name}")
+            box.setToolTip(hint)
+            box.toggled.connect(lambda on, name=name: actions.set_strip_property(name, bool(on)))
+            line.addWidget(box)
+            self.flags[name] = box
+        line.addStretch(1)
+        form.addWidget(flags)
+        masking = QWidget()
+        line = QHBoxLayout(masking)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(8)
+        label = QLabel(tr("Маска"))
+        label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
+        line.addWidget(label)
+        self.mask = QComboBox()
+        self.mask.setObjectName("qa_kin_strip_mask")
+        self.mask.currentIndexChanged.connect(self._masked)
+        line.addWidget(self.mask, 1)
+        form.addWidget(masking)
+        acts = QWidget()
+        line = QHBoxLayout(acts)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(6)
+        out = QPushButton(tr("Вынуть в ключи"))
+        out.setObjectName("qa_kin_strip_keys")
+        out.setToolTip(tr("Клип полосы — обратно ключами на таймлайн, как он играет; "
+                          "полоса уходит. Поправить и снова «Ключи в клип»"))
+        out.clicked.connect(lambda: actions.strip_to_keys())
+        line.addWidget(out, 1)
+        drop = QPushButton(tr("Удалить"))
+        drop.setObjectName("qa_kin_strip_drop")
+        drop.setToolTip(tr("Удалить полосу (Delete)"))
+        drop.clicked.connect(lambda: actions.drop_strip())
+        line.addWidget(drop, 1)
+        form.addWidget(acts)
+        self.column.addWidget(self.body)
+
+        self.column.addWidget(heading(tr("Библиотека клипов")))
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(6)
+        self.library = QComboBox()
+        self.library.setObjectName("qa_kin_clip_choice")
+        line.addWidget(self.library, 1)
+        for text, name, call, hint in (
+                (tr("Поставить"), "qa_kin_clip_put", actions.put_clip,
+                 tr("Полосой на выбранный слой, с плейхеда")),
+                ("+", "qa_kin_clip_save", actions.save_clip,
+                 tr("Клип выбранной полосы — в библиотеку рядом с программой")),
+                ("−", "qa_kin_clip_drop", actions.drop_clip, tr("Убрать клип из библиотеки"))):
+            button = QPushButton(text)
+            button.setObjectName(name)
+            button.setToolTip(hint)
+            if text in "+−":
+                button.setFixedWidth(30)
+                button.setStyleSheet("padding:4px 0px;")
+                button.setProperty("fixed_words", True)
+            button.clicked.connect(lambda _=False, call=call: call())
+            line.addWidget(button)
+        self.column.addWidget(row)
+        self.column.addWidget(note(tr(
+            "Ключи на таймлайне лежат поверх слоёв: у мотора со своими ключами играют "
+            "они. Слои играют снизу вверх, примитивы — поверх всего. Симуляция и "
+            "экспорт видят результат.")))
+        self.finish()
+
+    def _masked(self, index: int) -> None:
+        if not self._filling:
+            self.actions.set_strip_property(
+                "mask", "" if index <= 0 else self.mask.itemText(index))
+
+    def refresh(self) -> None:
+        actions = self.actions
+        strip = actions.strip()
+        self._filling = True
+        try:
+            names = actions.clip_names()
+            current = self.library.currentText()
+            self.library.clear()
+            self.library.addItems(names)
+            if current in names:
+                self.library.setCurrentText(current)
+            masks = actions.mask_names()
+            self.mask.clear()
+            self.mask.addItem(tr(Masks.ALL_CELLS))
+            self.mask.addItems(masks)
+            self.body.setEnabled(strip is not None)
+            if strip is None:
+                self.title.setText(tr("Выберите полосу на таймлайне («Слои»)"))
+                return
+            layer = actions.project.layers[actions.strip_key[0]]
+            clip = actions.project.clips.get(strip.clip)
+            end = strip.end(clip) if clip is not None else strip.start
+            self.title.setText(tr("«{0}» на слое «{1}», кадры {2}–{3}", strip.clip,
+                                  layer.name, strip.start, end))
+            self.mode.buttons[self.MODE_KEYS.index(strip.mode)].setChecked(True)
+            for name, box in self.boxes.items():
+                box.set(float(getattr(strip, name)) * box.scale)
+            for name, box in self.flags.items():
+                box.blockSignals(True)
+                box.setChecked(bool(getattr(strip, name)))
+                box.blockSignals(False)
+            self.mask.setCurrentIndex(masks.index(strip.mask) + 1 if strip.mask in masks else 0)
+        finally:
+            self._filling = False

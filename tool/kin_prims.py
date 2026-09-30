@@ -356,8 +356,12 @@ def compose(project: km.Project, base=None) -> km.Project:
     step = max(1, int(getattr(project, "prim_step", km.PRIM_STEP)))
     wanted = _frames_of(primitives, project.length, step)
     theirs = set(wanted)
-    frames = sorted(theirs | set(project.tracks["push"].frames)
-                    | set(project.tracks["tilt"].frames))
+    frames = theirs | set(project.tracks["push"].frames) | set(project.tracks["tilt"].frames)
+    if getattr(project, "layers", None):
+        # What the layers under the keys do moves too: their keys as well.
+        import kin_layers
+        frames |= set(kin_layers.frames(project))
+    frames = sorted(frames)
     frames = [f for f in frames if 0 <= f < project.length]
     masks = getattr(project, "masks", {})
     made = {"push": [], "tilt": []}

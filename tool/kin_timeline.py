@@ -1,12 +1,16 @@
 """The kinetic editor's timeline: the keys of every motor, as deep as wanted.
 
-Two ways to look, and the window switches between them:
+Three ways to look, and the window switches between them:
 
   Простой    three lanes, a family each, and nothing opens: for throwing
              shapes down. It works out only what three lanes show, so it
              stays quick on the longest show
   Подробный  the lanes open like a tree, and each shows where its motors
              move: for working on the keys of a ring, a group, a cell
+  Слои       the layers under the keys, as Blender's NLA (`kin_layers`):
+             the keys in one lane on top, then each layer, the top one
+             first, with its strips -- dragged along and between layers,
+             stretched by their right end, a click on one to set it up
 
 The ruler with the playhead, the sound's waveform under it -- both held at
 the top -- and under them the lanes, which in the detailed view open:
@@ -62,6 +66,9 @@ BAR = 10              # the lanes' scroll bar
 FAMILY_LANE = 28
 SUB_LANE = 20
 PRIM_LANE = 24
+LAYER_LANE = 32
+MUTE = 26             # the layer's switch, at the left of its name
+EDGE = 6              # how near a strip's right end a press stretches it
 INDENT = 14
 CLUSTER = 7           # keys closer than this, in pixels, are one pill
 LONGEST = 60          # and a pill is cut here, so a busy stretch reads as
@@ -72,6 +79,10 @@ FAMILY_COLOUR = {"lift": "#e0605a", "push": "#5fc27a", "tilt": "#5b93e0"}
 FAMILY_NAME = {"lift": "Подъём", "push": "Вынос", "tilt": "Наклон"}
 # A primitive's lane by what it does: pushing out, or pressing in.
 PRIM_COLOUR = {"positive": "#c792ea", "negative": "#56c1c9"}
+# The keys over the layers, and a strip by how it lies on what is under it.
+KEYS_COLOUR = "#e3a04a"
+STRIP_COLOUR = {"replace": "#c9a25c", "add": "#6fb3dc", "max": "#e0876a"}
+MODE_NAME = {"replace": "замена", "add": "сложение", "max": "максимум"}
 
 
 # -- the lanes ----------------------------------------------------------------------
@@ -83,7 +94,9 @@ class Lane:
     `key` names it: (family,), (family, "r", ring), (family, "g", ring,
     group) or (family, "c", ring, cell) -- rings, groups and cells counted
     from zero, a cell by its place round its ring. A primitive's is
-    ("prim", index), its place in the piece's list.
+    ("prim", index), its place in the piece's list; in the layers' view the
+    keys all together are ("keys",) and a layer ("layer", index), counted
+    from the bottom.
     """
 
     key: tuple
@@ -93,25 +106,33 @@ class Lane:
         return self.key[0]
 
     @property
+    def kind(self) -> str:
+        head = self.key[0]
+        return head if head in ("prim", "keys", "layer") else "family"
+
+    @property
     def is_prim(self) -> bool:
         return self.key[0] == "prim"
 
     @property
     def level(self) -> int:
-        if self.is_prim:
+        if self.kind != "family":
             return 0
         return {1: 0, 3: 1, 4: 2}[len(self.key)] if self.key[1:2] != ("c",) else 3
 
     @property
     def height(self) -> int:
-        if self.is_prim:
+        kind = self.kind
+        if kind == "prim":
             return PRIM_LANE
+        if kind == "layer":
+            return LAYER_LANE
         return FAMILY_LANE if self.level == 0 else SUB_LANE
 
     @property
     def opens(self) -> bool:
         """Whether there is anything under it."""
-        if self.is_prim:
+        if self.kind != "family":
             return False
         deepest = {"lift": 1, "push": 2, "tilt": 3}[self.family]
         return self.level < deepest
@@ -119,6 +140,10 @@ class Lane:
     def name(self) -> str:
         if self.is_prim:
             return tr("Примитив {0}", self.key[1] + 1)
+        if self.kind == "keys":
+            return tr("Ключи")
+        if self.kind == "layer":
+            return tr("Слой {0}", self.key[1] + 1)
         if self.level == 0:
             return tr(FAMILY_NAME[self.family])
         ring = self.key[2]
@@ -225,6 +250,11 @@ class KeyTimeline(QWidget):
     moved_keys = Signal(object, int)       # [(lane key, frame), ...], by frames
     lane_picked = Signal(object)           # a lane's key
     prim_picked = Signal(int)              # a primitive's lane pressed
+    layer_picked = Signal(int)             # a layer's name pressed
+    layer_muted = Signal(int)              # its switch
+    strip_picked = Signal(object)          # (layer, strip), or None
+    strip_moved = Signal(object, int, int)       # (layer, strip), to layer, by frames
+    strip_stretched = Signal(object, int)        # (layer, strip), its new length
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -240,6 +270,10 @@ class KeyTimeline(QWidget):
         self.family = "tilt"               # the lane edits go to
         self.prim_active = -1              # the primitive being worked on
         self.detailed = False              # the tree, or three lanes
+        self.layered = False               # the layers' view
+        self.layer_active = -1
+        self.strip_chosen = None           # (layer, strip)
+        self._strip_hits: list = []        # (rect, (layer, strip)) as drawn
         self.expanded: set = set()         # lane keys open, in the tree
         self.chosen: set = set()           # (lane key, frame)
         self.warnings: list = []           # (frame, count)
@@ -328,6 +362,7 @@ class KeyTimeline(QWidget):
         """The tree of lanes, or the three families alone. Keys chosen on a
         ring's or a cell's lane are let go of on the way back to three."""
         self.detailed = bool(on)
+        self.layered = False
         if not self.detailed:
             kept = {(key, frame) for key, frame in self.chosen
                     if len(key) == 1 or key[0] == "prim"}
@@ -335,6 +370,25 @@ class KeyTimeline(QWidget):
                 self.chosen = kept
                 self.chosen_changed.emit()
         self.scroll = 0
+        self._lay_bar()
+        self.update()
+
+    def set_layered(self, on: bool) -> None:
+        """The layers' view, or back to the keys' own."""
+        self.layered = bool(on)
+        if on:
+            self.detailed = False
+            kept = {(key, frame) for key, frame in self.chosen if len(key) == 1}
+            if kept != self.chosen:
+                self.chosen = kept
+                self.chosen_changed.emit()
+        self.scroll = 0
+        self._lay_bar()
+        self.update()
+
+    def set_layer_state(self, active: int, strip) -> None:
+        self.layer_active = int(active)
+        self.strip_chosen = None if strip is None else tuple(strip)
         self._lay_bar()
         self.update()
 
@@ -364,8 +418,13 @@ class KeyTimeline(QWidget):
                 for child in lane.children():
                     add(child)
 
-        for family in km.FAMILIES:
-            add(Lane((family,)))
+        if self.layered:
+            add(Lane(("keys",)))
+            for index in reversed(range(len(getattr(self.project, "layers", ()) or ()))):
+                add(Lane(("layer", index)))
+        else:
+            for family in km.FAMILIES:
+                add(Lane((family,)))
         for index in range(len(getattr(self.project, "primitives", ()) or ())):
             add(Lane(("prim", index)))
         return out
@@ -417,6 +476,16 @@ class KeyTimeline(QWidget):
     def _lane_keys(self, lane: Lane):
         """(frames, full, counts) of the keys on a lane, and its moving
         spans -- each worked out once per change of its family's track."""
+        if lane.kind == "keys":
+            stamp = tuple(track.version for track in self.project.tracks.values())
+            got = self._cache.get(lane.key)
+            if got is not None and got[0] == stamp:
+                return got[1]
+            frames = np.asarray(self.project.key_frames(), np.int64)
+            held = (frames, np.ones(len(frames), bool), np.ones(len(frames), int),
+                    np.zeros((0, 2), np.int64), 1)
+            self._cache[lane.key] = (stamp, held)
+            return held
         if lane.is_prim:
             one = self.project.primitives[lane.key[1]]
             frames = np.asarray(one.frames, np.int64)
@@ -459,6 +528,7 @@ class KeyTimeline(QWidget):
         self._hits = []
         brush.save()
         brush.setClipRect(QRect(0, RULER + WAVE, self.width(), self._room()))
+        self._strip_hits = []
         if self.project is not None:
             for lane, top in self.lanes():
                 screen = RULER + WAVE + top - self.scroll
@@ -541,6 +611,8 @@ class KeyTimeline(QWidget):
     def _colour(self, lane: Lane) -> QColor:
         if lane.is_prim:
             return QColor(PRIM_COLOUR[self._prim(lane).polarity])
+        if lane.kind == "keys":
+            return QColor(KEYS_COLOUR)
         return QColor(FAMILY_COLOUR[lane.family])
 
     def _draw_head(self, brush: QPainter, lane: Lane, top: float) -> None:
@@ -548,6 +620,26 @@ class KeyTimeline(QWidget):
         rect = QRectF(0, top, HEAD, height)
         if lane.is_prim:
             self._draw_prim_head(brush, lane, top)
+            return
+        if lane.kind == "layer":
+            self._draw_layer_head(brush, lane, top)
+            return
+        if lane.kind == "keys":
+            brush.fillRect(rect, QColor(theme.PANEL))
+            brush.setBrush(QColor(KEYS_COLOUR))
+            brush.setPen(Qt.PenStyle.NoPen)
+            brush.drawRoundedRect(QRectF(22, top + height / 2 - 4, 8, 8), 2, 2)
+            brush.setFont(theme.ui(9.5))
+            brush.setPen(QPen(QColor(theme.TEXT)))
+            brush.drawText(QRectF(36, top, HEAD - 76, height),
+                           Qt.AlignmentFlag.AlignVCenter, lane.name())
+            brush.setFont(theme.mono(7.5))
+            brush.setPen(QPen(QColor(theme.QUIET)))
+            brush.drawText(QRectF(HEAD - 40, top, 34, height),
+                           Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                           str(len(self._lane_keys(lane)[0])))
+            brush.setPen(QPen(QColor(theme.LANE_EDGE)))
+            brush.drawLine(QPointF(0, top + height - 0.5), QPointF(HEAD, top + height - 0.5))
             return
         active = lane.level == 0 and lane.family == self.family
         brush.fillRect(rect, QColor(theme.ACCENT if active else theme.PANEL))
@@ -615,7 +707,130 @@ class KeyTimeline(QWidget):
             brush.setPen(QPen(QColor(theme.SEAM), 2))
             brush.drawLine(QPointF(0, top + 1), QPointF(self.width(), top + 1))
 
+    def _layer(self, lane: Lane):
+        return self.project.layers[lane.key[1]]
+
+    def _draw_layer_head(self, brush: QPainter, lane: Lane, top: float) -> None:
+        height = lane.height
+        index = lane.key[1]
+        layer = self._layer(lane)
+        active = index == self.layer_active
+        brush.fillRect(QRectF(0, top, HEAD, height),
+                       QColor(theme.ACCENT if active else theme.PANEL))
+        # Its switch: a dot lit while it plays.
+        brush.setPen(QPen(QColor(theme.SECOND), 1.2))
+        brush.setBrush(QColor(theme.SECOND) if not layer.muted else Qt.BrushStyle.NoBrush)
+        brush.drawEllipse(QPointF(14, top + height / 2), 4.5, 4.5)
+        brush.setFont(theme.ui(9.5))
+        brush.setPen(QPen(QColor(theme.QUIET if layer.muted else theme.TEXT)))
+        brush.drawText(QRectF(MUTE + 4, top, HEAD - MUTE - 44, height),
+                       Qt.AlignmentFlag.AlignVCenter, layer.name or lane.name())
+        brush.setFont(theme.mono(7.5))
+        brush.setPen(QPen(QColor(theme.QUIET)))
+        brush.drawText(QRectF(HEAD - 40, top, 34, height),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                       str(len(layer.strips)))
+        brush.setPen(QPen(QColor(theme.LANE_EDGE)))
+        brush.drawLine(QPointF(0, top + height - 0.5), QPointF(HEAD, top + height - 0.5))
+
+    def _draw_strips(self, brush: QPainter, lane: Lane, top: float) -> None:
+        """A layer's strips: a block each from where it starts to where it
+        ends, its fades as slopes, what it plays and how on it."""
+        import kin_layers
+        height = lane.height
+        index = lane.key[1]
+        brush.fillRect(QRectF(HEAD, top, self.width() - HEAD, height), QColor(theme.LANE_A))
+        if index == self.layer_active:
+            brush.fillRect(QRectF(HEAD, top, self.width() - HEAD, height),
+                           QColor(47, 95, 143, 40))
+        dragging = self._drag if self._drag and self._drag[0] == "strip" else None
+        placed = []
+        for number, strip in enumerate(self.project.layers[index].strips):
+            key = (index, number)
+            start = strip.start
+            clip = self.project.clips.get(strip.clip)
+            length = strip.length(clip) if clip is not None else 1
+            if dragging and dragging[1] == key:
+                continue
+            placed.append((key, strip, clip, start, length))
+        for layer_, number, strip, clip, start, length in self._dragged_here(index):
+            placed.append(((layer_, number), strip, clip, start, length))
+        layers_muted = self.project.layers[index].muted
+        for key, strip, clip, start, length in placed:
+            left, right = self.axis.x_of(start), self.axis.x_of(start + length)
+            if right < HEAD or left > self.width():
+                continue
+            rect = QRectF(left, top + 3, max(3.0, right - left), height - 6)
+            colour = QColor(STRIP_COLOUR.get(strip.mode, STRIP_COLOUR["replace"]))
+            if strip.muted or layers_muted or clip is None:
+                colour = QColor("#5b5d63")
+            fill = QColor(colour)
+            fill.setAlpha(150)
+            chosen = self.strip_chosen == key
+            brush.setPen(QPen(QColor("#ffffff"), 2) if chosen else QPen(colour.darker(160), 1))
+            brush.setBrush(fill)
+            brush.drawRoundedRect(rect, 3, 3)
+            # The fades: the strip's weight rising and falling at its ends.
+            shade = QColor(0, 0, 0, 90)
+            brush.setPen(Qt.PenStyle.NoPen)
+            brush.setBrush(shade)
+            if strip.fade_in > 0:
+                wide = min(rect.width(), strip.fade_in * self.axis.scale)
+                brush.drawPolygon(QPolygonF([rect.topLeft(), QPointF(rect.left() + wide, rect.top()),
+                                             rect.bottomLeft()]))
+            if strip.fade_out > 0:
+                wide = min(rect.width(), strip.fade_out * self.axis.scale)
+                brush.drawPolygon(QPolygonF([rect.topRight(), rect.bottomRight(),
+                                             QPointF(rect.right() - wide, rect.top())]))
+            # Its clip's keys, as it plays them.
+            if clip is not None and rect.width() > 12:
+                tick = QColor(colour.lighter(150))
+                tick.setAlpha(170)
+                brush.setPen(QPen(tick, 1))
+                last = None
+                for frame in sorted(kin_layers._strip_frames(strip, clip)):
+                    x = self.axis.x_of(frame - strip.start + start)
+                    if last is None or x - last >= 3:
+                        brush.drawLine(QPointF(x, rect.bottom() - 5), QPointF(x, rect.bottom() - 1))
+                        last = x
+            said = strip.clip
+            if int(strip.repeat) > 1:
+                said += f" ×{int(strip.repeat)}"
+            if strip.reverse:
+                said += " ⇠"
+            if strip.round or strip.rings:
+                said += f" ↻{strip.round:+d}·↕{strip.rings:+d}"
+            if strip.mask:
+                said += f" [{strip.mask}]"
+            brush.setFont(theme.ui(8.5))
+            brush.setPen(QPen(QColor("#101113")))
+            inner = rect.adjusted(6, 0, -4, 0)
+            brush.drawText(inner, Qt.AlignmentFlag.AlignVCenter,
+                           QFontMetrics(brush.font()).elidedText(
+                               said, Qt.TextElideMode.ElideRight, int(max(0, inner.width()))))
+            self._strip_hits.append((rect, key))
+        self._lane_edge(brush, top, height)
+
+    def _dragged_here(self, index: int) -> list:
+        """The strip being dragged, when it is over this layer: drawn where
+        it would land."""
+        if not (self._drag and self._drag[0] == "strip"):
+            return []
+        _, key, _, to_layer, by, edge, length0 = self._drag
+        if to_layer != index:
+            return []
+        layer, number = key
+        strip = self.project.layers[layer].strips[number]
+        clip = self.project.clips.get(strip.clip)
+        if edge:
+            return [(layer, number, strip, clip, strip.start, max(1, length0 + by))]
+        length = strip.length(clip) if clip is not None else 1
+        return [(layer, number, strip, clip, strip.start + by, length)]
+
     def _draw_lane(self, brush: QPainter, lane: Lane, top: float) -> None:
+        if lane.kind == "layer":
+            self._draw_strips(brush, lane, top)
+            return
         height = lane.height
         shade = [theme.LANE_A, theme.LANE_B, "#1b1c20", "#1e1f23"][lane.level]
         brush.fillRect(QRectF(HEAD, top, self.width() - HEAD, height), QColor(shade))
@@ -634,11 +849,15 @@ class KeyTimeline(QWidget):
             if right < HEAD or left > self.width():
                 continue
             brush.fillRect(QRectF(left, middle - 2, max(1.0, right - left), 4), band)
-        if not lane.is_prim:
+        if lane.kind == "family":
             self._draw_trouble(brush, lane, top)
         # The keys, near ones as one pill.
         moving = self._drag[2] if self._drag and self._drag[0] == "move" else 0
-        chosen = {frame for key, frame in self.chosen if key == lane.key}
+        if lane.kind == "keys":
+            chosen = {frame for key, frame in self.chosen
+                      if len(key) == 1 and key[0] in km.FAMILIES}
+        else:
+            chosen = {frame for key, frame in self.chosen if key == lane.key}
         if not len(frames):
             self._lane_edge(brush, top, height)
             return
@@ -757,6 +976,21 @@ class KeyTimeline(QWidget):
         top = self.project.length - 1 if self.project else 0
         return int(max(0, min(top, round(self.axis.frame_of(x)))))
 
+    def _picked(self, key, frames) -> set:
+        """What a press on keys takes: on the keys' own lane of the layers'
+        view, every family's key on those frames."""
+        if key == ("keys",):
+            return {((family,), frame) for family in km.FAMILIES for frame in frames
+                    if self.project.tracks[family].index(frame) is not None}
+        return {(key, frame) for frame in frames}
+
+    def strip_at(self, point: QPointF):
+        """(rect, (layer, strip)) of the strip under a point, as drawn."""
+        for rect, key in reversed(self._strip_hits):
+            if rect.adjusted(-1, -1, 1, 1).contains(point):
+                return rect, key
+        return None
+
     def hit_at(self, point: QPointF):
         """(lane key, frames) of the key or pill under a point, as drawn."""
         for rect, key, frames in reversed(self._hits):
@@ -792,6 +1026,25 @@ class KeyTimeline(QWidget):
             self.seek.emit(self._frame_at(point.x()))
             return
         found = self._lane_at(point.y())
+        if found is not None and found[0].kind == "layer":
+            lane = found[0]
+            if point.x() < HEAD:
+                if point.x() < MUTE:
+                    self.layer_muted.emit(lane.key[1])
+                else:
+                    self.layer_picked.emit(lane.key[1])
+                return
+            hit = self.strip_at(point)
+            self.strip_picked.emit(hit[1] if hit else None)
+            if hit is not None:
+                rect, key = hit
+                strip = self.project.layers[key[0]].strips[key[1]]
+                clip = self.project.clips.get(strip.clip)
+                length = strip.length(clip) if clip is not None else 1
+                edge = rect.right() - point.x() <= EDGE and rect.width() > 3 * EDGE
+                self._drag = ("strip", key, point.x(), key[0], 0, edge, length)
+            self.update()
+            return
         if point.x() < HEAD:
             if found is not None:
                 lane, _ = found
@@ -804,13 +1057,13 @@ class KeyTimeline(QWidget):
         if found is not None and found[0].is_prim:
             if found[0].key[1] != self.prim_active:
                 self.prim_picked.emit(found[0].key[1])
-        elif found is not None and found[0].family != self.family:
+        elif found is not None and found[0].kind == "family" and found[0].family != self.family:
             self.family_chosen.emit(found[0].family)
         hit = self.hit_at(point)
         mods = event.modifiers()
         if hit is not None:
             key, frames = hit
-            picked = {(key, frame) for frame in frames}
+            picked = self._picked(key, frames)
             if mods & Qt.KeyboardModifier.ControlModifier:
                 self.chosen -= picked
             elif mods & Qt.KeyboardModifier.ShiftModifier:
@@ -845,6 +1098,15 @@ class KeyTimeline(QWidget):
             self._say_under(point)
             return
         kind = self._drag[0]
+        if kind == "strip":
+            _, key, x0, to_layer, _, edge, length0 = self._drag
+            by = int(round((point.x() - x0) / max(self.axis.scale, 1e-9)))
+            found = self._lane_at(point.y())
+            if not edge and found is not None and found[0].kind == "layer":
+                to_layer = found[0].key[1]
+            self._drag = ("strip", key, x0, to_layer, by, edge, length0)
+            self.update()
+            return
         if kind == "seek":
             self.seek.emit(self._frame_at(point.x()))
         elif kind == "move":
@@ -856,12 +1118,34 @@ class KeyTimeline(QWidget):
             self.update()
 
     def _say_under(self, point: QPointF) -> None:
+        strip = self.strip_at(point) if self.layered else None
+        if strip is not None:
+            rect, (layer, number) = strip
+            one = self.project.layers[layer].strips[number]
+            clip = self.project.clips.get(one.clip)
+            end = one.end(clip) if clip is not None else one.start
+            self.setToolTip(tr("{0}: кадры {1}–{2}, {3}, сила {4:.0f} %", one.clip,
+                               one.start, end, tr(MODE_NAME.get(one.mode, one.mode)),
+                               one.influence * 100))
+            near_end = rect.right() - point.x() <= EDGE and rect.width() > 3 * EDGE
+            if near_end:
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
+            else:
+                self.unsetCursor()
+            return
+        if self.layered:
+            self.unsetCursor()
         hit = self.hit_at(point)
         if hit is None or self.project is None:
             self.setToolTip("")
             return
         key, frames = hit
         lane = lane_of(key)
+        if lane.kind == "keys":
+            self.setToolTip(tr("Ключи: кадр {0}", frames[0]) if len(frames) == 1 else
+                            tr("Ключи: {0}, кадры {1}–{2}", len(frames), min(frames),
+                               max(frames)))
+            return
         if lane.is_prim:
             name = self._prim(lane).name
             self.setToolTip(tr("{0}: кадр {1}", name, frames[0]) if len(frames) == 1
@@ -887,6 +1171,15 @@ class KeyTimeline(QWidget):
         if not self._drag:
             return
         kind = self._drag[0]
+        if kind == "strip":
+            _, key, _, to_layer, by, edge, length0 = self._drag
+            self._drag = None
+            if edge and by:
+                self.strip_stretched.emit(key, max(1, length0 + by))
+            elif not edge and (by or to_layer != key[0]):
+                self.strip_moved.emit(key, to_layer, by)
+            self.update()
+            return
         if kind == "move" and self._drag[2]:
             self.moved_keys.emit(sorted(self.chosen), self._drag[2])
         elif kind == "box" and self.project is not None:
@@ -895,7 +1188,7 @@ class KeyTimeline(QWidget):
                 found = set()
                 for rect, key, frames in self._hits:
                     if box.intersects(rect):
-                        found |= {(key, frame) for frame in frames}
+                        found |= self._picked(key, frames)
                 if self._drag[3] & Qt.KeyboardModifier.ControlModifier:
                     self.chosen -= found
                 else:
@@ -906,6 +1199,11 @@ class KeyTimeline(QWidget):
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         point = event.position()
+        strip = self.strip_at(point) if self.layered else None
+        if strip is not None:
+            layer, number = strip[1]
+            self.seek.emit(int(self.project.layers[layer].strips[number].start))
+            return
         if point.x() < HEAD:
             found = self._lane_at(point.y())
             if found is not None and found[0].opens and self.detailed:

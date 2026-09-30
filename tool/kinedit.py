@@ -21,6 +21,12 @@ cells; the brush paints it as well as the keys. The primitives lie over the
 keys (`kin_prims`): the picture shows what they make, and the simulation and
 the export run the piece with them turned into keys.
 
+Under the keys, layers of clips, as Blender's NLA (`kin_layers`): the keys
+go into a clip on a layer of their own, clips are laid along and over each
+other, blended in and out, repeated, reversed, moved round the building, and
+kept in a library beside the program. The keys lie over the layers, and the
+primitives over both; the simulation and the export get the lot as keys.
+
 Every edit is made at the playhead and keys only the motors it touched (see
 `kin_model`). Cinema 4D's limits hold throughout: a jack stands in one of its
 four places, and a cell tilts no further than the gaps beside its ring let
@@ -52,6 +58,7 @@ from rendercanvas.pyside6 import RenderCanvas
 
 import kin_model as km
 import kin_gizmo
+import kin_layers
 import kin_overlay
 import kin_prims
 import kin_sample
@@ -84,12 +91,16 @@ LIFT_LEVEL = np.array([0.0, 33.0 / 130.0, 66.0 / 130.0, 1.0])
 # One layer is worked on at a time, Q W E; the picture shows it alone, or
 # all three together in Houdini's colours with RGB on.
 LAYER_NAMES = ("Подъём", "Вынос", "Наклон")
-TOOLS = ("brush", "select", "profile", "motors", "prims")
-TOOL_NAMES = ("Кисть", "Выбор", "Профиль", "Моторы", "Примитивы")
+TOOLS = ("brush", "select", "profile", "motors", "prims", "layers")
+TOOL_NAMES = ("Кисть", "Выбор", "Профиль", "Моторы", "Примитивы", "Слои")
 TOOL_KEYS = {Qt.Key.Key_B: "brush", Qt.Key.Key_V: "select",
              Qt.Key.Key_P: "profile", Qt.Key.Key_S: "motors",
-             Qt.Key.Key_O: "prims"}
-TOOL_LETTERS = "BVPSO"
+             Qt.Key.Key_O: "prims", Qt.Key.Key_L: "layers"}
+TOOL_LETTERS = "BVPSOL"
+# The tools that are no cells' business: what is chosen and the poses step
+# aside for their own settings.
+OWN_COLUMN = ("prims", "layers")
+CLIPS = "kinedit_clips.json"
 # A mask painted: its weight from the dark of the cells to its own lilac.
 MASK_COLOUR = np.array([0.80, 0.60, 0.95])
 POSES = "kinedit_poses.json"
@@ -97,7 +108,7 @@ POSES = "kinedit_poses.json"
 # of them then a ghost.
 VIEWS = ("keys", "sim", "both")
 VIEW_NAMES = ("Ключи", "Симуляция", "Оба")
-TIMELINE_NAMES = ("Простой", "Подробный")
+TIMELINE_NAMES = ("Простой", "Подробный", "Слои")
 # Selection's three sizes on 1 2 3, as Blender's modes; the layers on Q W E.
 GRAIN_KEYS = {Qt.Key.Key_1: "ring", Qt.Key.Key_2: "group", Qt.Key.Key_3: "cell"}
 GRAIN_NAMES = {"ring": "кольца", "group": "группы", "cell": "отдельные соты"}
@@ -119,7 +130,7 @@ KEYS = [
     ("Delete", "удалить выбранные ключи"),
     ("Ctrl+C / Ctrl+V", "копировать позу слоя / вставить на плейхед"),
     ("Ctrl+Z / Ctrl+Y", "отменить / вернуть"),
-    ("B V P S O", "кисть, выбор, профиль, моторы, примитивы"),
+    ("B V P S O L", "кисть, выбор, профиль, моторы, примитивы, слои"),
     ("1 2 3", "выбор: кольца, группы, соты"),
     ("Q W E", "слой: подъём, вынос, наклон"),
     ("G R H", "тянуть вынос, наклон, подъём выбранного; щелчок — принять, Esc — отменить"),
@@ -270,6 +281,8 @@ class KineticEditor(QMainWindow):
         self._video_cells = None
         self._strip_layers = (None, None, None)
         self._prims_seen = None
+        self.layer_index = -1           # the layer clips are put on
+        self.strip_key = None           # (layer, strip) chosen on the timeline
         # The motors' own motion, worked out a moment after the keys change.
         self.view = "both"
         self.ghost_is = "keys"
@@ -490,6 +503,7 @@ class KineticEditor(QMainWindow):
             "profile": kin_tools.ProfilePanel(self),
             "motors": kin_tools.MotorsPanel(self),
             "prims": kin_tools.PrimsPanel(self),
+            "layers": kin_tools.LayersPanel(self),
         }
         self.panel_stack = QStackedWidget()
         self.panel_stack.setObjectName("qa_kin_panels")
@@ -523,17 +537,23 @@ class KineticEditor(QMainWindow):
         self.timeline.lane_picked.connect(self._lane_picked)
         self.timeline.prim_picked.connect(
             lambda index: self.choose_primitive(index, take_tool=True))
+        self.timeline.layer_picked.connect(self.choose_layer)
+        self.timeline.layer_muted.connect(self.mute_layer)
+        self.timeline.strip_picked.connect(self.choose_strip)
+        self.timeline.strip_moved.connect(self._strip_moved)
+        self.timeline.strip_stretched.connect(self._strip_stretched)
         # The two ways to look, in the corner over the lanes' names.
         self.timeline_mode = kin_tools.segments(
             [tr(one) for one in TIMELINE_NAMES], "qa_kin_timeline_mode",
-            lambda i: self.set_detailed(i == 1), 0)
+            lambda i: self.set_timeline_view(("simple", "detailed", "layers")[i]), 0)
         self.timeline_mode.setParent(self.timeline)
-        self.timeline_mode.setGeometry(6, 4, 178, 24)
+        self.timeline_mode.setGeometry(4, 4, 182, 24)
         self.timeline_mode.setToolTip(tr(
             "Простой — три дорожки, чтобы набрасывать формы; подробный — "
-            "кольца, группы и соты, чтобы работать с частями ключей"))
+            "кольца, группы и соты, чтобы работать с частями ключей; слои — "
+            "клипы под ключами, как NLA в Blender"))
         for button in self.timeline_mode.buttons:
-            button.setStyleSheet("padding:2px 8px; font-size:11.5px;")
+            button.setStyleSheet("padding:2px 4px; font-size:11.5px;")
         column.addWidget(self._transport())
         column.addWidget(self.timeline, 1)
         column.addWidget(self._status_bar())
@@ -758,6 +778,9 @@ class KineticEditor(QMainWindow):
         self.edit_mask = ""
         self.prim_index = 0 if project.primitives else -1
         self.timeline.set_active_primitive(self.prim_index)
+        self.layer_index = len(project.layers) - 1
+        self.strip_key = None
+        self.timeline.set_layer_state(self.layer_index, None)
         self.masks.refresh()
         self.frame = min(self.frame, project.length - 1)
         self.timeline.set_project(project)
@@ -782,7 +805,7 @@ class KineticEditor(QMainWindow):
         What is simulated and exported."""
         key = (id(self.project), self.project.version)
         if self._composed is None or self._composed[0] != key:
-            self._composed = (key, kin_prims.compose(self.project))
+            self._composed = (key, kin_prims.compose(kin_layers.flatten(self.project)))
         return self._composed[1]
 
     def shown_now(self):
@@ -804,6 +827,7 @@ class KineticEditor(QMainWindow):
             self.timeline.set_active_primitive(self.prim_index)
         if self.edit_mask and self.edit_mask not in self.project.masks:
             self.edit_mask = ""
+        self._hold_layer_choice()
         solid, ghost = self._shown()
         if self.solid is not None:
             self.solid.set_cells(kinetic.transforms(
@@ -955,9 +979,16 @@ class KineticEditor(QMainWindow):
             one.on = False
         if baked:
             self.project.changed()
+        # And the layers: they are in the keys now too.
+        for layer in self.project.layers:
+            if not layer.muted:
+                layer.muted = True
+                baked.append(layer)
+        if baked:
+            self.project.changed()
         self.timeline.chosen = set()
         self.status.setText(tr("Симуляция перенесена в ключи") if not baked else
-                            tr("Симуляция перенесена в ключи, примитивы в ней — "
+                            tr("Симуляция перенесена в ключи, примитивы и слои в ней — "
                                "выключены"))
         self._changed(keys=True)
 
@@ -1217,7 +1248,9 @@ class KineticEditor(QMainWindow):
         # The primitives are no cells' business: what is chosen and the poses
         # step aside for them, the masks stay.
         for part in (self.inspector, self.poses):
-            part.setVisible(tool != "prims")
+            part.setVisible(tool not in OWN_COLUMN)
+        if tool == "layers" and not self.timeline.layered:
+            self.set_timeline_view("layers")
         self.unwrap.tool = {"brush": "brush", "prims": "place"}.get(tool, "select")
         self.profile_strip.setVisible(tool == "profile")
         self._under = None
@@ -1321,7 +1354,8 @@ class KineticEditor(QMainWindow):
             return
         track = self.project.tracks[self.family]
         values, mask = km.brush(track, self.frame, weights, self._target(),
-                                self.brush_strength, self.brush_mode)
+                                self.brush_strength, self.brush_mode,
+                                base=self.pose_now()[self.family])
         self._write(self.family, values, mask)
         self._changed()
 
@@ -1587,6 +1621,287 @@ class KineticEditor(QMainWindow):
     def _place_at_cell(self, cell) -> None:
         row, which = cell
         self._place_primitive(float(km.cell_azimuths()[row, which]), float(row))
+
+    # -- layers ---------------------------------------------------------------------------
+
+    def strip(self):
+        """The strip chosen on the timeline, or None."""
+        if self.strip_key is None:
+            return None
+        layer, number = self.strip_key
+        layers = self.project.layers
+        if 0 <= layer < len(layers) and 0 <= number < len(layers[layer].strips):
+            return layers[layer].strips[number]
+        return None
+
+    def _hold_layer_choice(self) -> None:
+        """The layer and the strip chosen, still there after an undo."""
+        count = len(self.project.layers)
+        if self.layer_index >= count or (self.layer_index < 0 and count):
+            self.layer_index = count - 1
+        if self.strip_key is not None and self.strip() is None:
+            self.strip_key = None
+        if (self.timeline.layer_active, self.timeline.strip_chosen) != (
+                self.layer_index, self.strip_key):
+            self.timeline.set_layer_state(self.layer_index, self.strip_key)
+
+    def _layers_changed(self, keys: bool = True) -> None:
+        self.project.changed()
+        self.dirty = True
+        self.timeline.set_layer_state(self.layer_index, self.strip_key)
+        self._changed(keys=keys)
+
+    @staticmethod
+    def _fresh_name(taken, called) -> str:
+        """The first of `called(1)`, `called(2)`... not taken."""
+        number = 1
+        while called(number) in taken:
+            number += 1
+        return called(number)
+
+    def add_layer(self) -> None:
+        self._record()
+        names = {layer.name for layer in self.project.layers}
+        self.project.layers.append(kin_layers.Layer(self._fresh_name(names, lambda n: tr("Слой {0}", n))))
+        self.layer_index = len(self.project.layers) - 1
+        self._layers_changed()
+
+    def drop_layer(self) -> None:
+        if not 0 <= self.layer_index < len(self.project.layers):
+            return
+        self._record()
+        del self.project.layers[self.layer_index]
+        self.layer_index = min(self.layer_index, len(self.project.layers) - 1)
+        self.strip_key = None
+        self._layers_changed()
+
+    def move_layer(self, direction: int) -> None:
+        """The chosen layer up or down the stack."""
+        here = self.layer_index
+        there = here + (1 if direction > 0 else -1)
+        layers = self.project.layers
+        if not (0 <= here < len(layers) and 0 <= there < len(layers)):
+            return
+        self._record()
+        layers[here], layers[there] = layers[there], layers[here]
+        self.layer_index = there
+        if self.strip_key is not None and self.strip_key[0] in (here, there):
+            self.strip_key = (there if self.strip_key[0] == here else here,
+                              self.strip_key[1])
+        self._layers_changed()
+
+    def choose_layer(self, index: int) -> None:
+        self.layer_index = int(index)
+        self.timeline.set_layer_state(self.layer_index, self.strip_key)
+        self._changed()
+
+    def mute_layer(self, index: int) -> None:
+        if not 0 <= index < len(self.project.layers):
+            return
+        self._record()
+        layer = self.project.layers[index]
+        layer.muted = not layer.muted
+        self._layers_changed()
+
+    def choose_strip(self, key) -> None:
+        self.strip_key = None if key is None else tuple(key)
+        if self.strip_key is not None:
+            self.layer_index = self.strip_key[0]
+        self.timeline.set_layer_state(self.layer_index, self.strip_key)
+        if self.tool != "layers":
+            self._choose_tool("layers")
+        self._changed()
+
+    def push_down(self) -> None:
+        """The keys into a clip on a new layer on top -- the chosen keys if
+        any are chosen on the timeline, all of them if not."""
+        chosen = sorted(self.timeline.chosen)
+        parts = self._parts(chosen) if chosen else None
+        self._record()
+        clip = self._fresh_name(self.project.clips, lambda n: tr("Клип {0}", n))
+        layer = self._fresh_name({one.name for one in self.project.layers},
+                                 lambda n: tr("Слой {0}", n))
+        index = kin_layers.push_down(self.project, clip, layer, parts)
+        if index is None:
+            self.undo.pop()
+            self.status.setText(tr("Нет ключей, которые бы что-то двигали"))
+            return
+        self.layer_index, self.strip_key = index, (index, 0)
+        self.timeline.chosen = set()
+        self.set_timeline_view("layers")
+        self.status.setText(tr("Ключи ушли в клип «{0}» на слое «{1}»", clip, layer))
+        self._layers_changed()
+
+    def bake_layers(self) -> None:
+        if not self.project.layers:
+            self.status.setText(tr("Слоёв нет"))
+            return
+        self._record()
+        kin_layers.bake_all(self.project)
+        self.layer_index, self.strip_key = -1, None
+        self.status.setText(tr("Слои сведены в ключи"))
+        self._layers_changed()
+
+    INT_FIELDS = ("start", "fade_in", "fade_out", "repeat", "round", "rings")
+
+    def set_strip_value(self, name: str, value: float, live: bool = False) -> None:
+        """One of the chosen strip's numbers."""
+        strip = self.strip()
+        if strip is None:
+            return
+        if not live:
+            self._record()
+        value = int(round(value)) if name in self.INT_FIELDS else float(value)
+        if name == "repeat":
+            value = max(1, value)
+        if name == "speed":
+            value = max(0.05, value)
+        if name == "influence":
+            value = min(1.0, max(0.0, value))
+        if name in ("start", "fade_in", "fade_out"):
+            value = max(0, value)
+        setattr(strip, name, value)
+        self._layers_changed(keys=not live)
+
+    def set_strip_property(self, name: str, value) -> None:
+        strip = self.strip()
+        if strip is None or getattr(strip, name) == value:
+            return
+        self._record()
+        setattr(strip, name, value)
+        self._layers_changed()
+
+    def strip_to_keys(self) -> None:
+        if self.strip() is None:
+            return
+        self._record()
+        count = kin_layers.to_keys(self.project, *self.strip_key)
+        self.strip_key = None
+        self.status.setText(tr("Клип вынут в ключи: {0} кадров", count))
+        self._layers_changed()
+
+    def drop_strip(self) -> None:
+        if self.strip() is None:
+            return
+        self._record()
+        layer, number = self.strip_key
+        del self.project.layers[layer].strips[number]
+        self.strip_key = None
+        self._layers_changed()
+
+    def _strip_moved(self, key, to_layer: int, by: int) -> None:
+        """A strip dragged along the timeline, and maybe onto another layer."""
+        layer, number = key
+        layers = self.project.layers
+        if not (0 <= layer < len(layers) and 0 <= to_layer < len(layers)):
+            return
+        self._record()
+        strip = layers[layer].strips[number]
+        strip.start = max(0, int(strip.start + by))
+        if to_layer != layer:
+            del layers[layer].strips[number]
+            layers[to_layer].strips.append(strip)
+            number = len(layers[to_layer].strips) - 1
+        self.strip_key = (to_layer, number)
+        self.layer_index = to_layer
+        self._layers_changed()
+
+    def _strip_stretched(self, key, length: int) -> None:
+        """A strip's right end dragged: it plays its clip in that long."""
+        layer, number = key
+        strip = self.project.layers[layer].strips[number]
+        clip = self.project.clips.get(strip.clip)
+        if clip is None:
+            return
+        self._record()
+        strip.speed = max(0.05, clip.length * max(1, int(strip.repeat)) / max(1, int(length)))
+        self.strip_key = (layer, number)
+        self._layers_changed()
+
+    # -- the library of clips, beside the program -------------------------------------------
+
+    def _clip_file(self) -> Path:
+        return logfile.app_dir() / CLIPS
+
+    def _read_clips(self) -> dict:
+        try:
+            data = json.loads(self._clip_file().read_text("utf-8"))
+            return data.get("clips", {}) if isinstance(data, dict) else {}
+        except Exception:  # noqa: BLE001 -- none yet, or broken by hand
+            return {}
+
+    def _write_clips(self, clips: dict) -> None:
+        try:
+            self._clip_file().write_text(json.dumps({"clips": clips}, ensure_ascii=False),
+                                         "utf-8")
+        except OSError as error:
+            logfile.write(f"kinetic editor: clips not written: {error}")
+
+    def clip_names(self) -> list:
+        return sorted(self._read_clips())
+
+    def save_clip(self, name: str | None = None) -> None:
+        """The chosen strip's clip into the library, under a name."""
+        strip = self.strip()
+        if strip is None or strip.clip not in self.project.clips:
+            self.status.setText(tr("Выберите полосу на таймлайне («Слои»)"))
+            return
+        if name is None:
+            from PySide6.QtWidgets import QInputDialog
+            name, ok = QInputDialog.getText(self, APP_NAME, tr("Имя клипа:"),
+                                            text=strip.clip)
+            if not ok:
+                return
+        name = str(name).strip()
+        if not name:
+            return
+        clips = self._read_clips()
+        clips[name] = self.project.clips[strip.clip].to_dict()
+        self._write_clips(clips)
+        self.panels["layers"].refresh()
+        self.panels["layers"].library.setCurrentText(name)
+        self.status.setText(tr("Клип «{0}» в библиотеке", name))
+
+    def put_clip(self, name: str | None = None) -> None:
+        """A clip of the library as a strip on the chosen layer, from the
+        playhead -- a layer made for it when there is none."""
+        name = name or self.panels["layers"].library.currentText()
+        data = self._read_clips().get(name)
+        if not data:
+            self.status.setText(tr("Сначала положите клип в библиотеку"))
+            return
+        clip = kin_layers.Clip.from_dict(data, name)
+        self._record()
+        if not self.project.layers:
+            self.project.layers.append(kin_layers.Layer(tr("Слой {0}", 1)))
+            self.layer_index = 0
+        called = name
+        number = 2
+        while called in self.project.clips and not self.project.clips[called].same(clip):
+            called = f"{name} {number}"
+            number += 1
+        self.project.clips[called] = clip
+        layer = min(max(0, self.layer_index), len(self.project.layers) - 1)
+        strip = kin_layers.Strip(called, self.frame)
+        self.project.layers[layer].strips.append(strip)
+        self.layer_index, self.strip_key = layer, (layer, len(self.project.layers[layer].strips) - 1)
+        # A new piece's rest would cover the clip everywhere: it goes.
+        if kin_layers.resting(self.project):
+            for track in self.project.tracks.values():
+                track.restore(([], [], []))
+        covered = kin_layers.overridden(self.project, strip)
+        self.status.setText(
+            tr("Ключи на таймлайне перекрывают клип на {0} моторах — у них играют "
+               "ключи", covered) if covered else tr("Клип «{0}» поставлен", called))
+        self._layers_changed()
+
+    def drop_clip(self, name: str | None = None) -> None:
+        name = name or self.panels["layers"].library.currentText()
+        clips = self._read_clips()
+        if name in clips:
+            del clips[name]
+            self._write_clips(clips)
+            self.panels["layers"].refresh()
 
     # -- the pose library --------------------------------------------------------------
 
@@ -1892,6 +2207,16 @@ class KineticEditor(QMainWindow):
         if self.settings.get("timeline_detailed") != bool(on):
             self.settings["timeline_detailed"] = bool(on)
             self._write_settings()
+
+    def set_timeline_view(self, view: str) -> None:
+        """Простой, подробный, or the layers -- which takes up their tool."""
+        if view == "layers":
+            self.timeline.set_layered(True)
+            self.timeline_mode.buttons[2].setChecked(True)
+            if self.tool != "layers":
+                self._choose_tool("layers")
+            return
+        self.set_detailed(view == "detailed")
 
     def _lane_picked(self, key) -> None:
         """A lane's name clicked: its family to work on, and its cells
@@ -2281,7 +2606,10 @@ class KineticEditor(QMainWindow):
         elif key == Qt.Key.Key_K:
             self.key_all(shift)
         elif key == Qt.Key.Key_Delete:
-            self.delete_keys()
+            if self.timeline.layered and self.strip() is not None:
+                self.drop_strip()
+            else:
+                self.delete_keys()
         elif key == Qt.Key.Key_M:
             self.set_mask(not self.show_mask)
         elif key in self.MODAL and not shift:
@@ -2543,6 +2871,7 @@ class KineticEditor(QMainWindow):
         self.panels["brush"].show_family(self.family)
         self.panels["motors"]._shown = None
         self.masks.refresh()
+        self.timeline.update()
         self.status.setText("")
         self.settings["language"] = code
         self._write_settings()

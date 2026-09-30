@@ -655,8 +655,6 @@ EN: dict = {
     'Симуляция считается…': 'Simulating…',
     'Простой': 'Simple',
     'Подробный': 'Detailed',
-    'Простой — три дорожки, чтобы набрасывать формы; подробный — кольца, группы и соты, чтобы работать с частями ключей':
-        'Simple: three lanes, for throwing shapes down; detailed: rings, groups and cells, for working on parts of keys',
     'Кольцо {0}': 'Ring {0}',
     'Группа {0} · соты {1}–{2}': 'Group {0} · cells {1}–{2}',
     'Сота {0}': 'Cell {0}',
@@ -729,8 +727,6 @@ EN: dict = {
     'Отменено': 'Put back',
     # -- masks and primitives -------------------------------------------------
     'Примитивы': 'Primitives',
-    'кисть, выбор, профиль, моторы, примитивы':
-        'brush, selection, profile, motors, primitives',
     'Маска {0}': 'Mask {0}',
     'Сфера {0}': 'Sphere {0}',
     'Куб {0}': 'Box {0}',
@@ -822,9 +818,95 @@ EN: dict = {
         "The box's half height",
     'Половина глубины куба, от здания наружу':
         "The box's half depth, out from the building",
-    'Симуляция перенесена в ключи, примитивы в ней — выключены':
-        'The simulation is on the keys; the primitives it had are turned off',
     'Вьюер откроется в «Просмотре» с этой кинетикой и заменит свои строки {0}: то, что в них загружено сейчас, придётся открыть заново. Открыть во вьюере?':
         'The viewer opens in Quick look with this kinetic and replaces its rows {0}: what they hold now will have to be opened again. Open in the viewer?',
     'Открыть во вьюере': 'Open in the viewer',
+    # -- layers ----------------------------------------------------------------
+    'Слои': 'Layers',
+    'кисть, выбор, профиль, моторы, примитивы, слои':
+        'brush, selection, profile, motors, primitives, layers',
+    'Простой — три дорожки, чтобы набрасывать формы; подробный — кольца, группы и соты, чтобы работать с частями ключей; слои — клипы под ключами, как NLA в Blender':
+        "Simple: three lanes, for throwing shapes down; detailed: rings, groups and cells, for working on parts of keys; layers: clips under the keys, as Blender's NLA",
+    'Ключи ушли в клип «{0}» на слое «{1}»':
+        'The keys went into clip “{0}” on layer “{1}”',
+    'Слои сведены в ключи': 'The layers are baked into the keys',
+    'Клип вынут в ключи: {0} кадров': 'The clip is back as keys: {0} frames',
+    'Клип «{0}» в библиотеке': 'Clip “{0}” is in the library',
+    'Симуляция перенесена в ключи, примитивы и слои в ней — выключены':
+        'The simulation is on the keys; the primitives and layers it had are turned off',
+    'Нет ключей, которые бы что-то двигали': 'No keys that move anything',
+    'Слоёв нет': 'There are no layers',
+    'Выберите полосу на таймлайне («Слои»)': 'Choose a strip on the timeline (Layers)',
+    'Имя клипа:': 'Clip name:',
+    'Сначала положите клип в библиотеку': 'Put a clip in the library first',
+    'Ключи на таймлайне перекрывают клип на {0} моторах — у них играют ключи':
+        'The keys on the timeline cover the clip on {0} motors; those play their keys',
+    'Клип «{0}» поставлен': 'Clip “{0}” is placed',
+    'Слой {0}': 'Layer {0}',
+    'Клип {0}': 'Clip {0}',
+    'Замена': 'Override',
+    'Сложение': 'Add',
+    'Максимум': 'Max',
+    'Ключи в клип': 'Keys into a clip',
+    'Ключи с таймлайна — выбранные, если есть, иначе все — уходят в клип на новом слое сверху, как Push Down в Blender':
+        'The keys on the timeline (the chosen ones if any, else all) go into a clip on a new layer on top, as Push Down in Blender',
+    'Свести в ключи': 'Bake into keys',
+    'Все слои — в ключи таймлайна насовсем; слои уходят. Отменяется Ctrl+Z.':
+        "Every layer into the timeline's keys for good; the layers go. Ctrl+Z undoes it.",
+    'Замена — клип вместо того, что под ним; сложение — его отход от покоя прибавляется; максимум — большее из двух':
+        'Override: the clip instead of what is under it; add: its distance from rest is added; max: the larger of the two',
+    'Вынуть в ключи': 'Back into keys',
+    'Клип полосы — обратно ключами на таймлайн, как он играет; полоса уходит. Поправить и снова «Ключи в клип»':
+        "The strip's clip back onto the timeline as keys, as it plays; the strip goes. Change it, then Keys into a clip again",
+    'Удалить полосу (Delete)': 'Delete the strip (Delete)',
+    '+ Слой': '+ Layer',
+    'Новый слой сверху': 'A new layer on top',
+    'Удалить слой со всеми полосами': 'Delete the layer with all its strips',
+    'Слой выше': 'Layer up',
+    'Слой ниже': 'Layer down',
+    'Полоса': 'Strip',
+    'Насколько полоса ложится на то, что под ней':
+        'How strongly the strip lies on what is under it',
+    'Начало': 'Start',
+    'кадр': 'frame',
+    'Кадр, с которого играет': 'The frame it plays from',
+    'Вход': 'In',
+    'Плавный вход: сила растёт от нуля за столько кадров':
+        'Fade in: its strength rises from nothing over so many frames',
+    'Выход': 'Out',
+    'Плавный выход: сила падает к нулю за столько кадров':
+        'Fade out: its strength falls to nothing over so many frames',
+    'Повторы': 'Repeats',
+    'Сколько раз подряд играет клип': 'How many times over the clip plays',
+    'Скорость': 'Speed',
+    'Быстрее или медленнее; правый край полосы на таймлайне тянет её же':
+        "Faster or slower; the strip's right end on the timeline pulls the same",
+    'По кругу': 'Round',
+    'гр.': 'gr.',
+    'Сдвиг вокруг здания, целыми группами по пять сот (36°)':
+        'Moved round the building by whole groups of five cells (36°)',
+    'По кольцам': 'Up/down',
+    'Сдвиг вверх или вниз, целыми кольцами': 'Moved up or down by whole rings',
+    'Обратно': 'Reverse',
+    'Играть задом наперёд: ин становится аутом': 'Played backwards: an in becomes an out',
+    'Держать': 'Hold',
+    'После конца держать последний кадр клипа': "Hold the clip's last frame after its end",
+    'Выкл': 'Off',
+    'Полоса не играет': 'The strip does not play',
+    'Библиотека клипов': 'Clip library',
+    'Полосой на выбранный слой, с плейхеда':
+        'As a strip on the chosen layer, from the playhead',
+    'Клип выбранной полосы — в библиотеку рядом с программой':
+        "The chosen strip's clip into the library beside the program",
+    'Убрать клип из библиотеки': 'Take the clip out of the library',
+    'Ключи на таймлайне лежат поверх слоёв: у мотора со своими ключами играют они. Слои играют снизу вверх, примитивы — поверх всего. Симуляция и экспорт видят результат.':
+        'The keys on the timeline lie over the layers: a motor with keys of its own plays them. The layers play from the bottom up, the primitives over everything. The simulation and the export see the result.',
+    '«{0}» на слое «{1}», кадры {2}–{3}': '“{0}” on layer “{1}”, frames {2}–{3}',
+    'замена': 'override',
+    'сложение': 'add',
+    'максимум': 'max',
+    '{0}: кадры {1}–{2}, {3}, сила {4:.0f} %':
+        '{0}: frames {1}–{2}, {3}, strength {4:.0f} %',
+    'Ключи: кадр {0}': 'Keys: frame {0}',
+    'Ключи: {0}, кадры {1}–{2}': 'Keys: {0}, frames {1}–{2}',
 }

@@ -142,6 +142,7 @@ class Track:
         self.keyed: list[np.ndarray] = []      # flat bool: which it keys
         self.version = 0
         self._cache = None
+        self._any = None
 
     # -- undo --------------------------------------------------------------
 
@@ -226,6 +227,15 @@ class Track:
 
     def keyed_count(self, index: int) -> int:
         return int(self.keyed[index].sum())
+
+    def keyed_any(self) -> np.ndarray:
+        """Which motors have a key at all, flat: the ones this track says
+        anything about -- over the layers under it, those it overrides."""
+        if self._any is None or self._any[0] != self.version:
+            keyed = self._stacked()[2]
+            self._any = (self.version, keyed.any(axis=0) if len(keyed)
+                         else np.zeros(self.size, bool))
+        return self._any[1]
 
     # -- changing ----------------------------------------------------------
 
@@ -420,6 +430,32 @@ def over_limit(tilt, lift, push=None) -> np.ndarray:
     return (tilt > high + 1e-4) | (tilt < low - 1e-4)
 
 
+# -- keys in the file -----------------------------------------------------------
+
+def tracks_to_dict(tracks: dict) -> dict:
+    """A family's keys as the project file keeps them: a frame, the values,
+    and which motors it keys as a string of 0 and 1."""
+    out = {}
+    for family, track in tracks.items():
+        out[family] = [{
+            "frame": int(frame),
+            "values": [round(float(v), 5) for v in values],
+            "keyed": "".join("1" if k else "0" for k in keyed),
+        } for frame, values, keyed in zip(track.frames, track.values, track.keyed)]
+    return out
+
+
+def tracks_from_dict(data: dict, tracks: dict, called: str) -> None:
+    for family in FAMILIES:
+        track = tracks[family]
+        for key in (data or {}).get(family, []):
+            values = np.asarray(key["values"], np.float32)
+            keyed = np.frombuffer(key["keyed"].encode("ascii"), np.uint8) == ord("1")
+            if values.size != track.size or keyed.size != track.size:
+                raise ModelError(tr("{0}: ключ не того размера", called))
+            track.write(int(key["frame"]), values, keyed)
+
+
 # -- a whole piece -----------------------------------------------------------
 
 class Project:
@@ -441,8 +477,13 @@ class Project:
         self.masks: dict = {}
         self.primitives: list = []
         self.prim_step = PRIM_STEP
-        # Bumped by whatever changes the masks or the primitives, which have
-        # no versions of their own.
+        # The layers under the keys, as Blender's NLA (`kin_layers`): the
+        # clips by name, and the layers from the bottom up, each with its
+        # strips -- where a clip plays, how, and how strongly.
+        self.clips: dict = {}
+        self.layers: list = []
+        # Bumped by whatever changes the masks, the primitives or the layers,
+        # which have no versions of their own.
         self.revision = 0
         if not empty:
             for family in FAMILIES:
@@ -451,7 +492,13 @@ class Project:
                             np.ones(track.size, bool))
 
     def pose(self, frame: float) -> dict:
-        return {family: self.tracks[family].at(frame) for family in FAMILIES}
+        """Where every motor is at a frame: its keys where it has any, the
+        layers under them where it has none."""
+        keys = {family: self.tracks[family].at(frame) for family in FAMILIES}
+        if not self.layers:
+            return keys
+        import kin_layers
+        return kin_layers.under_keys(self, frame, keys)
 
     def key_frames(self) -> list[int]:
         """Every frame any track has a key on."""
@@ -476,16 +523,23 @@ class Project:
         return found
 
     def state(self):
+        # A clip is never changed once made, so the clips are kept as they
+        # are; the layers and their strips are, and are copied.
         return ({family: track.state() for family, track in self.tracks.items()},
                 self.length, dict(self.profiles), dict(self.masks),
-                [one.state() for one in self.primitives], self.prim_step)
+                [one.state() for one in self.primitives], self.prim_step,
+                dict(self.clips), [one.state() for one in self.layers])
 
     def restore(self, state) -> None:
+        import kin_layers
         import kin_prims
-        tracks, self.length, profiles, masks, primitives, self.prim_step = state
+        (tracks, self.length, profiles, masks, primitives, self.prim_step,
+         clips, layers) = state
         self.profiles = dict(profiles)
         self.masks = dict(masks)
         self.primitives = [kin_prims.Primitive.from_state(one) for one in primitives]
+        self.clips = dict(clips)
+        self.layers = [kin_layers.Layer.from_state(one) for one in layers]
         for family, one in tracks.items():
             self.tracks[family].restore(one)
         self.revision += 1
@@ -502,17 +556,7 @@ class Project:
     # -- the project file ---------------------------------------------------
 
     def to_dict(self) -> dict:
-        tracks = {}
-        for family, track in self.tracks.items():
-            keys = []
-            for frame, values, keyed in zip(track.frames, track.values,
-                                            track.keyed):
-                keys.append({
-                    "frame": int(frame),
-                    "values": [round(float(v), 5) for v in values],
-                    "keyed": "".join("1" if k else "0" for k in keyed),
-                })
-            tracks[family] = keys
+        tracks = tracks_to_dict(self.tracks)
         return {
             "format": FORMAT, "version": VERSION, "fps": FPS,
             "name": self.name, "length": self.length,
@@ -524,6 +568,8 @@ class Project:
                       for name, weights in self.masks.items()},
             "primitives": [one.to_dict() for one in self.primitives],
             "prim_step": int(self.prim_step),
+            "clips": {name: clip.to_dict() for name, clip in self.clips.items()},
+            "layers": [one.state() for one in self.layers],
         }
 
     def save(self, path: str | Path) -> None:
@@ -551,15 +597,7 @@ class Project:
         media = data.get("media") or {}
         project.video = _absolute(media.get("video", ""), path.parent)
         project.sound = _absolute(media.get("sound", ""), path.parent)
-        for family in FAMILIES:
-            track = project.tracks[family]
-            for key in (data.get("tracks") or {}).get(family, []):
-                values = np.asarray(key["values"], np.float32)
-                keyed = np.frombuffer(key["keyed"].encode("ascii"),
-                                      np.uint8) == ord("1")
-                if values.size != track.size or keyed.size != track.size:
-                    raise ModelError(tr("{0}: ключ не того размера", path.name))
-                track.write(int(key["frame"]), values, keyed)
+        tracks_from_dict(data.get("tracks"), project.tracks, path.name)
         project.profiles = {int(frame): points for frame, points
                             in (data.get("profiles") or {}).items()}
         import kin_prims
@@ -574,8 +612,18 @@ class Project:
         except (KeyError, TypeError, ValueError) as error:
             raise ModelError(f"{path.name}: {error}") from error
         project.prim_step = int(data.get("prim_step") or PRIM_STEP)
+        import kin_layers
+        try:
+            project.clips = {str(name): kin_layers.Clip.from_dict(one, path.name)
+                             for name, one in (data.get("clips") or {}).items()}
+            project.layers = [kin_layers.Layer.from_state(one)
+                              for one in data.get("layers") or []]
+        except (KeyError, TypeError, ValueError) as error:
+            raise ModelError(f"{path.name}: {error}") from error
         for family in FAMILIES:
-            if not len(project.tracks[family]):
+            # A family with no keys at all is a piece from before there were
+            # any -- unless there are layers, where empty keys are the point.
+            if not len(project.tracks[family]) and not project.layers:
                 track = project.tracks[family]
                 track.write(0, np.full(track.size, REST[family]),
                             np.ones(track.size, bool))
@@ -819,7 +867,7 @@ def spread(family: str, values) -> np.ndarray:
 
 
 def brush(track: Track, frame: int, weights, target: float,
-          strength: float = 1.0, mode: str = "paint"):
+          strength: float = 1.0, mode: str = "paint", base=None):
     """One dab of the brush on a family: (values, which motors it keys).
 
     `weights` is how much of the brush each cell is under, 0..1. A cell
@@ -831,11 +879,14 @@ def brush(track: Track, frame: int, weights, target: float,
     contributing its own ripple makes the pusher shiver.
 
     A jack has four places, so it goes to the target outright once the brush
-    covers its ring past half, and stays otherwise.
+    covers its ring past half, and stays otherwise. `base` is where the
+    motors stand now -- the layers under the keys included -- when it is
+    not the track's own curve.
     """
     weights = np.clip(np.asarray(weights, np.float32).reshape(ROWS, PER_ROW),
                       0.0, 1.0) * float(strength)
-    base = track.at(frame).reshape(-1).astype(np.float32)
+    base = (track.at(frame) if base is None else np.asarray(base)).reshape(-1).astype(
+        np.float32)
     if mode == "erase":
         target, mode = REST[track.family], "paint"
     if track.family == "lift":
