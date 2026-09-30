@@ -271,6 +271,49 @@ class Track:
             self.keyed[at] = self.keyed[at] | mask
         self._changed()
 
+    def merge(self, frames, values, keyed) -> None:
+        """Many keys at once: what `write` does for each of them, but in one
+        go -- a piece turned into keys writes hundreds of frames, and each
+        `write` looks the whole track over again. (K,) frames, (K, size)
+        values, and which motors each keys. The lowest ring's jack is left
+        to what it had: it has none."""
+        frames = np.asarray(frames, np.int64).reshape(-1)
+        if not len(frames):
+            return
+        values = self._legal(np.asarray(values, np.float32).reshape(len(frames), self.size))
+        keyed = np.asarray(keyed, bool).reshape(len(frames), self.size).copy()
+        if self.family == "lift" and READING == "machine":
+            keyed[:, NO_JACK] = False
+        order = np.argsort(frames, kind="stable")
+        frames, values, keyed = frames[order], values[order], keyed[order]
+        old = np.asarray(self.frames, np.int64)
+        every = np.union1d(old, frames)
+        count = len(every)
+        table = np.zeros((count, self.size), np.float32)
+        which = np.zeros((count, self.size), bool)
+        if len(old):
+            at = np.searchsorted(every, old)
+            table[at] = np.stack(self.values)
+            which[at] = np.stack(self.keyed)
+        at = np.searchsorted(every, frames)
+        table[at] = np.where(keyed, values, table[at])
+        which[at] |= keyed
+        # A slot no motor is keyed in says what the motor holds there, as a
+        # key made by `write` does; the curve never reads it.
+        rows = np.arange(count)[:, None]
+        before = np.maximum.accumulate(np.where(which, rows, -1), axis=0)
+        after = np.minimum.accumulate(np.where(which, rows, count)[::-1], axis=0)[::-1]
+        source = np.where(before >= 0, before, np.where(after < count, after, -1))
+        columns = np.arange(self.size)[None, :]
+        held = np.where(source >= 0, table[np.clip(source, 0, count - 1), columns],
+                        REST[self.family])
+        table = np.where(which, table, held).astype(np.float32)
+        live = which.any(axis=1)
+        self.frames = [int(f) for f in every[live]]
+        self.values = [table[k] for k in np.nonzero(live)[0]]
+        self.keyed = [which[k] for k in np.nonzero(live)[0]]
+        self._changed()
+
     def _legal(self, values: np.ndarray) -> np.ndarray:
         low, high = RANGE[self.family]
         values = np.clip(values, low, high)
@@ -336,14 +379,12 @@ class Track:
         mine = np.nonzero(keyed[:, motor])[0] if len(frames) else []
         if len(mine) == 0:
             return REST[self.family], []
-        first = float(values[mine[0], motor])
-        out = []
-        for a, b in zip(mine[:-1], mine[1:]):
-            start, dest = float(values[a, motor]), float(values[b, motor])
-            if abs(dest - start) < 1e-6:
-                continue
-            out.append((int(frames[a]), start, dest, int(frames[b] - frames[a])))
-        return first, out
+        at = frames[mine]
+        held = values[mine, motor].astype(np.float64)
+        moves = np.nonzero(np.abs(np.diff(held)) >= 1e-6)[0]
+        out = list(zip(at[moves].tolist(), held[moves].tolist(), held[moves + 1].tolist(),
+                       (at[moves + 1] - at[moves]).tolist()))
+        return float(held[0]), out
 
 
 # -- the limits ---------------------------------------------------------------
@@ -555,6 +596,17 @@ class Project:
     def changed(self) -> None:
         """The masks or the primitives were changed."""
         self.revision += 1
+
+    def copy(self) -> "Project":
+        """A piece of its own with everything this one has, to work on
+        elsewhere -- on another thread -- while this one goes on changing.
+        Cheap: the keys' arrays are never changed in place, so they are
+        shared rather than copied."""
+        other = Project(self.length, empty=True)
+        other.restore(self.state())
+        other.name, other.video, other.sound, other.path = (self.name, self.video,
+                                                            self.sound, self.path)
+        return other
 
     @property
     def version(self) -> tuple:

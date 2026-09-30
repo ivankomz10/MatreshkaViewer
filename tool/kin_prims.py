@@ -484,13 +484,16 @@ def compose(project: km.Project, base=None) -> km.Project:
         near[1:] |= hit[:-1]
         near[:-1] |= hit[1:]
         source = project.tracks[family]
-        track = out.tracks[family]
+        when, rows, masks = [], [], []
         for i, frame in enumerate(frames):
             at = source.index(frame)
             own = source.keyed[at] if at is not None else np.zeros(source.size, bool)
             need = ever & (own | hit[i] | (near[i] & is_theirs[i]))
             if need.any():
-                track.write(frame, made[family][i], need)
+                when.append(frame)
+                rows.append(made[family][i])
+                masks.append(need)
+        out.tracks[family].merge(when, rows, masks)
     return out
 
 

@@ -52,67 +52,93 @@ def _needed(family: str, a: float, b: float, full_frames: float) -> int:
 
 def carried(family: str, first: float, moves: list, full_frames: float,
             rest_frames: float) -> bool:
-    """Whether the machine carries out a motor's commands as they are."""
-    here, free_at = float(first), -math.inf
-    for frame, _start, dest, length in moves:
-        if frame < free_at:
-            return False
-        if abs(_travel(family, dest) - _travel(family, here)) < 1e-6:
-            continue
-        took = max(int(length), _needed(family, here, dest, full_frames))
-        if took > length + kin_sim.LATE_SLACK:
-            return False
-        here = float(dest)
-        free_at = frame + took + rest_frames
-    return True
+    """Whether the machine carries out a motor's commands as they are:
+    none of them late, none coming before the motor is free. With nothing
+    dropped, each move starts where the one before ended, so all of it is
+    read at once."""
+    if not moves:
+        return True
+    frame, start, dest, length = np.asarray(moves, np.float64).T
+    distance = np.abs(np.asarray(kin_sim.travel(family, np.round(dest, 4)))
+                      - np.asarray(kin_sim.travel(family, np.round(start, 4))))
+    live = distance >= 1e-6
+    frame, length, distance = frame[live], length[live], distance[live]
+    if not len(frame):
+        return True
+    needed = np.maximum(1, (distance * full_frames + 1e-6).astype(np.int64))
+    took = np.maximum(length.astype(np.int64), needed)
+    if (took > length + kin_sim.LATE_SLACK).any():
+        return False
+    return not (frame[1:] < (frame + took + rest_frames)[:-1]).any()
+
+
+def _travels(family: str, values) -> list:
+    """Many values as distances along the travel, as plain numbers."""
+    values = np.round(np.asarray(values, np.float64), 4)
+    return np.asarray(kin_sim.travel(family, values), np.float64).tolist()
 
 
 def pieces(frames, values, family: str, tolerance: float = TOLERANCE):
     """A motor's keys as runs and holds: [("run", f0, v0, f1, v1) or
     ("hold", f0, f1, v)], in order. Keys within FLAT of each other stand; a
     run smaller than the tolerance is swallowed."""
-    frames = [int(f) for f in frames]
-    values = [float(v) for v in values]
-    items = []
-    for k in range(len(frames) - 1):
-        a, b = values[k], values[k + 1]
-        if abs(_travel(family, b) - _travel(family, a)) <= FLAT:
-            kind, sign = "hold", 0
+    frames = np.asarray(frames, np.int64)
+    values = np.asarray(values, np.float64)
+    if len(frames) < 2:
+        return []
+    along = np.asarray(_travels(family, values))
+    step = np.diff(along)
+    kinds = np.where(np.abs(step) <= FLAT, 0, np.sign(step)).astype(np.int64)
+    # Each stretch of one kind -- standing, going up, going down -- is one.
+    cuts = np.nonzero(np.diff(kinds))[0] + 1
+    firsts = np.concatenate([[0], cuts]).tolist()
+    lasts = np.concatenate([cuts, [len(kinds)]]).tolist()
+    frame_list, value_list, along_list = frames.tolist(), values.tolist(), along.tolist()
+    kinds = kinds.tolist()
+
+    def small(item) -> bool:
+        return item[0] == "run" and abs(item[6] - item[7]) < tolerance
+
+    def join_holds(out) -> None:
+        while len(out) >= 2 and out[-1][0] == out[-2][0] == "hold":
+            last = out.pop()
+            out[-1] = ("hold", out[-1][1], out[-1][2], last[3], out[-1][4], 0,
+                       out[-1][6], last[7])
+
+    def settle(out) -> None:
+        """The one before the last now has both its neighbours: a wiggle
+        under the tolerance joins a run there and back, or stands."""
+        if len(out) < 2 or not small(out[-2]):
+            return
+        middle, after = out[-2], out[-1]
+        before = out[-3] if len(out) >= 3 else None
+        if (before is not None and before[0] == after[0] == "run"
+                and before[5] == after[5] != middle[5]):
+            del out[-3:]
+            out.append(("run", before[1], before[2], after[3], after[4], before[5],
+                        before[6], after[7]))
         else:
-            kind, sign = "run", 1 if b > a else -1
-        last = items[-1] if items else None
-        if last is not None and last[0] == kind and last[5] == sign:
-            items[-1] = (kind, last[1], last[2], frames[k + 1], b, sign)
-        else:
-            items.append((kind, frames[k], a, frames[k + 1], b, sign))
-    # A wiggle under the tolerance: one of three runs going there and back
-    # joins them; alone between holds it is part of the hold.
-    changed = True
-    while changed:
-        changed = False
-        for n, item in enumerate(items):
-            if item[0] != "run":
-                continue
-            if abs(_travel(family, item[4]) - _travel(family, item[2])) >= tolerance:
-                continue
-            before = items[n - 1] if n > 0 else None
-            after = items[n + 1] if n + 1 < len(items) else None
-            if (before and after and before[0] == after[0] == "run"
-                    and before[5] == after[5] != item[5]):
-                items[n - 1:n + 2] = [("run", before[1], before[2], after[3], after[4],
-                                       before[5])]
-            else:
-                items[n] = ("hold", item[1], item[2], item[3], item[2], 0)
-            changed = True
-            break
-    # Holds side by side are one.
-    out = []
-    for item in items:
-        if out and out[-1][0] == item[0] == "hold":
-            out[-1] = ("hold", out[-1][1], out[-1][2], item[3], out[-1][4], 0)
-        else:
-            out.append(item)
-    return out
+            out[-2] = ("hold", middle[1], middle[2], middle[3], middle[2], 0,
+                       middle[6], middle[6])
+            last = out.pop()
+            join_holds(out)
+            out.append(last)
+            join_holds(out)
+
+    out: list = []
+    for first, last in zip(firsts, lasts):
+        kind = kinds[first]
+        item = ("hold" if kind == 0 else "run", frame_list[first], value_list[first],
+                frame_list[last], value_list[last], kind, along_list[first],
+                along_list[last])
+        out.append(item)
+        join_holds(out)
+        settle(out)
+    if out and small(out[-1]):
+        end = out[-1]
+        out[-1] = ("hold", end[1], end[2], end[3], end[2], 0, end[6], end[6])
+        join_holds(out)
+    return [one[:6] for one in out]
 
 
 def plan_motor(family: str, frames, values, full_frames: float, rest_frames: float,
@@ -201,9 +227,9 @@ def plan(project, pace: dict | None = None, tolerance: float = TOLERANCE):
                                                   np.zeros(track.size, bool)))
                 slot[0][motor] = value
                 slot[1][motor] = True
-        target = out.tracks[family]
-        for frame in sorted(written):
-            values_at, mask = written[frame]
-            target.write(frame, values_at, mask)
+        if written:
+            when = sorted(written)
+            out.tracks[family].merge(when, [written[f][0] for f in when],
+                                     [written[f][1] for f in when])
     out.planned = touched
     return out

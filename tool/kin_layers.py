@@ -338,12 +338,18 @@ def flatten(project):
     for family in km.FAMILIES:
         out.tracks[family].restore(project.tracks[family].state())
     own = {family: project.tracks[family].keyed_any() for family in km.FAMILIES}
+    made = {family: ([], [], []) for family in km.FAMILIES}
     for frame, motors in sorted(wants(project).items()):
         pose = project.pose(frame)
         for family in km.FAMILIES:
             need = motors[family] & ~own[family]
             if need.any():
-                out.tracks[family].write(frame, pose[family].reshape(-1), need)
+                when, rows, masks = made[family]
+                when.append(frame)
+                rows.append(pose[family].reshape(-1))
+                masks.append(need)
+    for family, (when, rows, masks) in made.items():
+        out.tracks[family].merge(when, rows, masks)
     return out
 
 

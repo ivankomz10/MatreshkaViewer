@@ -1162,3 +1162,32 @@ def test_noise_from_the_panel(fresh, tick):
     assert fresh.primitive().seed == 42
     fresh.touch()
     tick(0.1)
+
+
+def test_the_motion_is_worked_out_while_the_window_goes_on(fresh, tick):
+    import time
+    import kin_prims as kp
+    fresh.add_primitive("noise")
+    fresh.set_prim_value(kp.OFFSET, 0.4)
+    fresh.sim_timer.stop()
+    assert fresh.simulation() is None
+    started = time.perf_counter()
+    fresh._resimulate_later()
+    handed = time.perf_counter() - started
+    assert fresh._job is not None and handed < 0.2, handed
+    # An edit while it counts: that count is thrown away and made again.
+    fresh.go_to(300)
+    fresh.set_prim_value(kp.OFFSET, 0.2)
+    fresh.sim_timer.stop()
+    fresh._resimulate_later()
+    for _ in range(300):
+        tick(0.05)
+        if fresh.simulation() is not None and fresh._job is None:
+            break
+    result = fresh.simulation()
+    assert result is not None, "never worked out"
+    assert fresh._sim_for == fresh._sim_key()
+    assert not result.dropped                    # the plan's, for this piece
+    panel = fresh.panels["motors"]
+    panel.refresh()
+    assert "считается" not in panel.summary.text()

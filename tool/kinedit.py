@@ -45,6 +45,7 @@ import math
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -230,6 +231,20 @@ def weight_colours(weights) -> np.ndarray:
     return dark * (1 - weights[..., None]) + MASK_COLOUR * weights[..., None]
 
 
+def work_out_motion(project, pace: dict):
+    """Everything the motors' motion needs, worked out off the window's
+    thread on a copy of the piece: what it means as keys, the plan of moves
+    made of that, the simulation of the plan, the keys past their limits.
+    (desired, composed, simulation, warnings, seconds)."""
+    started = time.perf_counter()
+    desired = kin_prims.compose(kin_layers.flatten(project))
+    composed = (kin_plan.plan(desired, pace, project.tolerance) if project.plan
+                else desired)
+    result = kin_sim.simulate(composed, pace)
+    warnings = desired.violations()
+    return desired, composed, result, warnings, time.perf_counter() - started
+
+
 class KineticEditor(QMainWindow):
     def __init__(self, open_path: str | None = None,
                  language: str | None = None) -> None:
@@ -297,7 +312,18 @@ class KineticEditor(QMainWindow):
         self._sim_pose = None
         self.sim_timer = QTimer(self)
         self.sim_timer.setSingleShot(True)
-        self.sim_timer.timeout.connect(self._resimulate)
+        self.sim_timer.timeout.connect(self._resimulate_later)
+        # The motion is worked out on a thread of its own, one piece at a
+        # time, and looked for every few hundredths of a second: the window
+        # goes on while it counts, and a count overtaken by an edit is thrown
+        # away and made again.
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="kinetic-motion")
+        self._job = None                # (key, future) under way
+        self._job_again = False
+        self._job_timer = QTimer(self)
+        self._job_timer.setInterval(30)
+        self._job_timer.timeout.connect(self._job_check)
+        self.warnings: list = []
         self.clock = player.Clock()
         self.clock.rate = float(km.FPS)
         self.stream = None
@@ -816,8 +842,9 @@ class KineticEditor(QMainWindow):
             self._pose_cache = (key, self.project.pose(self.frame))
         return self._pose_cache[1]
 
-    def _say_warnings(self) -> None:
-        warnings = self.desired().violations()
+    def _say_warnings(self, warnings=None) -> None:
+        warnings = self.desired().violations() if warnings is None else warnings
+        self.warnings = list(warnings)
         self.timeline.set_warnings(warnings)
         self.warn_button.setText(tr("Вне предела: {0}", len(warnings)) if warnings else "")
         self.warn_button.setVisible(bool(warnings))
@@ -885,12 +912,8 @@ class KineticEditor(QMainWindow):
         self.timeline.set_frame(self.frame)
         if keys:
             self.dirty = self.dirty or bool(self.undo)
-            # With primitives or layers the piece has to be turned into keys
-            # first, which takes a moment: then it is said with the motion.
-            fresh_ = self._desired is not None and self._desired[0] == (
-                id(self.project), self.project.version)
-            if fresh_ or not (self.project.primitives or self.project.layers):
-                self._say_warnings()
+            # The keys past their limits come with the motion, worked out
+            # away from the window; until then the last ones stand.
             self.timeline.update()
             self._say_title()
             self.sim_timer.start(SIM_WAIT_MS)
@@ -925,17 +948,63 @@ class KineticEditor(QMainWindow):
                 tuple(sorted(self.pace.items())))
 
     def _resimulate(self) -> None:
+        """The motion now, waited for: what an explicit step -- putting it
+        onto the keys -- needs before it can go on."""
         if self.simulation() is not None:
             return
-        started = time.perf_counter()
+        key = self._sim_key()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            self.sim = kin_sim.simulate(self.composed(), self.pace)
+            if self._job is not None and self._job[0] == key:
+                got = self._job[1].result()
+            else:
+                got = work_out_motion(self.project, dict(self.pace))
         finally:
             QApplication.restoreOverrideCursor()
-        self._sim_for = self._sim_key()
+        self._install(key, *got)
+
+    def _resimulate_later(self) -> None:
+        """The motion worked out on its own thread, the window going on."""
+        if self.simulation() is not None:
+            return
+        if self._job is not None:
+            self._job_again = True
+            return
+        key = self._sim_key()
+        future = self._pool.submit(work_out_motion, self.project.copy(), dict(self.pace))
+        self._job = (key, future)
+        self._job_timer.start()
+        self.panels["motors"].refresh()
+
+    def _job_check(self) -> None:
+        if self._job is None:
+            self._job_timer.stop()
+            return
+        key, future = self._job
+        if not future.done():
+            return
+        self._job_timer.stop()
+        self._job = None
+        try:
+            got = future.result()
+        except Exception as error:  # noqa: BLE001 -- said, and the window goes on
+            logfile.write(f"kinetic editor: motion not worked out: {error!r}")
+            self.status.setText(tr("Симуляция не посчиталась: {0}", str(error)[:80]))
+            return
+        if key == self._sim_key() and self.simulation() is None:
+            self._install(key, *got)
+        if self._job_again or key != self._sim_key():
+            self._job_again = False
+            self._resimulate_later()
+
+    def _install(self, key, desired, composed, result, warnings, took) -> None:
+        """A worked-out motion, taken up: its keys, its plan, its simulation
+        and its warnings, all for the piece as it stood."""
+        self._desired = (key[:2], desired)
+        self._composed = (key, composed)
+        self.sim = result
+        self._sim_for = key
         self._sim_pose = None
-        took = time.perf_counter() - started
         counts = self.sim.by_family()
         dropped = sum(one["dropped"] for one in counts.values())
         late = sum(one["late"] for one in counts.values())
@@ -943,7 +1012,7 @@ class KineticEditor(QMainWindow):
                       f"{dropped} dropped, {late} late, "
                       f"{len(self.sim.clashes)} frames past the gaps")
         self.timeline.set_simulation(self.sim)
-        self._say_warnings()
+        self._say_warnings(warnings)
         if dropped or late or self.sim.clashes:
             self.status.setText(tr(
                 "Моторы: пропущено команд {0}, опоздали ходов {1}, наклон сверх "
@@ -952,8 +1021,10 @@ class KineticEditor(QMainWindow):
         self._changed()
 
     def sim_pose(self):
-        result = self.simulation()
-        if result is None:
+        """Where the motors are at the playhead, as simulated -- the last
+        motion worked out for this piece, while the next is counted."""
+        result = self.sim
+        if result is None or not self._sim_for or self._sim_for[0] != id(self.project):
             return None
         key = (self._sim_for, self.frame)
         if self._sim_pose is None or self._sim_pose[0] != key:
@@ -976,7 +1047,7 @@ class KineticEditor(QMainWindow):
         self.view = view
         self.view_choice.buttons[VIEWS.index(view)].setChecked(True)
         if view != "keys" and self.simulation() is None:
-            self._resimulate()
+            self._resimulate_later()
         self._changed()
 
     def set_ghost(self, which: str) -> None:
@@ -2341,7 +2412,7 @@ class KineticEditor(QMainWindow):
                 self.go_to(earlier[-1])
 
     def next_warning(self) -> None:
-        found = [frame for frame, _ in self.desired().violations()]
+        found = [frame for frame, _ in self.warnings]
         if not found:
             return
         later = [f for f in found if f > self.frame]
@@ -2981,6 +3052,9 @@ class KineticEditor(QMainWindow):
         if not self._unsaved_ok():
             event.ignore()
             return
+        self.sim_timer.stop()
+        self._job_timer.stop()
+        self._pool.shutdown(wait=False, cancel_futures=True)
         if self.stream is not None:
             self.stream.stop()
         if self.player is not None:

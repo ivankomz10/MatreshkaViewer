@@ -949,4 +949,5 @@ EN: dict = {
         'How far the noise tilts the cells, either way',
     '{0}: на всех сотах; как он меняется — его ключами':
         '{0}: on every cell; how it changes, by its keys',
+    'Симуляция не посчиталась: {0}': 'The simulation could not be worked out: {0}',
 }
