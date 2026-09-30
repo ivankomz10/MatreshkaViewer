@@ -12,6 +12,9 @@ the gap under the ring is open. Click one to put the jack there, or draw
 down the column to put a run of rings there at once. The lowest ring stands
 on the base and has none.
 
+With the primitives' tool, a press puts the chosen primitive where it is
+pressed, and a drag carries it; its centre is ringed.
+
 Distances are in cells: across, one cell is 7.2 degrees; up, one ring is
 0.866 of that, the honeycomb's own pitch (27.8 cm over 31.8 cm on the
 building). The brush and the selection are both measured in them, which is
@@ -79,6 +82,7 @@ class Unwrap(QWidget):
     jack_set = Signal(int, int)        # ring, state
     jacks_finished = Signal()
     view_changed = Signal()            # zoomed or moved: the vase follows
+    placed = Signal(float, float)      # the primitives' tool: azimuth, ring
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -92,7 +96,8 @@ class Unwrap(QWidget):
         self.selection = np.zeros((ROWS, PER_ROW), bool)
         self.warn = np.zeros((ROWS, PER_ROW), bool)
         self.lag = np.zeros((ROWS, PER_ROW), bool)
-        self.tool = "brush"            # brush | select
+        self.tool = "brush"            # brush | select | place
+        self.marker = None             # the chosen primitive's centre, (across, up)
         self.radius = 2.5              # cells
         self.hardness = 0.5
         self.grain = "cell"            # cell | group | ring: what a click takes
@@ -131,6 +136,22 @@ class Unwrap(QWidget):
     def set_selection(self, cells) -> None:
         self.selection = np.asarray(cells, bool).reshape(ROWS, PER_ROW)
         self.update()
+
+    def set_marker(self, azimuth=None, ring=None) -> None:
+        """Where the chosen primitive stands, drawn as a ring; None for none."""
+        if azimuth is None:
+            self.marker = None
+        else:
+            across = ((self.front + 180.0 - azimuth) % 360.0) / 360.0 * PER_ROW
+            self.marker = (across, float(ring) * RING_PITCH)
+        self.update()
+
+    def spot(self, point: QPointF):
+        """(azimuth in degrees, ring) of a point on the widget: where a
+        primitive put there stands."""
+        across, up = self.to_cells(point)
+        return ((self.front + 180.0 - across / PER_ROW * 360.0) % 360.0,
+                up / RING_PITCH)
 
     def set_lift(self, lift) -> None:
         """Where each ring's jack stands now, for its column."""
@@ -321,6 +342,18 @@ class Unwrap(QWidget):
             brush.setPen(QPen(QColor(theme.LINE), 1, Qt.PenStyle.DashLine))
             brush.setBrush(QColor(106, 166, 222, 30))
             brush.drawRect(QRectF(first, last).normalized())
+        if self.marker is not None:
+            centre = self.to_screen(*self.marker)
+            reach = max(6.0, size * 0.9)
+            brush.setBrush(Qt.BrushStyle.NoBrush)
+            brush.setPen(QPen(QColor(0, 0, 0, 160), 4))
+            brush.drawEllipse(centre, reach, reach)
+            brush.setPen(QPen(QColor("#ffffff"), 2))
+            brush.drawEllipse(centre, reach, reach)
+            brush.drawLine(QPointF(centre.x() - reach * 0.5, centre.y()),
+                           QPointF(centre.x() + reach * 0.5, centre.y()))
+            brush.drawLine(QPointF(centre.x(), centre.y() - reach * 0.5),
+                           QPointF(centre.x(), centre.y() + reach * 0.5))
         if self.tool == "brush" and self._pointer is not None:
             brush.setPen(QPen(QColor(255, 255, 255, 200), 1))
             brush.setBrush(Qt.BrushStyle.NoBrush)
@@ -377,6 +410,9 @@ class Unwrap(QWidget):
         if self.tool == "brush":
             self.stroke_started.emit()
             self.dabbed.emit(self._weights(point))
+        elif self.tool == "place":
+            self.stroke_started.emit()
+            self.placed.emit(*self.spot(point))
         else:
             self._box = (point, point)
             self.update()
@@ -405,6 +441,8 @@ class Unwrap(QWidget):
         if self._pressed is not None:
             if self.tool == "brush":
                 self.dabbed.emit(self._weights(point))
+            elif self.tool == "place":
+                self.placed.emit(*self.spot(point))
             else:
                 self._box = (self._pressed, point)
         self.update()
@@ -421,7 +459,7 @@ class Unwrap(QWidget):
         if event.button() != Qt.MouseButton.LeftButton or self._pressed is None:
             return
         point = event.position()
-        if self.tool == "brush":
+        if self.tool in ("brush", "place"):
             self.stroke_finished.emit()
         else:
             first = self._pressed

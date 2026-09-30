@@ -11,8 +11,15 @@ without either.
                 red the jacks, green the pushers, blue the tilts, as
                 Houdini's PMR -- or one family at a time
   the strip     the same cells unrolled, all fifteen hundred at once
-  the tools     brush, selection, the vase's profile, the rings
-  the timeline  a lane of keys a family, and the sound under them
+  the tools     brush, selection, the vase's profile, the motors, and the
+                primitives -- spheres and boxes the honeycomb wraps
+  the timeline  a lane of keys a family, a lane a primitive, and the sound
+                under them
+
+A mask chosen beside the poses keeps every edit made at the playhead to its
+cells; the brush paints it as well as the keys. The primitives lie over the
+keys (`kin_prims`): the picture shows what they make, and the simulation and
+the export run the piece with them turned into keys.
 
 Every edit is made at the playhead and keys only the motors it touched (see
 `kin_model`). Cinema 4D's limits hold throughout: a jack stands in one of its
@@ -39,13 +46,14 @@ from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QComboBox,
                                QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout,
                                QLabel, QLineEdit, QMainWindow, QMessageBox,
-                               QPushButton, QSplitter, QStackedWidget,
-                               QVBoxLayout, QWidget)
+                               QPushButton, QScrollArea, QSplitter,
+                               QStackedWidget, QVBoxLayout, QWidget)
 from rendercanvas.pyside6 import RenderCanvas
 
 import kin_model as km
 import kin_gizmo
 import kin_overlay
+import kin_prims
 import kin_sim
 import kin_tools
 import kinetic
@@ -57,7 +65,8 @@ import scene3d
 import screen_gpu
 import sound
 import theme
-from kin_timeline import FAMILY_COLOUR, FAMILY_NAME, KeyTimeline, lane_of
+from kin_timeline import (FAMILY_COLOUR, FAMILY_NAME, PRIM_COLOUR, KeyTimeline,
+                          lane_of)
 from kin_unwrap import Unwrap, brush_weights
 from kinetic import PER_PUSHER, PER_ROW, ROWS
 from lang import tr
@@ -74,10 +83,14 @@ LIFT_LEVEL = np.array([0.0, 33.0 / 130.0, 66.0 / 130.0, 1.0])
 # One layer is worked on at a time, Q W E; the picture shows it alone, or
 # all three together in Houdini's colours with RGB on.
 LAYER_NAMES = ("Подъём", "Вынос", "Наклон")
-TOOLS = ("brush", "select", "profile", "motors")
-TOOL_NAMES = ("Кисть", "Выбор", "Профиль", "Моторы")
+TOOLS = ("brush", "select", "profile", "motors", "prims")
+TOOL_NAMES = ("Кисть", "Выбор", "Профиль", "Моторы", "Примитивы")
 TOOL_KEYS = {Qt.Key.Key_B: "brush", Qt.Key.Key_V: "select",
-             Qt.Key.Key_P: "profile", Qt.Key.Key_S: "motors"}
+             Qt.Key.Key_P: "profile", Qt.Key.Key_S: "motors",
+             Qt.Key.Key_O: "prims"}
+TOOL_LETTERS = "BVPSO"
+# A mask painted: its weight from the dark of the cells to its own lilac.
+MASK_COLOUR = np.array([0.80, 0.60, 0.95])
 POSES = "kinedit_poses.json"
 # What the picture shows: the keys, the motors' own motion, or both -- one
 # of them then a ghost.
@@ -105,7 +118,7 @@ KEYS = [
     ("Delete", "удалить выбранные ключи"),
     ("Ctrl+C / Ctrl+V", "копировать позу слоя / вставить на плейхед"),
     ("Ctrl+Z / Ctrl+Y", "отменить / вернуть"),
-    ("B V P S", "кисть, выбор, профиль, моторы"),
+    ("B V P S O", "кисть, выбор, профиль, моторы, примитивы"),
     ("1 2 3", "выбор: кольца, группы, соты"),
     ("Q W E", "слой: подъём, вынос, наклон"),
     ("G R H", "тянуть вынос, наклон, подъём выбранного; щелчок — принять, Esc — отменить"),
@@ -115,6 +128,11 @@ KEYS = [
     ("ПКМ по карте", "сдвиг; колесо — ближе; двойной ПКМ — вся карта"),
     ("?", "эта подсказка"),
 ]
+
+
+def to_rgb(colour: str):
+    """'#rrggbb' as three 0..1."""
+    return tuple(int(colour[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
 
 
 def _divider() -> QFrame:
@@ -192,6 +210,13 @@ def mask_colours(pose: dict, layer: str) -> np.ndarray:
     return np.where((tilt >= 0)[..., None], cold, warm)
 
 
+def weight_colours(weights) -> np.ndarray:
+    """A mask's weights as the cells' colours, (ROWS, PER_ROW, 3)."""
+    weights = np.clip(np.asarray(weights, np.float32).reshape(ROWS, PER_ROW), 0, 1)
+    dark = np.array([0.10, 0.105, 0.115])
+    return dark * (1 - weights[..., None]) + MASK_COLOUR * weights[..., None]
+
+
 class KineticEditor(QMainWindow):
     def __init__(self, open_path: str | None = None,
                  language: str | None = None) -> None:
@@ -232,6 +257,15 @@ class KineticEditor(QMainWindow):
         self._modal = None              # G, R, H under way
         self.overlay = None
         self._hover = None
+        # Masks and primitives: the mask edits are kept to, what the brush
+        # paints, the primitive worked on.
+        self.edit_mask = ""
+        self.brush_target = "keys"
+        self.prim_index = -1
+        self._edit_base = None          # the pose an edit under way began at
+        self._composed = None
+        self._shown_cache = None
+        self._prims_seen = None
         # The motors' own motion, worked out a moment after the keys change.
         self.view = "both"
         self.ghost_is = "keys"
@@ -408,6 +442,7 @@ class KineticEditor(QMainWindow):
         self.unwrap.jacks_started.connect(self.begin_edit)
         self.unwrap.jack_set.connect(self._set_jack)
         self.unwrap.jacks_finished.connect(self.end_edit)
+        self.unwrap.placed.connect(self._place_primitive)
         across.addWidget(self.unwrap, 1)
         # The vase stands beside the strip, ring for ring, in its own tool.
         self.profile_strip = kin_tools.ProfileStrip(self.unwrap)
@@ -429,6 +464,8 @@ class KineticEditor(QMainWindow):
         stacked.addWidget(self.inspector)
         self.poses = kin_tools.Poses(self)
         stacked.addWidget(self.poses)
+        self.masks = kin_tools.Masks(self)
+        stacked.addWidget(self.masks)
         seam = QFrame()
         seam.setFixedHeight(1)
         seam.setStyleSheet(f"background:{theme.SEAM};")
@@ -438,11 +475,24 @@ class KineticEditor(QMainWindow):
             "select": kin_tools.SelectPanel(self),
             "profile": kin_tools.ProfilePanel(self),
             "motors": kin_tools.MotorsPanel(self),
+            "prims": kin_tools.PrimsPanel(self),
         }
         self.panel_stack = QStackedWidget()
         self.panel_stack.setObjectName("qa_kin_panels")
+        # Each panel scrolls when the column is shorter than it.
+        self.panel_pages = {}
         for tool in TOOLS:
-            self.panel_stack.addWidget(self.panels[tool])
+            scroll = QScrollArea()
+            scroll.setObjectName(f"qa_kin_page_{tool}")
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.setStyleSheet("QScrollArea { background: transparent; }")
+            scroll.viewport().setAutoFillBackground(False)
+            self.panels[tool].setAutoFillBackground(False)
+            scroll.setWidget(self.panels[tool])
+            self.panel_pages[tool] = scroll
+            self.panel_stack.addWidget(scroll)
         stacked.addWidget(self.panel_stack, 1)
         across.addWidget(side)
         right.addWidget(upper)
@@ -457,6 +507,8 @@ class KineticEditor(QMainWindow):
         self.timeline.moved_keys.connect(self._move_keys)
         self.timeline.chosen_changed.connect(self._say_keys)
         self.timeline.lane_picked.connect(self._lane_picked)
+        self.timeline.prim_picked.connect(
+            lambda index: self.choose_primitive(index, take_tool=True))
         # The two ways to look, in the corner over the lanes' names.
         self.timeline_mode = kin_tools.segments(
             [tr(one) for one in TIMELINE_NAMES], "qa_kin_timeline_mode",
@@ -593,13 +645,13 @@ class KineticEditor(QMainWindow):
         column.setContentsMargins(6, 10, 6, 10)
         column.setSpacing(6)
         self.tool_buttons = {}
-        for tool, text, key in zip(TOOLS, TOOL_NAMES, "BVPS"):
+        for tool, text, key in zip(TOOLS, TOOL_NAMES, TOOL_LETTERS):
             button = QPushButton(tr(text))
             button.setObjectName(f"qa_kin_tool_{tool}")
             button.setCheckable(True)
             button.setToolTip(key)
             button.setFixedHeight(40)
-            button.setStyleSheet("padding:5px 2px;")
+            button.setStyleSheet("padding:5px 0px; font-size:11.5px;")
             button.clicked.connect(lambda _=False, tool=tool: self._choose_tool(tool))
             column.addWidget(button)
             self.tool_buttons[tool] = button
@@ -685,6 +737,10 @@ class KineticEditor(QMainWindow):
         self.project = project
         self.undo, self.redo = [], []
         self.dirty = False
+        self.edit_mask = ""
+        self.prim_index = 0 if project.primitives else -1
+        self.timeline.set_active_primitive(self.prim_index)
+        self.masks.refresh()
         self.frame = min(self.frame, project.length - 1)
         self.timeline.set_project(project)
         self.length_box.setValue(project.length / km.FPS)
@@ -703,11 +759,33 @@ class KineticEditor(QMainWindow):
             self._pose_cache = (key, self.project.pose(self.frame))
         return self._pose_cache[1]
 
+    def composed(self):
+        """The piece as the motors will run it: its primitives in its keys.
+        What is simulated and exported."""
+        key = (id(self.project), self.project.version)
+        if self._composed is None or self._composed[0] != key:
+            self._composed = (key, kin_prims.compose(self.project))
+        return self._composed[1]
+
+    def shown_now(self):
+        """The piece at the playhead with its primitives over its keys."""
+        key = (id(self.project), self.project.version, self.frame)
+        if self._shown_cache is None or self._shown_cache[0] != key:
+            self._shown_cache = (key, kin_prims.pose_at(self.project, self.frame,
+                                                        self.pose_now()))
+        return self._shown_cache[1]
+
     def profile_here(self):
         return self.project.profiles.get(self.frame)
 
     def _changed(self, keys: bool = False) -> None:
         """Something about the piece or the playhead moved: say it all again."""
+        count = len(self.project.primitives)
+        if self.prim_index >= count or (self.prim_index < 0 and count):
+            self.prim_index = count - 1
+            self.timeline.set_active_primitive(self.prim_index)
+        if self.edit_mask and self.edit_mask not in self.project.masks:
+            self.edit_mask = ""
         solid, ghost = self._shown()
         if self.solid is not None:
             self.solid.set_cells(kinetic.transforms(
@@ -720,7 +798,7 @@ class KineticEditor(QMainWindow):
         self.timeline.set_frame(self.frame)
         if keys:
             self.dirty = self.dirty or bool(self.undo)
-            warnings = self.project.violations()
+            warnings = self.composed().violations()
             self.timeline.set_warnings(warnings)
             self.warn_button.setText(tr("Вне предела: {0}", len(warnings))
                                      if warnings else "")
@@ -729,6 +807,9 @@ class KineticEditor(QMainWindow):
             self._say_title()
             self.sim_timer.start(SIM_WAIT_MS)
         self.inspector.refresh()
+        if keys:
+            self.masks.refresh()
+            self.timeline._lay_bar()
         self.panels[self.tool].refresh()
         if self.tool == "profile":
             strip = self.profile_strip
@@ -761,7 +842,7 @@ class KineticEditor(QMainWindow):
         started = time.perf_counter()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            self.sim = kin_sim.simulate(self.project, self.pace)
+            self.sim = kin_sim.simulate(self.composed(), self.pace)
         finally:
             QApplication.restoreOverrideCursor()
         self._sim_for = self._sim_key()
@@ -792,7 +873,7 @@ class KineticEditor(QMainWindow):
 
     def _shown(self):
         """(what the cells are drawn at, what the ghost is drawn at or None)."""
-        keys = self.pose_now()
+        keys = self.shown_now()
         motion = self.sim_pose() if self.view != "keys" else None
         if motion is None:
             return keys, None
@@ -850,8 +931,16 @@ class KineticEditor(QMainWindow):
         for family in km.FAMILIES:
             self.project.tracks[family].restore(
                 result.project.tracks[family].state())
+        # The motion had the primitives in it: they are in the keys now.
+        baked = [one for one in self.project.primitives if one.on]
+        for one in baked:
+            one.on = False
+        if baked:
+            self.project.changed()
         self.timeline.chosen = set()
-        self.status.setText(tr("Симуляция перенесена в ключи"))
+        self.status.setText(tr("Симуляция перенесена в ключи") if not baked else
+                            tr("Симуляция перенесена в ключи, примитивы в ней — "
+                               "выключены"))
         self._changed(keys=True)
 
     def _paint(self) -> None:
@@ -861,9 +950,28 @@ class KineticEditor(QMainWindow):
         ones of what the cells are drawn at; on the strip the cells whose
         motion is not where the keys want it are ringed."""
         pose, _ = self._shown()
-        colours = mask_colours(pose, self.layer)
+        painting_mask = self.tool == "brush" and self.brush_target == "mask"
+        if painting_mask:
+            colours = weight_colours(self.mask_weights())
+        else:
+            colours = mask_colours(pose, self.layer)
         over = np.zeros((ROWS, PER_ROW, 4), np.float32)
         warn = km.over_limit(pose["tilt"], pose["lift"], pose["push"])
+        if self.edit_mask and not painting_mask:
+            # What the edits cannot reach, darkened by how far out of it.
+            out = 1.0 - self.mask_weights().reshape(ROWS, PER_ROW)
+            over[..., 3] = out * 0.62
+        one = self.primitive() if self.tool == "prims" else None
+        if one is not None:
+            touched = kin_prims.touched_cells(self.project, one, self.frame)
+            lilac = np.array(to_rgb(PRIM_COLOUR[one.polarity]), np.float32)
+            over[touched, :3] = lilac
+            over[touched, 3] = 0.45
+            values = one.at(self.frame)
+            self.unwrap.set_marker(float(values[kin_prims.AZIMUTH]),
+                                   float(values[kin_prims.HEIGHT]))
+        else:
+            self.unwrap.set_marker(None)
         over[warn] = (0.95, 0.25, 0.25, 0.75)
         if self._under is not None:
             weight = self._under
@@ -873,7 +981,7 @@ class KineticEditor(QMainWindow):
         lag = None
         result = self.simulation()
         if result is not None and self.view != "keys":
-            lag = kin_sim.differs(self.project, result.project, self.frame)
+            lag = kin_sim.differs(self.composed(), result.project, self.frame)
         self.unwrap.set_colours(colours, over, warn, lag)
         self.unwrap.set_lift(pose["lift"])
         self.unwrap.set_selection(self.selection)
@@ -905,17 +1013,72 @@ class KineticEditor(QMainWindow):
         width, height = surface.size[0], surface.size[1]
         encoder = self.device.create_command_encoder()
         self.solid.draw(encoder, view, width, height)
-        # The handles, over the picture: worked out where the cells stand now.
+        # The handles and the primitives, over the picture: worked out where
+        # the cells stand now.
         self._rebuild_handles()
-        if self.handles and self.overlay is not None:
+        if self.overlay is not None and (self.handles or self._prims_drawn()):
             wide, tall = self.canvas.get_logical_size()
             shapes = kin_overlay.Shapes(wide, tall)
+            self._draw_prims(shapes)
             kin_gizmo.draw(shapes, self.handles, self._hot)
             self.overlay.set_triangles(shapes.array())
             self.overlay.draw(encoder, view)
         self.device.queue.submit([encoder.finish()])
         if self.clock.playing:
             self.canvas.request_draw()
+
+    def _prims_drawn(self) -> bool:
+        return (self.tool == "prims" and bool(self.project.primitives)
+                and self.mesh is not None)
+
+    def prim_outline(self, one, values=None) -> list:
+        """A primitive's wire in world metres: a list of polylines -- three
+        great circles of a sphere, the twelve edges of a box."""
+        values = one.at(self.frame) if values is None else values
+        lift = self.shown_now()["lift"]
+        centre, e_out, e_round, e_up = kin_prims.frame_of(values, self.base_heights,
+                                                          lift)
+        if one.kind == "sphere":
+            radius = float(values[kin_prims.WIDTH])
+            turn = np.linspace(0, 2 * np.pi, 49)[:, None]
+            return [centre + radius * (np.cos(turn) * a + np.sin(turn) * b)
+                    for a, b in ((e_out, e_round), (e_out, e_up), (e_round, e_up))]
+        half = (values[kin_prims.DEPTH], values[kin_prims.WIDTH], values[kin_prims.TALL])
+        corner = {}
+        for i in (-1, 1):
+            for j in (-1, 1):
+                for k in (-1, 1):
+                    corner[i, j, k] = (centre + i * half[0] * e_out + j * half[1] * e_round
+                                       + k * half[2] * e_up)
+        lines = []
+        for i, j, k in corner:
+            for axis in range(3):
+                other = [i, j, k]
+                if other[axis] < 0:
+                    other[axis] = 1
+                    lines.append(np.array([corner[i, j, k], corner[tuple(other)]]))
+        return lines
+
+    def _draw_prims(self, shapes) -> None:
+        if not self._prims_drawn():
+            return
+        transform = self.mesh.view_projection().astype(np.float64)
+        wide, tall = self.canvas.get_logical_size()
+        for index, one in enumerate(self.project.primitives):
+            chosen = index == self.prim_index
+            colour = list(to_rgb(PRIM_COLOUR[one.polarity])) + [0.95 if chosen else 0.45]
+            if not one.on:
+                colour = [0.6, 0.6, 0.6, 0.35]
+            width = 2.2 if chosen else 1.4
+            for line in self.prim_outline(one):
+                clip = np.concatenate([line, np.ones((len(line), 1))], axis=1) @ transform.T
+                seen = clip[:, 3] > 1e-3
+                points = self._project(line, transform, wide, tall)
+                for a in range(len(points) - 1):
+                    if seen[a] and seen[a + 1]:
+                        shapes.line(points[a], points[a + 1], width + 2.0,
+                                    (0.0, 0.0, 0.0, 0.4))
+                        shapes.line(points[a], points[a + 1], width, colour)
 
     def _feed_video(self) -> None:
         stream = self.stream
@@ -1001,9 +1164,11 @@ class KineticEditor(QMainWindow):
         if not self._editing:
             self._record()
             self._editing = True
+            self._edit_base = (self.frame, self.project.pose(self.frame))
 
     def end_edit(self) -> None:
         self._editing = False
+        self._edit_base = None
         self._changed(keys=True)
 
     def _step_undo(self, back: bool) -> None:
@@ -1025,8 +1190,12 @@ class KineticEditor(QMainWindow):
         self.tool = tool
         for name, button in self.tool_buttons.items():
             button.setChecked(name == tool)
-        self.panel_stack.setCurrentWidget(self.panels[tool])
-        self.unwrap.tool = "brush" if tool == "brush" else "select"
+        self.panel_stack.setCurrentWidget(self.panel_pages[tool])
+        # The primitives are no cells' business: what is chosen and the poses
+        # step aside for them, the masks stay.
+        for part in (self.inspector, self.poses):
+            part.setVisible(tool != "prims")
+        self.unwrap.tool = {"brush": "brush", "prims": "place"}.get(tool, "select")
         self.profile_strip.setVisible(tool == "profile")
         self._under = None
         self.panels[tool].refresh()
@@ -1093,6 +1262,9 @@ class KineticEditor(QMainWindow):
         if self.brush_inside and self.selection.any():
             # Only what is chosen takes paint, as Houdini paints on a group.
             weights = np.asarray(weights, np.float32) * self.selection
+        if self.brush_target == "mask":
+            self._paint_mask(weights)
+            return
         track = self.project.tracks[self.family]
         values, mask = km.brush(track, self.frame, weights, self._target(),
                                 self.brush_strength, self.brush_mode)
@@ -1115,6 +1287,252 @@ class KineticEditor(QMainWindow):
         if done:
             self.end_edit()
             self._profiling = False
+
+    # -- masks ---------------------------------------------------------------------------
+
+    def mask_names(self) -> list:
+        return list(self.project.masks)
+
+    def mask_weights(self, name: str | None = None) -> np.ndarray:
+        """A mask's weights, flat; the mask for editing's if not said, and
+        every cell whole when there is none."""
+        name = self.edit_mask if name is None else name
+        weights = self.project.masks.get(name)
+        return (np.ones(ROWS * PER_ROW, np.float32) if weights is None
+                else np.asarray(weights, np.float32))
+
+    def _fresh_mask_name(self) -> str:
+        number = 1
+        while tr("Маска {0}", number) in self.project.masks:
+            number += 1
+        return tr("Маска {0}", number)
+
+    def new_mask(self, name: str | None = None) -> str:
+        """A mask of what is chosen -- or an empty one, to paint -- and the
+        edits kept to it from now on."""
+        self._record()
+        name = str(name).strip() if name else self._fresh_mask_name()
+        self.project.masks[name] = self.selection.reshape(-1).astype(np.float32)
+        self.project.changed()
+        self.set_edit_mask(name)
+        count = int(self.selection.sum())
+        self.status.setText(tr("Маска «{0}»: сот {1} — правки только в ней", name, count)
+                            if count else
+                            tr("Маска «{0}» пустая — нарисуйте её кистью: «Кисть красит: "
+                               "Маску»", name))
+        self._changed(keys=True)
+        return name
+
+    def set_edit_mask(self, name: str) -> None:
+        """The mask every edit is kept to; "" for none."""
+        self.edit_mask = name if name in self.project.masks else ""
+        self.masks.refresh()
+        self.panels["brush"].show_family(self.family)
+        self.status.setText(tr("Правки только в маске «{0}»", self.edit_mask)
+                            if self.edit_mask else tr("Правки — на всех сотах"))
+        self._changed()
+
+    def select_mask(self) -> None:
+        if not self.edit_mask:
+            self.status.setText(tr("Сначала выберите маску"))
+            return
+        self._select(self.mask_weights().reshape(ROWS, PER_ROW) >= 0.5, "set")
+
+    def drop_mask(self, name: str | None = None) -> None:
+        name = name or self.edit_mask
+        if name not in self.project.masks:
+            self.status.setText(tr("Сначала выберите маску"))
+            return
+        self._record()
+        del self.project.masks[name]
+        for one in self.project.primitives:
+            if one.mask == name:
+                one.mask = ""
+            if one.tilt_mask == name:
+                one.tilt_mask = ""
+        self.project.changed()
+        if self.edit_mask == name:
+            self.edit_mask = ""
+        self.panels["brush"].show_family(self.family)
+        self._changed(keys=True)
+
+    def selection_to_mask(self, add: bool) -> None:
+        """What is chosen into the mask for editing, or out of it."""
+        if not self.selection.any():
+            self.status.setText(tr("Сначала выберите соты"))
+            return
+        if not self.edit_mask:
+            if add:
+                self.new_mask()
+            return
+        self._record()
+        weights = self.mask_weights().reshape(ROWS, PER_ROW).copy()
+        if add:
+            weights = np.maximum(weights, self.selection.astype(np.float32))
+        else:
+            weights[self.selection] = 0.0
+        self.project.masks[self.edit_mask] = weights.reshape(-1)
+        self.project.changed()
+        self._changed(keys=True)
+
+    def set_brush_target(self, target: str) -> None:
+        """What the brush paints: the layer's keys, or the mask for editing."""
+        self.brush_target = target
+        self.panels["brush"].show_family(self.family)
+        self._changed()
+
+    def _paint_mask(self, weights) -> None:
+        if not self.edit_mask:
+            # A mask to paint into, first; the stroke's undo step has it.
+            name = self._fresh_mask_name()
+            self.project.masks[name] = np.zeros(ROWS * PER_ROW, np.float32)
+            self.edit_mask = name
+            self.masks.refresh()
+            self.panels["brush"].show_family(self.family)
+        self.project.masks[self.edit_mask] = kin_prims.paint_mask(
+            self.mask_weights(), weights, self.brush_strength, self.brush_mode)
+        self.project.changed()
+        self.dirty = True
+        self._changed()
+
+    # -- primitives -----------------------------------------------------------------------
+
+    def primitive(self):
+        """The primitive worked on, or None."""
+        found = self.project.primitives
+        return found[self.prim_index] if 0 <= self.prim_index < len(found) else None
+
+    def _prim_changed(self, keys: bool = True) -> None:
+        self.project.changed()
+        self.dirty = True
+        self._changed(keys=keys)
+
+    def add_primitive(self, kind: str) -> None:
+        """A sphere or a box, standing where the cells are chosen -- or in
+        front of the camera, half way up -- keyed at the playhead."""
+        self._record()
+        count = sum(1 for one in self.project.primitives if one.kind == kind) + 1
+        name = tr("Сфера {0}", count) if kind == "sphere" else tr("Куб {0}", count)
+        if self.selection.any():
+            rows, cells = np.nonzero(self.selection)
+            turn = np.radians(km.cell_azimuths()[rows, cells])
+            azimuth = math.degrees(math.atan2(np.sin(turn).mean(), np.cos(turn).mean()))
+            ring = float(rows.mean())
+        else:
+            azimuth, ring = self._facing(), ROWS / 2.0
+        one = kin_prims.Primitive(kind, name, azimuth % 360.0)
+        values = one.values[0]
+        values[kin_prims.HEIGHT] = ring
+        one.frames, one.values = [], []
+        one.write(self.frame, values)
+        self.project.primitives.append(one)
+        self.prim_index = len(self.project.primitives) - 1
+        self.timeline.set_active_primitive(self.prim_index)
+        if self.tool != "prims":
+            self._choose_tool("prims")
+        self.status.setText(tr("{0}: щелчок по карте или по 3D ставит его туда", name))
+        self._prim_changed()
+
+    def _facing(self) -> float:
+        """The azimuth of the cells facing the camera, degrees."""
+        if self.mesh is not None and self.mesh.free is not None:
+            eye = self.mesh.free.eye()
+            return math.degrees(math.atan2(eye[1], eye[0]))
+        return self.unwrap.front
+
+    def drop_primitive(self) -> None:
+        if self.primitive() is None:
+            return
+        self._record()
+        del self.project.primitives[self.prim_index]
+        self.timeline.chosen = {pair for pair in self.timeline.chosen
+                                if pair[0][0] != "prim"}
+        self.prim_index = min(self.prim_index, len(self.project.primitives) - 1)
+        self.timeline.set_active_primitive(self.prim_index)
+        self._prim_changed()
+
+    def choose_primitive(self, index: int, take_tool: bool = False) -> None:
+        count = len(self.project.primitives)
+        self.prim_index = int(index) if 0 <= index < count else (-1 if not count else
+                                                               self.prim_index)
+        self.timeline.set_active_primitive(self.prim_index)
+        if take_tool and self.tool != "prims":
+            self._choose_tool("prims")
+        self._changed()
+
+    def set_prim_value(self, param: int, value: float, live: bool = False) -> None:
+        """One of the primitive's numbers, keyed at the playhead."""
+        one = self.primitive()
+        if one is None:
+            return
+        if not live:
+            self._record()
+        values = one.at(self.frame)
+        values[param] = value
+        one.write(self.frame, values)
+        self._prim_changed(keys=not live)
+
+    def set_prim_property(self, name: str, value) -> None:
+        """What the primitive is, the same all through: its polarity, its
+        tilt, its masks, whether it is on."""
+        one = self.primitive()
+        if one is None or getattr(one, name) == value:
+            return
+        self._record()
+        setattr(one, name, value)
+        self._prim_changed()
+
+    def key_primitive(self) -> None:
+        one = self.primitive()
+        if one is None:
+            return
+        self._record()
+        one.write(self.frame, one.at(self.frame))
+        self._prim_changed()
+
+    def unkey_primitive(self) -> None:
+        one = self.primitive()
+        index = one.index(self.frame) if one is not None else None
+        if index is None or len(one.frames) < 2:
+            self.status.setText(tr("На этом кадре нет ключа примитива, который можно снять"))
+            return
+        self._record()
+        one.remove(index)
+        self._prim_changed()
+
+    def set_prim_step(self, frames: int) -> None:
+        frames = max(1, int(frames))
+        if frames == self.project.prim_step:
+            return
+        self._record()
+        self.project.prim_step = frames
+        self._prim_changed()
+
+    def bake_primitives(self) -> None:
+        """What the primitives make, into the keys; they are turned off."""
+        if not any(one.on for one in self.project.primitives):
+            self.status.setText(tr("Нет включённых примитивов"))
+            return
+        self._record()
+        count = kin_prims.bake(self.project)
+        self.status.setText(tr("Примитивы запечены в ключи: {0}; сами выключены", count))
+        self._prim_changed()
+
+    def _place_primitive(self, azimuth: float, ring: float) -> None:
+        """The primitive worked on, put at a point of the strip or the 3D."""
+        one = self.primitive()
+        if one is None:
+            self.status.setText(tr("Сначала добавьте примитив"))
+            return
+        values = one.at(self.frame)
+        values[kin_prims.AZIMUTH] = float(azimuth) % 360.0
+        values[kin_prims.HEIGHT] = float(ring)
+        one.write(self.frame, values)
+        self._prim_changed(keys=not self._editing)
+
+    def _place_at_cell(self, cell) -> None:
+        row, which = cell
+        self._place_primitive(float(km.cell_azimuths()[row, which]), float(row))
 
     # -- the pose library --------------------------------------------------------------
 
@@ -1231,13 +1649,42 @@ class KineticEditor(QMainWindow):
         self._changed(keys=True)
 
     def _write(self, family: str, values, mask) -> None:
-        """Key `values` for the motors in `mask` at the playhead, in bounds."""
+        """Key `values` for the motors in `mask` at the playhead, in bounds
+        -- and, with a mask for editing, only its motors, a part-weighted one
+        that part of the way from where it stood when the edit began."""
         track = self.project.tracks[family]
+        values = np.asarray(values, np.float32).reshape(-1)
+        mask = np.asarray(mask, bool).reshape(-1)
         if family == "tilt":
             pose = self.pose_now()
             values = km.clamp_tilt(values, pose["lift"], pose["push"]).reshape(-1)
+        weight = self._edit_weights(family)
+        if weight is not None:
+            wanted = mask.any()
+            mask = mask & (weight > 1e-3)
+            if wanted and not mask.any():
+                self.status.setText(tr("Вне маски «{0}» — ничего не изменилось",
+                                       self.edit_mask))
+                return
+            soft = weight < 1.0 - 1e-3
+            if soft.any():
+                base = self._base_of(family)
+                values = np.where(soft, base + (values - base) * weight, values)
         track.write(self.frame, values, mask)
         self.dirty = True
+
+    def _edit_weights(self, family: str):
+        """The mask for editing as a weight a motor, or None for no mask."""
+        weights = self.project.masks.get(self.edit_mask) if self.edit_mask else None
+        return None if weights is None else kin_prims.motor_weights(family, weights)
+
+    def _base_of(self, family: str) -> np.ndarray:
+        """Where a family's motors stood at the playhead before the edit
+        under way began -- a drag writes many times, and a part-weighted
+        motor goes part of the way from there, not from its last step."""
+        if self._edit_base is not None and self._edit_base[0] == self.frame:
+            return self._edit_base[1][family].reshape(-1)
+        return self.pose_now()[family].reshape(-1)
 
     def _select(self, cells, how: str) -> None:
         if how == "add":
@@ -1313,8 +1760,11 @@ class KineticEditor(QMainWindow):
         pose = self.pose_now()
         for family in (km.FAMILIES if every else (self.family,)):
             track = self.project.tracks[family]
-            track.write(self.frame, pose[family].reshape(-1),
-                        np.ones(track.size, bool))
+            mask = np.ones(track.size, bool)
+            weight = self._edit_weights(family)
+            if weight is not None:
+                mask &= weight > 1e-3
+            track.write(self.frame, pose[family].reshape(-1), mask)
         self._changed(keys=True)
 
     @staticmethod
@@ -1324,6 +1774,8 @@ class KineticEditor(QMainWindow):
         of one key take both their parts."""
         parts: dict = {}
         for key, frame in chosen:
+            if key[0] == "prim":
+                continue
             lane = lane_of(key)
             mask = lane.mask()
             got = parts.get((lane.family, int(frame)))
@@ -1341,6 +1793,14 @@ class KineticEditor(QMainWindow):
             index = track.index(frame)
             if index is not None:
                 track.remove(index, None if mask.all() else mask)
+        for key, frame in chosen:
+            if key[0] == "prim" and key[1] < len(self.project.primitives):
+                one = self.project.primitives[key[1]]
+                index = one.index(frame)
+                # A primitive keeps one key at least: it has to be somewhere.
+                if index is not None and len(one.frames) > 1:
+                    one.remove(index)
+        self.project.changed()
         self.timeline.chosen = set()
         self._changed(keys=True)
 
@@ -1358,6 +1818,14 @@ class KineticEditor(QMainWindow):
                 mask = parts[(family, frame)]
                 target = max(0, min(self.project.length - 1, frame + by))
                 track.move(index, target, None if mask.all() else mask)
+        for number, one in enumerate(self.project.primitives):
+            frames = sorted((frame for key, frame in chosen
+                             if key[0] == "prim" and key[1] == number), reverse=by > 0)
+            for frame in frames:
+                index = one.index(frame)
+                if index is not None:
+                    one.move(index, max(0, min(self.project.length - 1, frame + by)))
+        self.project.changed()
         top = self.project.length - 1
         self.timeline.chosen = {(key, max(0, min(top, frame + by)))
                                 for key, frame in chosen}
@@ -1375,12 +1843,16 @@ class KineticEditor(QMainWindow):
         """A lane's name clicked: its family to work on, and its cells
         chosen -- a ring, a group, a cell."""
         lane = lane_of(key)
+        if lane.is_prim:
+            self.choose_primitive(lane.key[1], take_tool=True)
+            return
         self.set_family(lane.family)
         if lane.level > 0:
             self._select(lane.cells(), "set")
 
     def step_key(self, direction: int) -> None:
-        frames = self.project.tracks[self.family].frames
+        one = self.primitive() if self.tool == "prims" else None
+        frames = one.frames if one is not None else self.project.tracks[self.family].frames
         if direction > 0:
             later = [f for f in frames if f > self.frame]
             if later:
@@ -1391,7 +1863,7 @@ class KineticEditor(QMainWindow):
                 self.go_to(earlier[-1])
 
     def next_warning(self) -> None:
-        found = [frame for frame, _ in self.project.violations()]
+        found = [frame for frame, _ in self.composed().violations()]
         if not found:
             return
         later = [f for f in found if f > self.frame]
@@ -1574,6 +2046,13 @@ class KineticEditor(QMainWindow):
                 sliding = button == 3 or "Shift" in mods
                 self._drag = ("slide" if sliding else "turn", x, y)
                 return
+            if button == 1 and self.tool == "prims":
+                got = self._cell_under(x, y)
+                if got is not None and self.primitive() is not None:
+                    self._drag = ("place",)
+                    self.begin_edit()
+                    self._place_at_cell(got)
+                return
             if button == 1:
                 handle = kin_gizmo.picked(self.handles, (x, y)) if self.handles else None
                 if handle is not None:
@@ -1612,6 +2091,11 @@ class KineticEditor(QMainWindow):
             if self._drag and self._drag[0] == "grab":
                 self._grab_move(x, y, "Control" in mods)
                 return
+            if self._drag and self._drag[0] == "place":
+                got = self._cell_under(x, y)
+                if got is not None:
+                    self._place_at_cell(got)
+                return
             if self.handles:
                 hot = kin_gizmo.picked(self.handles, (x, y))
                 if hot is not self._hot:
@@ -1631,7 +2115,7 @@ class KineticEditor(QMainWindow):
                 self._select(self._grain_cells(got), how)
             return
         if kind == "pointer_up":
-            if self._drag and self._drag[0] in ("brush", "grab"):
+            if self._drag and self._drag[0] in ("brush", "grab", "place"):
                 self._grab = None
                 self.end_edit()
             self._drag = None
@@ -1662,7 +2146,7 @@ class KineticEditor(QMainWindow):
         if row < 0:
             self.hover_label.setText("")
             return
-        pose = self.pose_now()
+        pose = self.shown_now()
         lift = float(pose["lift"][row])
         push = float(pose["push"][row, which // PER_PUSHER])
         tilt = float(pose["tilt"][row, which])
@@ -1848,10 +2332,10 @@ class KineticEditor(QMainWindow):
             self.export_to(path)
 
     def export_to(self, path) -> Path:
-        written = km.export_motor_json(self.project, path)
+        written = km.export_motor_json(self.composed(), path)
         self.settings["export_folder"] = str(written.parent)
         self._write_settings()
-        warnings = self.project.violations()
+        warnings = self.composed().violations()
         words = tr("Записан {0}", written.name)
         if warnings:
             words += " — " + tr("наклон вне предела на {0} ключах", len(warnings))
@@ -1987,6 +2471,7 @@ class KineticEditor(QMainWindow):
         # What is said out of pieces, said again.
         self.panels["brush"].show_family(self.family)
         self.panels["motors"]._shown = None
+        self.masks.refresh()
         self.status.setText("")
         self.settings["language"] = code
         self._write_settings()

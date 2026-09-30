@@ -665,7 +665,6 @@ EN: dict = {
     'группы': 'groups',
     'отдельные соты': 'single cells',
     'Выбор: {0}': 'Selection: {0}',
-    'кисть, выбор, профиль, моторы': 'brush, select, profile, motors',
     'ПКМ по карте': 'RMB on the map',
     'сдвиг; колесо — ближе; двойной ПКМ — вся карта':
         'slide; the wheel zooms; double RMB shows the whole map',
@@ -727,4 +726,101 @@ EN: dict = {
     '{0}: {1} — щелчок принять, Esc отменить':
         '{0}: {1}; click to take it, Esc to put it back',
     'Отменено': 'Put back',
+    # -- masks and primitives -------------------------------------------------
+    'Примитивы': 'Primitives',
+    'кисть, выбор, профиль, моторы, примитивы':
+        'brush, selection, profile, motors, primitives',
+    'Маска {0}': 'Mask {0}',
+    'Сфера {0}': 'Sphere {0}',
+    'Куб {0}': 'Box {0}',
+    '{0}: щелчок по карте или по 3D ставит его туда':
+        '{0}: a click on the map or in 3D puts it there',
+    'Примитивы запечены в ключи: {0}; сами выключены':
+        'Primitives baked into the keys: {0}; they are turned off',
+    'Маска «{0}»: сот {1} — правки только в ней':
+        'Mask “{0}”: {1} cells; edits keep to it',
+    'Маска «{0}» пустая — нарисуйте её кистью: «Кисть красит: Маску»':
+        'Mask “{0}” is empty: paint it with the brush, “Brush paints: Edit mask”',
+    'Правки только в маске «{0}»': 'Edits only inside mask “{0}”',
+    'Правки — на всех сотах': 'Edits reach every cell',
+    'Сначала выберите маску': 'Choose a mask first',
+    'На этом кадре нет ключа примитива, который можно снять':
+        'No key of the primitive on this frame to take away',
+    'Нет включённых примитивов': 'No primitive is on',
+    'Сначала добавьте примитив': 'Add a primitive first',
+    'Вне маски «{0}» — ничего не изменилось': 'Outside mask “{0}”: nothing changed',
+    '{0}: маска не того размера': '{0}: a mask of the wrong size',
+    'Маску': 'Edit mask',
+    'все соты': 'all cells',
+    'Позитив': 'Positive',
+    'Негатив': 'Negative',
+    'как у действия': 'as it acts',
+    'Маску — кисть рисует маску правки: красить добавляет, стереть убирает; без маски сначала заводится новая':
+        'Edit mask: the brush paints the mask edits keep to; paint adds, erase takes away; with no mask a new one is made first',
+    'Маска правки: всё, что делается на плейхеде — кисть, значения, ручки, G R H, позы, профиль, K, — касается только её сот':
+        'The edit mask: everything done at the playhead (brush, values, handles, G R H, poses, profile, K) touches only its cells',
+    'Удалить примитив': 'Delete the primitive',
+    'Позитив выталкивает соты на свою поверхность — выпуклость; негатив вдавливает их до своей поверхности — отпечаток':
+        'Positive pushes the cells out to its surface, a bulge; negative presses them in to its surface, an imprint',
+    'Вкл': 'On',
+    'Наклон по нормали': 'Tilt along the normal',
+    'Задетые соты ложатся вдоль поверхности примитива, насколько позволяют зазоры':
+        "The cells it touches lie along the primitive's surface, as far as their gaps allow",
+    '◆ Ключ': '◆ Key',
+    'Ключ примитиву на плейхеде, там, где он сейчас':
+        'Key the primitive at the playhead, where it is now',
+    'Снять ключ': 'Remove key',
+    'Убрать ключ примитива на плейхеде': "Take away the primitive's key at the playhead",
+    'Шаг ключей': 'Key step',
+    'кадров': 'frames',
+    'Как часто движущийся примитив даёт моторам ключ: они ходят от ключа к ключу, так что это то, насколько точно они за ним следуют':
+        'How often a moving primitive gives the motors a key: they go from key to key, so this is how closely they follow it',
+    'Запечь примитивы в ключи': 'Bake primitives into keys',
+    'Что делают включённые примитивы — в ключи моторов, а сами они выключаются. Отменяется Ctrl+Z.':
+        "What the primitives that are on do goes into the motors' keys, and they are turned off. Ctrl+Z undoes it.",
+    'Кисть красит': 'Brush paints',
+    'Кисть · маска «{0}»': 'Brush · mask “{0}”',
+    'В маску': 'Into mask',
+    'Добавить выбранное в маску правки; без неё — новая маска':
+        'Add what is chosen to the edit mask; with none, a new mask',
+    'Из маски': 'Out of mask',
+    'Убрать выбранное из маски правки': 'Take what is chosen out of the edit mask',
+    'Новая маска из выбранного; без выбора — пустая, чтобы нарисовать кистью':
+        'A new mask of what is chosen; with nothing chosen, an empty one to paint',
+    'Выбрать соты маски': "Choose the mask's cells",
+    'Удалить маску': 'Delete the mask',
+    '+ Сфера': '+ Sphere',
+    '+ Куб': '+ Box',
+    'Азимут': 'Azimuth',
+    'м': 'm',
+    'Радиус': 'Radius',
+    'Высота': 'Height',
+    'Глубина': 'Depth',
+    'Примитивы лежат поверх ключей: позитив берёт больший вынос, негатив — меньший. Симуляция и экспорт видят результат. Щелчок по карте или по 3D ставит выбранный примитив в эту точку.':
+        'Primitives lie over the keys: a positive one takes the further push, a negative one the nearer. The simulation and the export see the result. A click on the map or in 3D puts the chosen primitive there.',
+    'Действует на': 'Acts on',
+    'Наклон на': 'Tilts on',
+    'Ширина': 'Width',
+    'новая': 'new',
+    'выкл': 'off',
+    'Примитив {0}': 'Primitive {0}',
+    '{0}: кадр {1}': '{0}: frame {1}',
+    'Где вокруг здания, градусы':
+        'Where round the building, degrees',
+    'На какой высоте, в кольцах от нижнего':
+        'How high, in rings from the lowest',
+    'Отступ':
+        'Offset',
+    'Центр от поверхности сот, метры; минус — внутрь':
+        "The centre's distance off the cells' surface, metres; minus is inside",
+    'Насколько соты идут к его поверхности':
+        'How far the cells go to its surface',
+    'Радиус сферы; у куба — половина ширины вокруг здания':
+        "The sphere's radius; a box's half width round the building",
+    'Половина высоты куба':
+        "The box's half height",
+    'Половина глубины куба, от здания наружу':
+        "The box's half depth, out from the building",
+    'Симуляция перенесена в ключи, примитивы в ней — выключены':
+        'The simulation is on the keys; the primitives it had are turned off',
 }

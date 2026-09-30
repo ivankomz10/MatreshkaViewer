@@ -53,6 +53,7 @@ def fresh(editor, tick):
     """The editor on a new, resting piece, the brush chosen, nothing picked."""
     editor.dirty = False
     editor.new_project()
+    editor.set_brush_target("keys")
     editor._choose_tool("brush")
     editor.select_none()
     editor.set_mask(True)
@@ -627,4 +628,240 @@ def test_g_pulls_the_chosen_pushers_and_esc_puts_them_back(fresh, tick):
     assert fresh.pose_now()["push"][5, 0] == pytest.approx(0.2, abs=1e-4)
     fresh._step_undo(True)
     assert not fresh.pose_now()["push"].any()
+    fresh.select_none()
+
+
+# -- masks and primitives -------------------------------------------------------------------
+
+def _front_cell(fresh):
+    """A cell in the middle of what the camera sees."""
+    places, faces, _ = fresh._cells_on_screen()
+    wide, tall = fresh.canvas.get_logical_size()
+    gap = np.hypot(places[:, 0] - wide / 2, places[:, 1] - tall / 2)
+    best = int(np.argmin(np.where(faces, gap, np.inf)))
+    return tuple(int(v) for v in fresh.cell_is[best])
+
+
+def test_a_mask_keeps_every_edit_to_its_cells(fresh):
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[4:8, :] = True
+    fresh._select(cells, "set")
+    name = fresh.new_mask("низ")
+    assert fresh.edit_mask == "низ" and "низ" in fresh.mask_names()
+    assert fresh.masks.choice.currentText() == "низ"
+    # Everything chosen, but the value lands on the mask's rings alone.
+    fresh.select_all()
+    fresh.go_to(120)
+    fresh.set_selected("push", 0.5)
+    push = fresh.pose_now()["push"]
+    assert np.allclose(push[4:8], 0.5) and not np.delete(push, range(4, 8), axis=0).any()
+    # K keys only what the mask has.
+    fresh.go_to(300)
+    fresh.key_all(False)
+    track = fresh.project.tracks[fresh.family]
+    keyed = track.keyed[track.index(300)].reshape(ROWS, -1)
+    assert keyed[4:8].all() and not np.delete(keyed, range(4, 8), axis=0).any()
+    # A part-weighted cell goes part of the way, however many steps a drag takes.
+    weights = fresh.project.masks[name].reshape(ROWS, PER_ROW).copy()
+    weights[4] = 0.5
+    fresh.project.masks[name] = weights.reshape(-1)
+    fresh.project.changed()
+    fresh.go_to(400)
+    fresh.begin_edit()
+    for value in (0.2, 0.6, 1.0):
+        fresh.set_selected("push", value, live=True)
+    fresh.end_edit()
+    push = fresh.pose_now()["push"]
+    was = fresh.project.pose(120)["push"][4, 0]
+    assert push[5, 0] == pytest.approx(1.0) and push[4, 0] == pytest.approx(
+        was + (1.0 - was) * 0.5, abs=1e-4)
+    # Outside it nothing happens, and the window says so.
+    only = np.zeros((ROWS, PER_ROW), bool)
+    only[20] = True
+    fresh._select(only, "set")
+    fresh.set_selected("tilt", 0.05)
+    assert "Вне маски" in fresh.status.text()
+    assert not fresh.pose_now()["tilt"][20].any()
+    fresh.set_edit_mask("")
+    fresh.set_selected("tilt", 0.05)
+    assert np.allclose(fresh.pose_now()["tilt"][20], 0.05)
+    fresh.select_none()
+
+
+def test_the_brush_paints_a_mask_and_the_selection_goes_in_and_out(fresh, tick):
+    fresh.set_brush_target("mask")
+    assert "маска" in fresh.panels["brush"].title.text()
+    fresh.brush_strength = 1.0
+    fresh.brush_mode = "paint"
+    fresh.begin_edit()
+    fresh._dab(fresh._weights_at((15, 25)))
+    fresh.end_edit()
+    assert fresh.edit_mask, "a stroke with no mask makes one"
+    weights = fresh.mask_weights().reshape(ROWS, PER_ROW)
+    assert weights[15, 25] == pytest.approx(1.0) and weights[0, 0] == 0.0
+    # Painting a mask keys nothing.
+    assert all(track.frames == [0] for track in fresh.project.tracks.values())
+    fresh._step_undo(True)
+    assert not fresh.project.masks, "the stroke was not one undo step"
+    fresh.set_brush_target("keys")
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[2, :5] = True
+    fresh._select(cells, "set")
+    fresh.selection_to_mask(True)
+    name = fresh.edit_mask
+    assert (fresh.mask_weights().reshape(ROWS, PER_ROW) >= 0.5).sum() == 5
+    fresh.select_none()
+    fresh.select_mask()
+    assert fresh.selection.sum() == 5
+    fresh._select(cells[:, :] & (np.arange(PER_ROW) < 2), "set")
+    fresh.selection_to_mask(False)
+    assert (fresh.mask_weights() >= 0.5).sum() == 3
+    fresh.drop_mask()
+    assert name not in fresh.project.masks and not fresh.edit_mask
+    fresh.select_none()
+
+
+def test_a_primitive_is_put_where_the_cells_are_chosen_and_lies_over_the_keys(fresh, tick):
+    ring, cell = _front_cell(fresh)
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[ring, cell] = True
+    fresh._select(cells, "set")
+    fresh.go_to(60)
+    fresh.add_primitive("sphere")
+    one = fresh.primitive()
+    assert fresh.tool == "prims" and one.kind == "sphere" and one.frames == [60]
+    import kin_prims as kp
+    values = one.at(60)
+    assert values[kp.HEIGHT] == pytest.approx(ring)
+    gap = (values[kp.AZIMUTH] - km.cell_azimuths()[ring, cell] + 180) % 360 - 180
+    assert abs(gap) < 1e-3
+    fresh.set_prim_value(kp.OFFSET, 0.0)
+    fresh.set_prim_value(kp.WIDTH, 0.7)
+    # The keys are as they were; what is shown has the bulge.
+    assert not fresh.pose_now()["push"].any()
+    shown = fresh.shown_now()["push"]
+    assert shown[ring, cell // PER_PUSHER] == pytest.approx(0.7, abs=1e-3)
+    # It has a lane of its own under the families, in both ways of looking.
+    keys = [lane.key for lane, _ in fresh.timeline.lanes()]
+    assert keys[:3] == [("lift",), ("push",), ("tilt",)] and ("prim", 0) in keys
+    # The panel says where it stands; the strip rings it.
+    panel = fresh.panels["prims"]
+    panel.refresh()
+    assert panel.boxes[kp.WIDTH].value() == pytest.approx(0.7)
+    assert panel.labels[kp.WIDTH].text() == "Радиус"
+    assert fresh.unwrap.marker is not None
+    # The simulation and the export run it.
+    motion = fresh.composed()
+    assert motion is not fresh.project
+    assert motion.pose(60)["push"][ring, cell // PER_PUSHER] == pytest.approx(0.7, abs=1e-3)
+    written = fresh.export_to(OUT / "sphere_1_of_1.json")
+    back, _ = km.from_motor_json(written)
+    assert back.pose(60)["push"][ring, cell // PER_PUSHER] == pytest.approx(0.7, abs=1e-3)
+    fresh.select_none()
+
+
+def test_a_primitive_is_moved_by_hand_keyed_and_its_keys_on_the_timeline(fresh, tick):
+    import kin_prims as kp
+    fresh.add_primitive("box")
+    one = fresh.primitive()
+    assert fresh.panels["prims"].labels[kp.WIDTH].text() == "Ширина"
+    # On the strip: a press puts it, a drag carries it, one undo step.
+    fresh.go_to(0)
+    fresh.unwrap.stroke_started.emit()
+    fresh.unwrap.placed.emit(100.0, 5.0)
+    fresh.unwrap.placed.emit(120.0, 7.5)
+    fresh.unwrap.stroke_finished.emit()
+    values = one.at(0)
+    assert values[kp.AZIMUTH] == pytest.approx(120.0) and values[kp.HEIGHT] == 7.5
+    fresh._step_undo(True)
+    assert fresh.primitive().at(0)[kp.AZIMUTH] != pytest.approx(120.0)
+    fresh._step_undo(False)
+    one = fresh.primitive()
+    # In 3D: a cell pressed.
+    ring, cell = _front_cell(fresh)
+    fresh._place_at_cell((ring, cell))
+    assert one.at(0)[kp.HEIGHT] == ring
+    # Keys: one more further on; moved and deleted on its lane.
+    fresh.go_to(240)
+    fresh.set_prim_value(kp.TALL, 1.5)
+    assert one.frames == [0, 240]
+    fresh._move_keys([(("prim", 0), 240)], 60)
+    assert one.frames == [0, 300]
+    fresh.timeline.chosen = {(("prim", 0), 300)}
+    fresh.delete_keys()
+    assert one.frames == [0]
+    fresh.timeline.chosen = {(("prim", 0), 0)}
+    fresh.delete_keys()
+    assert one.frames == [0], "a primitive keeps its last key"
+    # Its lane picks it; its drawing in 3D is its twelve edges.
+    fresh._lane_picked(("prim", 0))
+    assert fresh.prim_index == 0
+    assert len(fresh.prim_outline(one)) == 12
+    from kin_overlay import Shapes
+    shapes = Shapes(*fresh.canvas.get_logical_size())
+    fresh._draw_prims(shapes)
+    assert len(shapes.rows) > 0
+    fresh.touch()
+    tick(0.1)
+
+
+def test_a_primitive_keeps_to_its_mask_turns_off_and_bakes(fresh):
+    import kin_prims as kp
+    ring, cell = _front_cell(fresh)
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[ring, cell] = True
+    fresh._select(cells, "set")
+    fresh.add_primitive("sphere")
+    fresh.set_prim_value(kp.OFFSET, 0.0)
+    fresh.set_prim_value(kp.WIDTH, 0.9)
+    everywhere = int((fresh.shown_now()["push"] > 0).sum())
+    upper = np.zeros((ROWS, PER_ROW), bool)
+    upper[ring:] = True
+    fresh._select(upper, "set")
+    fresh.new_mask("верх")
+    fresh.set_edit_mask("")
+    fresh.set_prim_property("mask", "верх")
+    shown = fresh.shown_now()["push"]
+    assert 0 < int((shown > 0).sum()) < everywhere
+    assert not shown[:ring].any()
+    fresh.set_prim_property("polarity", "negative")
+    assert not fresh.shown_now()["push"].any(), "pressed in from nothing is nothing"
+    fresh.set_prim_property("polarity", "positive")
+    fresh.set_prim_property("on", False)
+    assert not fresh.shown_now()["push"].any()
+    fresh.set_prim_property("on", True)
+    wanted = fresh.shown_now()["push"].copy()
+    fresh.bake_primitives()
+    assert not fresh.primitive().on
+    assert np.allclose(fresh.pose_now()["push"], wanted, atol=1e-4)
+    assert "запечены" in fresh.status.text()
+    fresh._step_undo(True)
+    assert fresh.primitive().on and not fresh.pose_now()["push"].any()
+    # Dropping the mask lets the primitive go everywhere again.
+    fresh.drop_mask("верх")
+    assert fresh.primitive().mask == ""
+    fresh.drop_primitive()
+    assert not fresh.project.primitives and fresh.prim_index == -1
+    fresh.select_none()
+
+
+def test_masks_and_primitives_are_kept_in_the_project_file(fresh):
+    import kin_prims as kp
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[10:12] = True
+    fresh._select(cells, "set")
+    fresh.new_mask("пояс")
+    fresh.add_primitive("sphere")
+    fresh.set_prim_property("mask", "пояс")
+    fresh.set_prim_step(15)
+    path = OUT / "shapes.kin"
+    fresh.project.path = path
+    assert fresh.save()
+    fresh.dirty = False
+    fresh.new_project()
+    assert fresh.open_any(str(path))
+    assert fresh.mask_names() == ["пояс"] and fresh.project.prim_step == 15
+    assert fresh.primitive() is not None and fresh.primitive().mask == "пояс"
+    assert fresh.panels["prims"].step.value() == 15 or fresh.tool != "prims"
+    del kp
     fresh.select_none()

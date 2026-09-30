@@ -15,6 +15,9 @@ the top -- and under them the lanes, which in the detailed view open:
   Вынос     the pushers          -> each ring -> each group of five
   Наклон    the tilts            -> each ring -> each group -> each cell
 
+and under them, in both ways, a lane for each primitive with its own keys
+(`kin_prims`): where it stands, how big and how strong it is.
+
 A lane shows the keys of the motors under it: a diamond is a key, filled
 when it keys every one of them, hollow when only some. The same key of the
 piece shows on every lane its motors are under, so a brush stroke across two
@@ -58,6 +61,7 @@ WAVE = 36
 BAR = 10              # the lanes' scroll bar
 FAMILY_LANE = 28
 SUB_LANE = 20
+PRIM_LANE = 24
 INDENT = 14
 CLUSTER = 7           # keys closer than this, in pixels, are one pill
 LONGEST = 60          # and a pill is cut here, so a busy stretch reads as
@@ -66,6 +70,8 @@ LONGEST = 60          # and a pill is cut here, so a busy stretch reads as
 # The families by the mask colour each is painted in: R, G, B, as in Houdini.
 FAMILY_COLOUR = {"lift": "#e0605a", "push": "#5fc27a", "tilt": "#5b93e0"}
 FAMILY_NAME = {"lift": "Подъём", "push": "Вынос", "tilt": "Наклон"}
+# A primitive's lane by what it does: pushing out, or pressing in.
+PRIM_COLOUR = {"positive": "#c792ea", "negative": "#56c1c9"}
 
 
 # -- the lanes ----------------------------------------------------------------------
@@ -76,7 +82,8 @@ class Lane:
 
     `key` names it: (family,), (family, "r", ring), (family, "g", ring,
     group) or (family, "c", ring, cell) -- rings, groups and cells counted
-    from zero, a cell by its place round its ring.
+    from zero, a cell by its place round its ring. A primitive's is
+    ("prim", index), its place in the piece's list.
     """
 
     key: tuple
@@ -86,20 +93,32 @@ class Lane:
         return self.key[0]
 
     @property
+    def is_prim(self) -> bool:
+        return self.key[0] == "prim"
+
+    @property
     def level(self) -> int:
+        if self.is_prim:
+            return 0
         return {1: 0, 3: 1, 4: 2}[len(self.key)] if self.key[1:2] != ("c",) else 3
 
     @property
     def height(self) -> int:
+        if self.is_prim:
+            return PRIM_LANE
         return FAMILY_LANE if self.level == 0 else SUB_LANE
 
     @property
     def opens(self) -> bool:
         """Whether there is anything under it."""
+        if self.is_prim:
+            return False
         deepest = {"lift": 1, "push": 2, "tilt": 3}[self.family]
         return self.level < deepest
 
     def name(self) -> str:
+        if self.is_prim:
+            return tr("Примитив {0}", self.key[1] + 1)
         if self.level == 0:
             return tr(FAMILY_NAME[self.family])
         ring = self.key[2]
@@ -205,6 +224,7 @@ class KeyTimeline(QWidget):
     chosen_changed = Signal()
     moved_keys = Signal(object, int)       # [(lane key, frame), ...], by frames
     lane_picked = Signal(object)           # a lane's key
+    prim_picked = Signal(int)              # a primitive's lane pressed
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -218,6 +238,7 @@ class KeyTimeline(QWidget):
         self.axis.origin = float(HEAD + INSET)
         self.frame = 0
         self.family = "tilt"               # the lane edits go to
+        self.prim_active = -1              # the primitive being worked on
         self.detailed = False              # the tree, or three lanes
         self.expanded: set = set()         # lane keys open, in the tree
         self.chosen: set = set()           # (lane key, frame)
@@ -259,6 +280,11 @@ class KeyTimeline(QWidget):
 
     def set_family(self, family: str) -> None:
         self.family = family
+        self.update()
+
+    def set_active_primitive(self, index: int) -> None:
+        self.prim_active = int(index)
+        self._lay_bar()
         self.update()
 
     def set_warnings(self, found) -> None:
@@ -303,7 +329,8 @@ class KeyTimeline(QWidget):
         ring's or a cell's lane are let go of on the way back to three."""
         self.detailed = bool(on)
         if not self.detailed:
-            kept = {(key, frame) for key, frame in self.chosen if len(key) == 1}
+            kept = {(key, frame) for key, frame in self.chosen
+                    if len(key) == 1 or key[0] == "prim"}
             if kept != self.chosen:
                 self.chosen = kept
                 self.chosen_changed.emit()
@@ -339,6 +366,8 @@ class KeyTimeline(QWidget):
 
         for family in km.FAMILIES:
             add(Lane((family,)))
+        for index in range(len(getattr(self.project, "primitives", ()) or ())):
+            add(Lane(("prim", index)))
         return out
 
     def _lanes_height(self) -> int:
@@ -388,6 +417,14 @@ class KeyTimeline(QWidget):
     def _lane_keys(self, lane: Lane):
         """(frames, full, counts) of the keys on a lane, and its moving
         spans -- each worked out once per change of its family's track."""
+        if lane.is_prim:
+            one = self.project.primitives[lane.key[1]]
+            frames = np.asarray(one.frames, np.int64)
+            spans = [(a, b) for a, b, va, vb in zip(one.frames[:-1], one.frames[1:],
+                                                    one.values[:-1], one.values[1:])
+                     if not np.allclose(va, vb)]
+            return (frames, np.ones(len(frames), bool), np.ones(len(frames), int),
+                    np.array(spans, np.int64).reshape(-1, 2), 1)
         track = self.project.tracks[lane.family]
         stamp = (track.version, self.detailed)
         got = self._cache.get(lane.key)
@@ -498,9 +535,20 @@ class KeyTimeline(QWidget):
             x = self.axis.x_of(frame)
             brush.drawLine(QPointF(x, middle - peak), QPointF(x, middle + peak))
 
+    def _prim(self, lane: Lane):
+        return self.project.primitives[lane.key[1]]
+
+    def _colour(self, lane: Lane) -> QColor:
+        if lane.is_prim:
+            return QColor(PRIM_COLOUR[self._prim(lane).polarity])
+        return QColor(FAMILY_COLOUR[lane.family])
+
     def _draw_head(self, brush: QPainter, lane: Lane, top: float) -> None:
         height = lane.height
         rect = QRectF(0, top, HEAD, height)
+        if lane.is_prim:
+            self._draw_prim_head(brush, lane, top)
+            return
         active = lane.level == 0 and lane.family == self.family
         brush.fillRect(rect, QColor(theme.ACCENT if active else theme.PANEL))
         indent = 8 + lane.level * INDENT
@@ -535,15 +583,48 @@ class KeyTimeline(QWidget):
         brush.setPen(QPen(QColor(theme.LANE_EDGE)))
         brush.drawLine(QPointF(0, top + height - 0.5), QPointF(HEAD, top + height - 0.5))
 
+    def _draw_prim_head(self, brush: QPainter, lane: Lane, top: float) -> None:
+        height = lane.height
+        one = self._prim(lane)
+        active = lane.key[1] == self.prim_active
+        brush.fillRect(QRectF(0, top, HEAD, height),
+                       QColor(theme.ACCENT if active else theme.PANEL))
+        colour = self._colour(lane)
+        brush.setPen(Qt.PenStyle.NoPen)
+        brush.setBrush(colour)
+        if one.kind == "sphere":
+            brush.drawEllipse(QRectF(22, top + height / 2 - 4, 8, 8))
+        else:
+            brush.drawRect(QRectF(22, top + height / 2 - 4, 8, 8))
+        brush.setFont(theme.ui(9))
+        brush.setPen(QPen(QColor(theme.TEXT if one.on else theme.QUIET)))
+        said = ("+ " if one.polarity == "positive" else "− ") + one.name
+        if not one.on:
+            said += " · " + tr("выкл")
+        brush.drawText(QRectF(36, top, HEAD - 76, height),
+                       Qt.AlignmentFlag.AlignVCenter, said)
+        brush.setFont(theme.mono(7.5))
+        brush.setPen(QPen(QColor(theme.QUIET)))
+        brush.drawText(QRectF(HEAD - 40, top, 34, height),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                       str(len(one.frames)))
+        brush.setPen(QPen(QColor(theme.LANE_EDGE)))
+        brush.drawLine(QPointF(0, top + height - 0.5), QPointF(HEAD, top + height - 0.5))
+        # The primitives' lanes start under a line of their own.
+        if lane.key[1] == 0:
+            brush.setPen(QPen(QColor(theme.SEAM), 2))
+            brush.drawLine(QPointF(0, top + 1), QPointF(self.width(), top + 1))
+
     def _draw_lane(self, brush: QPainter, lane: Lane, top: float) -> None:
         height = lane.height
         shade = [theme.LANE_A, theme.LANE_B, "#1b1c20", "#1e1f23"][lane.level]
         brush.fillRect(QRectF(HEAD, top, self.width() - HEAD, height), QColor(shade))
-        if lane.level == 0 and lane.family == self.family:
+        if (lane.level == 0 and lane.family == self.family and not lane.is_prim) or (
+                lane.is_prim and lane.key[1] == self.prim_active):
             brush.fillRect(QRectF(HEAD, top, self.width() - HEAD, height),
                            QColor(47, 95, 143, 40))
         frames, full, counts, spans, size = self._lane_keys(lane)
-        colour = QColor(FAMILY_COLOUR[lane.family])
+        colour = self._colour(lane)
         middle = top + height / 2
         # Where the lane's motors are moving: a band behind the keys.
         band = QColor(colour)
@@ -553,7 +634,8 @@ class KeyTimeline(QWidget):
             if right < HEAD or left > self.width():
                 continue
             brush.fillRect(QRectF(left, middle - 2, max(1.0, right - left), 4), band)
-        self._draw_trouble(brush, lane, top)
+        if not lane.is_prim:
+            self._draw_trouble(brush, lane, top)
         # The keys, near ones as one pill.
         moving = self._drag[2] if self._drag and self._drag[0] == "move" else 0
         chosen = {frame for key, frame in self.chosen if key == lane.key}
@@ -719,7 +801,10 @@ class KeyTimeline(QWidget):
                 else:
                     self.lane_picked.emit(lane.key)
             return
-        if found is not None and found[0].family != self.family:
+        if found is not None and found[0].is_prim:
+            if found[0].key[1] != self.prim_active:
+                self.prim_picked.emit(found[0].key[1])
+        elif found is not None and found[0].family != self.family:
             self.family_chosen.emit(found[0].family)
         hit = self.hit_at(point)
         mods = event.modifiers()
@@ -777,6 +862,12 @@ class KeyTimeline(QWidget):
             return
         key, frames = hit
         lane = lane_of(key)
+        if lane.is_prim:
+            name = self._prim(lane).name
+            self.setToolTip(tr("{0}: кадр {1}", name, frames[0]) if len(frames) == 1
+                            else tr("{0}: ключей {1}, кадры {2}–{3}", name, len(frames),
+                                    min(frames), max(frames)))
+            return
         track = self.project.tracks[lane.family]
         mask = lane.mask()
         if len(frames) == 1:

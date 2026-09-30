@@ -105,6 +105,11 @@ VERSION = 1
 READING = "machine"
 NO_JACK = 0
 
+# A moving primitive is keyed this often, in frames, when it is turned into
+# keys: the motors go from one key to the next, so this is how finely they
+# follow it.
+PRIM_STEP = 30
+
 
 class ModelError(Exception):
     """A project or motor file this cannot read."""
@@ -430,6 +435,15 @@ class Project:
         # The vase profile each push key was last shaped with, by frame, so
         # it can be taken up again rather than drawn from nothing.
         self.profiles: dict = {}
+        # Masks by name, a weight 0..1 a cell (flat, CELLS), and the solids
+        # the honeycomb wraps (`kin_prims`), with how often a moving one is
+        # keyed when they are turned into keys.
+        self.masks: dict = {}
+        self.primitives: list = []
+        self.prim_step = PRIM_STEP
+        # Bumped by whatever changes the masks or the primitives, which have
+        # no versions of their own.
+        self.revision = 0
         if not empty:
             for family in FAMILIES:
                 track = self.tracks[family]
@@ -463,17 +477,27 @@ class Project:
 
     def state(self):
         return ({family: track.state() for family, track in self.tracks.items()},
-                self.length, dict(self.profiles))
+                self.length, dict(self.profiles), dict(self.masks),
+                [one.state() for one in self.primitives], self.prim_step)
 
     def restore(self, state) -> None:
-        tracks, self.length, self.profiles = state
-        self.profiles = dict(self.profiles)
+        import kin_prims
+        tracks, self.length, profiles, masks, primitives, self.prim_step = state
+        self.profiles = dict(profiles)
+        self.masks = dict(masks)
+        self.primitives = [kin_prims.Primitive.from_state(one) for one in primitives]
         for family, one in tracks.items():
             self.tracks[family].restore(one)
+        self.revision += 1
+
+    def changed(self) -> None:
+        """The masks or the primitives were changed."""
+        self.revision += 1
 
     @property
     def version(self) -> tuple:
-        return tuple(self.tracks[f].version for f in FAMILIES) + (self.length,)
+        return (tuple(self.tracks[f].version for f in FAMILIES)
+                + (self.length, self.revision))
 
     # -- the project file ---------------------------------------------------
 
@@ -496,6 +520,10 @@ class Project:
             "tracks": tracks,
             "profiles": {str(frame): points
                          for frame, points in self.profiles.items()},
+            "masks": {name: [round(float(v), 3) for v in weights]
+                      for name, weights in self.masks.items()},
+            "primitives": [one.to_dict() for one in self.primitives],
+            "prim_step": int(self.prim_step),
         }
 
     def save(self, path: str | Path) -> None:
@@ -534,6 +562,18 @@ class Project:
                 track.write(int(key["frame"]), values, keyed)
         project.profiles = {int(frame): points for frame, points
                             in (data.get("profiles") or {}).items()}
+        import kin_prims
+        for name, weights in (data.get("masks") or {}).items():
+            weights = np.clip(np.asarray(weights, np.float32), 0.0, 1.0)
+            if weights.size != CELLS:
+                raise ModelError(tr("{0}: маска не того размера", path.name))
+            project.masks[str(name)] = weights
+        try:
+            project.primitives = [kin_prims.Primitive.from_state(one)
+                                  for one in data.get("primitives") or []]
+        except (KeyError, TypeError, ValueError) as error:
+            raise ModelError(f"{path.name}: {error}") from error
+        project.prim_step = int(data.get("prim_step") or PRIM_STEP)
         for family in FAMILIES:
             if not len(project.tracks[family]):
                 track = project.tracks[family]

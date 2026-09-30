@@ -10,8 +10,9 @@ Down the right of the window, in three parts:
                there; ◆ keys them where they stand
   Позы         the pose library: the piece as it stands, saved under a name
                and put back as a key -- on the chosen cells, or all of them
+  Маска        the masks of the piece, and the one edits are kept to
   the tool     the brush's paint, the selection's size, the vase's options,
-               the motors' pace and what went wrong
+               the motors' pace and what went wrong, the primitives
 
 Numbers are dragged as well as typed: press on one and pull left or right,
 Shift for fine steps, as in Blender. A panel does nothing itself; it calls
@@ -457,11 +458,20 @@ class Poses(Panel):
 class BrushPanel(Panel):
     MODES = ("Красить", "Сгладить", "Стереть")
     MODE_KEYS = ("paint", "smooth", "erase")
+    # What the brush paints: the keys of the layer, or the mask being edited.
+    TARGETS = ("Ключи", "Маску")
+    TARGET_KEYS = ("keys", "mask")
 
     def __init__(self, actions) -> None:
         super().__init__(actions, "qa_kin_brush_panel")
         self.title = heading("")
         self.column.addWidget(self.title)
+        self.target = segments([tr(x) for x in self.TARGETS], "qa_kin_brush_target",
+                               lambda i: actions.set_brush_target(self.TARGET_KEYS[i]))
+        self.target.setToolTip(tr(
+            "Маску — кисть рисует маску правки: красить добавляет, стереть "
+            "убирает; без маски сначала заводится новая"))
+        self.column.addWidget(labelled(tr("Кисть красит"), self.target))
         # What is painted towards, in the active layer's own units: one of
         # four places for a jack, millimetres for a pusher, degrees for a tilt.
         self.lift = segments([str(mm) for mm in LIFT_MM], "qa_kin_brush_lift",
@@ -513,9 +523,15 @@ class BrushPanel(Panel):
         self.show_family("tilt")
 
     def show_family(self, family: str) -> None:
-        self.title.setText(tr("Кисть · {0}", tr(FAMILY_NAME[family])))
+        masking = getattr(self.actions, "brush_target", "keys") == "mask"
+        if masking:
+            self.title.setText(tr("Кисть · маска «{0}»",
+                                  self.actions.edit_mask or tr("новая")))
+        else:
+            self.title.setText(tr("Кисть · {0}", tr(FAMILY_NAME[family])))
+        self.target.buttons[1 if masking else 0].setChecked(True)
         for one, box in self.weights.items():
-            box.setVisible(one == family)
+            box.setVisible(one == family and not masking)
 
     def show_radius(self, radius: float) -> None:
         self.radius.set(radius)
@@ -545,6 +561,21 @@ class SelectPanel(Panel):
             button.clicked.connect(call)
             row.addWidget(button)
         self.column.addWidget(buttons)
+        masking = QWidget()
+        row = QHBoxLayout(masking)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        for text, name, call, hint in (
+                (tr("В маску"), "qa_kin_mask_add", lambda: actions.selection_to_mask(True),
+                 tr("Добавить выбранное в маску правки; без неё — новая маска")),
+                (tr("Из маски"), "qa_kin_mask_take", lambda: actions.selection_to_mask(False),
+                 tr("Убрать выбранное из маски правки"))):
+            button = QPushButton(text)
+            button.setObjectName(name)
+            button.setToolTip(hint)
+            button.clicked.connect(call)
+            row.addWidget(button)
+        self.column.addWidget(masking)
         self.column.addWidget(note(tr(
             "Щелчок — выбрать, рамка — несколько, Shift — добавить, Ctrl — убрать. "
             "Значения выбранного — в блоке «Выбрано» наверху.")))
@@ -803,3 +834,291 @@ class ProfileStrip(QWidget):
             self._held = None
             self.points.sort()
             self.changed.emit(list(self.points), True)
+
+
+# -- masks ------------------------------------------------------------------------------
+
+class Masks(Panel):
+    """The masks of the piece, and the one every edit is kept to."""
+
+    ALL_CELLS = "все соты"
+
+    def __init__(self, actions) -> None:
+        super().__init__(actions, "qa_kin_masks")
+        self.column.setContentsMargins(14, 0, 14, 8)
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(6)
+        label = QLabel(tr("Маска"))
+        label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
+        line.addWidget(label)
+        self.choice = QComboBox()
+        self.choice.setObjectName("qa_kin_mask_choice")
+        self.choice.setToolTip(tr(
+            "Маска правки: всё, что делается на плейхеде — кисть, значения, "
+            "ручки, G R H, позы, профиль, K, — касается только её сот"))
+        self.choice.currentIndexChanged.connect(self._chosen)
+        line.addWidget(self.choice, 1)
+        for text, name, call, hint in (
+                ("+", "qa_kin_mask_new", actions.new_mask,
+                 tr("Новая маска из выбранного; без выбора — пустая, чтобы "
+                    "нарисовать кистью")),
+                ("◎", "qa_kin_mask_select", actions.select_mask,
+                 tr("Выбрать соты маски")),
+                ("−", "qa_kin_mask_drop", actions.drop_mask, tr("Удалить маску"))):
+            button = QPushButton(text)
+            button.setObjectName(name)
+            button.setToolTip(hint)
+            button.setFixedWidth(30)
+            button.setStyleSheet("padding:4px 0px;")
+            button.setProperty("fixed_words", True)
+            button.clicked.connect(lambda _=False, call=call: call())
+            line.addWidget(button)
+        self.column.addWidget(row)
+
+    def _chosen(self, index: int) -> None:
+        self.actions.set_edit_mask("" if index <= 0 else self.choice.itemText(index))
+
+    def refresh(self) -> None:
+        names = self.actions.mask_names()
+        self.choice.blockSignals(True)
+        self.choice.clear()
+        self.choice.addItem(tr(self.ALL_CELLS))
+        self.choice.addItems(names)
+        current = self.actions.edit_mask
+        self.choice.setCurrentIndex(names.index(current) + 1 if current in names else 0)
+        self.choice.blockSignals(False)
+
+
+# -- primitives --------------------------------------------------------------------------
+
+class PrimsPanel(Panel):
+    """The solids the honeycomb wraps: which there are, and the chosen one's
+    ways and keys. A change keys it at the playhead, as every edit does."""
+
+    POLARITIES = ("Позитив", "Негатив")
+    POLARITY_KEYS = ("positive", "negative")
+    SAME_MASK = "как у действия"
+
+    def __init__(self, actions) -> None:
+        super().__init__(actions, "qa_kin_prims_panel")
+        import kin_prims as kp
+        self.kp = kp
+        self._filling = False
+        self.column.addWidget(heading(tr("Примитивы")))
+        adding = QWidget()
+        row = QHBoxLayout(adding)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        for text, name, kind in ((tr("+ Сфера"), "qa_kin_prim_sphere", "sphere"),
+                                 (tr("+ Куб"), "qa_kin_prim_box", "box")):
+            button = QPushButton(text)
+            button.setObjectName(name)
+            button.clicked.connect(lambda _=False, kind=kind: actions.add_primitive(kind))
+            row.addWidget(button, 1)
+        drop = QPushButton("−")
+        drop.setObjectName("qa_kin_prim_drop")
+        drop.setFixedWidth(30)
+        drop.setStyleSheet("padding:4px 0px;")
+        drop.setProperty("fixed_words", True)
+        drop.setToolTip(tr("Удалить примитив"))
+        drop.clicked.connect(lambda: actions.drop_primitive())
+        row.addWidget(drop)
+        self.column.addWidget(adding)
+        self.list = QListWidget()
+        self.list.setObjectName("qa_kin_prim_list")
+        self.list.setFixedHeight(64)
+        self.list.setStyleSheet(
+            f"QListWidget {{ background:{theme.SUNKEN}; border:1px solid {theme.EDGE};"
+            f" font-size:11.5px; }} QListWidget::item {{ padding:1px 4px; }}"
+            f" QListWidget::item:selected {{ background:{theme.ACCENT}; }}")
+        self.list.currentRowChanged.connect(
+            lambda row_: None if self._filling else actions.choose_primitive(row_))
+        self.column.addWidget(self.list)
+
+        self.body = QWidget()
+        form = QVBoxLayout(self.body)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(6)
+        ways = QWidget()
+        line = QHBoxLayout(ways)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(8)
+        self.polarity = segments([tr(x) for x in self.POLARITIES], "qa_kin_prim_polarity",
+                                 lambda i: actions.set_prim_property(
+                                     "polarity", self.POLARITY_KEYS[i]))
+        self.polarity.setToolTip(tr(
+            "Позитив выталкивает соты на свою поверхность — выпуклость; негатив "
+            "вдавливает их до своей поверхности — отпечаток"))
+        line.addWidget(self.polarity)
+        self.on = QCheckBox(tr("Вкл"))
+        self.on.setObjectName("qa_kin_prim_on")
+        self.on.toggled.connect(lambda on: actions.set_prim_property("on", bool(on)))
+        line.addWidget(self.on)
+        line.addStretch(1)
+        form.addWidget(ways)
+        self.tilt = QCheckBox(tr("Наклон по нормали"))
+        self.tilt.setObjectName("qa_kin_prim_tilt")
+        self.tilt.setToolTip(tr(
+            "Задетые соты ложатся вдоль поверхности примитива, насколько "
+            "позволяют зазоры"))
+        self.tilt.toggled.connect(lambda on: actions.set_prim_property("tilt", bool(on)))
+        form.addWidget(self.tilt)
+        masks = QWidget()
+        grid = QGridLayout(masks)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        self.mask = QComboBox()
+        self.mask.setObjectName("qa_kin_prim_mask")
+        self.mask.currentIndexChanged.connect(
+            lambda i: self._masked("mask", self.mask, i))
+        self.tilt_mask = QComboBox()
+        self.tilt_mask.setObjectName("qa_kin_prim_tilt_mask")
+        self.tilt_mask.currentIndexChanged.connect(
+            lambda i: self._masked("tilt_mask", self.tilt_mask, i))
+        for place, (text, box) in enumerate(((tr("Действует на"), self.mask),
+                                             (tr("Наклон на"), self.tilt_mask))):
+            label = QLabel(text)
+            label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
+            grid.addWidget(label, place, 0)
+            grid.addWidget(box, place, 1)
+        grid.setColumnStretch(1, 1)
+        form.addWidget(masks)
+
+        numbers = QWidget()
+        grid = QGridLayout(numbers)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(4)
+        self.boxes = {}
+        self.labels = {}
+        # Two to a row, a name and its number: where it stands, then how big.
+        spec = ((kp.AZIMUTH, tr("Азимут"), -360, 720, "°", 1.0, 1,
+                 tr("Где вокруг здания, градусы")),
+                (kp.HEIGHT, tr("Кольцо"), -5, ROWS + 5, "", 0.1, 1,
+                 tr("На какой высоте, в кольцах от нижнего")),
+                (kp.OFFSET, tr("Отступ"), -3, 3, tr("м"), 0.02, 2,
+                 tr("Центр от поверхности сот, метры; минус — внутрь")),
+                (kp.STRENGTH, tr("Сила"), 0, 100, "%", 5, 0,
+                 tr("Насколько соты идут к его поверхности")),
+                (kp.WIDTH, tr("Радиус"), 0.05, 6, tr("м"), 0.02, 2,
+                 tr("Радиус сферы; у куба — половина ширины вокруг здания")),
+                (kp.TALL, tr("Высота"), 0.05, 6, tr("м"), 0.02, 2,
+                 tr("Половина высоты куба")),
+                (kp.DEPTH, tr("Глубина"), 0.05, 6, tr("м"), 0.02, 2,
+                 tr("Половина глубины куба, от здания наружу")))
+        for place, (param, text, low, high, unit, step, decimals, hint) in enumerate(spec):
+            label = QLabel(text)
+            label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
+            label.setToolTip(hint)
+            box = Scrub(low, high, low, unit, f"qa_kin_prim_{kp.PARAMS[param]}", step,
+                        decimals)
+            box.setToolTip(hint)
+            box.setMinimumWidth(70)
+            box.pressed.connect(actions.begin_edit)
+            box.moved.connect(lambda v, param=param: actions.set_prim_value(
+                param, v / 100.0 if param == kp.STRENGTH else v, live=True))
+            box.released.connect(actions.end_edit)
+            grid.addWidget(label, place // 2, (place % 2) * 2)
+            grid.addWidget(box, place // 2, (place % 2) * 2 + 1)
+            self.boxes[param] = box
+            self.labels[param] = label
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+        form.addWidget(numbers)
+        keys = QWidget()
+        line = QHBoxLayout(keys)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(6)
+        key = QPushButton(tr("◆ Ключ"))
+        key.setObjectName("qa_kin_prim_key")
+        key.setToolTip(tr("Ключ примитиву на плейхеде, там, где он сейчас"))
+        key.clicked.connect(lambda: actions.key_primitive())
+        line.addWidget(key, 1)
+        unkey = QPushButton(tr("Снять ключ"))
+        unkey.setObjectName("qa_kin_prim_unkey")
+        unkey.setToolTip(tr("Убрать ключ примитива на плейхеде"))
+        unkey.clicked.connect(lambda: actions.unkey_primitive())
+        line.addWidget(unkey, 1)
+        form.addWidget(keys)
+        self.column.addWidget(self.body)
+
+        step = QWidget()
+        line = QHBoxLayout(step)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(8)
+        label = QLabel(tr("Шаг ключей"))
+        label.setStyleSheet(f"color:{theme.DIM}; font-size:11.5px;")
+        line.addWidget(label)
+        self.step = Scrub(1, 600, km.PRIM_STEP, tr("кадров"), "qa_kin_prim_step", 1)
+        self.step.setFixedWidth(96)
+        self.step.setToolTip(tr(
+            "Как часто движущийся примитив даёт моторам ключ: они ходят от ключа "
+            "к ключу, так что это то, насколько точно они за ним следуют"))
+        self.step.released.connect(lambda: actions.set_prim_step(int(self.step.value())))
+        line.addWidget(self.step)
+        line.addStretch(1)
+        self.column.addWidget(step)
+        self.bake = QPushButton(tr("Запечь примитивы в ключи"))
+        self.bake.setObjectName("qa_kin_prim_bake")
+        self.bake.setToolTip(tr(
+            "Что делают включённые примитивы — в ключи моторов, а сами они "
+            "выключаются. Отменяется Ctrl+Z."))
+        self.bake.clicked.connect(lambda: actions.bake_primitives())
+        self.column.addWidget(self.bake)
+        self.column.addWidget(note(tr(
+            "Примитивы лежат поверх ключей: позитив берёт больший вынос, негатив — "
+            "меньший. Симуляция и экспорт видят результат. Щелчок по карте или по "
+            "3D ставит выбранный примитив в эту точку.")))
+        self.finish()
+
+    def _masked(self, which: str, box: QComboBox, index: int) -> None:
+        if not self._filling:
+            self.actions.set_prim_property(which, "" if index <= 0 else box.itemText(index))
+
+    def refresh(self) -> None:
+        project = self.actions.project
+        kp = self.kp
+        self._filling = True
+        try:
+            self.list.clear()
+            for one in project.primitives:
+                sign = "+" if one.polarity == "positive" else "−"
+                self.list.addItem(f"{sign} {one.name}"
+                                  + ("" if one.on else "  · " + tr("выкл")))
+            self.list.setCurrentRow(self.actions.prim_index)
+            one = self.actions.primitive()
+            self.body.setEnabled(one is not None)
+            self.step.set(project.prim_step)
+            self.bake.setEnabled(any(p.on for p in project.primitives))
+            names = self.actions.mask_names()
+            for box, first in ((self.mask, tr(Masks.ALL_CELLS)),
+                               (self.tilt_mask, tr(self.SAME_MASK))):
+                box.clear()
+                box.addItem(first)
+                box.addItems(names)
+            if one is None:
+                return
+            self.polarity.buttons[self.POLARITY_KEYS.index(one.polarity)].setChecked(True)
+            for box, on in ((self.on, one.on), (self.tilt, one.tilt)):
+                box.blockSignals(True)
+                box.setChecked(on)
+                box.blockSignals(False)
+            for box, name in ((self.mask, one.mask), (self.tilt_mask, one.tilt_mask)):
+                box.setCurrentIndex(names.index(name) + 1 if name in names else 0)
+            box_like = one.kind == "box"
+            self.labels[kp.WIDTH].setText(tr("Ширина") if box_like else tr("Радиус"))
+            for param in (kp.TALL, kp.DEPTH):
+                self.boxes[param].setVisible(box_like)
+                self.labels[param].setVisible(box_like)
+            values = one.at(self.actions.frame)
+            keyed = self.actions.frame in one.frames
+            for param, box in self.boxes.items():
+                value = float(values[param])
+                box.set(value * 100.0 if param == kp.STRENGTH else value)
+                # A number keyed on this very frame, as Blender colours it.
+                box.setStyleSheet(f"color:{theme.WARN};" if keyed else "")
+        finally:
+            self._filling = False
