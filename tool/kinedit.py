@@ -3056,7 +3056,8 @@ class KineticEditor(QMainWindow):
         self._job_timer.stop()
         self._pool.shutdown(wait=False, cancel_futures=True)
         if self.stream is not None:
-            self.stream.stop()
+            player.let_go([self.stream])
+            self.stream = None
         if self.player is not None:
             self.player.stop()
         super().closeEvent(event)
@@ -3082,7 +3083,10 @@ def main(argv=None) -> int:
     window = KineticEditor(opened, asked)
     window.show()
     logfile.loading_done()
-    return app.exec()
+    logfile.quiet_after_quit(app)
+    code = app.exec()
+    logfile.write("exit: the editor's loop has ended")
+    return code
 
 
 if __name__ == "__main__":

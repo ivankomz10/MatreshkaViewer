@@ -150,6 +150,36 @@ def write(message: str, tag: str = "") -> None:
     say_while_loading(str(message).splitlines()[0] if str(message) else "")
 
 
+def quiet_after_quit(app) -> None:
+    """Once the window's loop has ended, the drawing library's own timer
+    thread may still fire into it, and says "Error in CallLaterThread
+    callback: Signal source has been deleted" -- every frame, for as long
+    as the program goes on ending. Said once, as what it is; the rest is
+    left out. Seen in a log, that line means the window had closed and the
+    program had not yet ended; a log that stops there is a program that
+    never did."""
+    import logging
+
+    said = {"once": False, "quitting": False}
+
+    def quitting() -> None:
+        said["quitting"] = True
+
+    app.aboutToQuit.connect(quitting)
+
+    class _Quiet(logging.Filter):
+        def filter(self, record) -> bool:  # noqa: A003 -- logging's own name
+            if "Signal source has been deleted" not in record.getMessage():
+                return True
+            if not said["once"]:
+                said["once"] = True
+                write("exit: the drawing loop outlived the window; the program is "
+                      "finishing")
+            return False
+
+    logging.getLogger("rendercanvas").addFilter(_Quiet())
+
+
 def raise_splash(app) -> None:
     """Our own loading window, over whatever the loader put up.
 

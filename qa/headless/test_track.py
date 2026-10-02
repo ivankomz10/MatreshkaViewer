@@ -177,3 +177,83 @@ def test_the_top_screen_at_the_crossfade():
             track.give_back(got)
     finally:
         stack.stop()
+
+
+# -- the window's tracks: nothing waits for the disk on its thread --------------------------
+
+def _wait_for(what, within=10.0):
+    import time
+    ends = time.perf_counter() + within
+    while time.perf_counter() < ends:
+        got = what()
+        if got:
+            return got
+        time.sleep(0.01)
+    return what()
+
+
+def test_a_slow_share_never_holds_the_drawing(clips, monkeypatch):
+    """A clip on a share that takes a second to answer: the window's track
+    hands the drawing nothing at once, and the frame when it is open."""
+    import time
+    opened = player.open_source
+
+    def slow(path, screen=None):
+        time.sleep(1.0)
+        return opened(path, screen)
+
+    track = player.Track([clip(clips["top"], 0),
+                          clip(clips["top"], 100, ident=2)], later=True)
+    monkeypatch.setattr(player, "open_source", slow)
+    try:
+        started = time.perf_counter()
+        assert track.take(110, None) is None        # its first look: opening
+        assert time.perf_counter() - started < 0.2
+        got = _wait_for(lambda: track.take(110, None))
+        assert got is not None and abs(got.index - 110) <= 2
+    finally:
+        track.stop()
+
+
+def test_a_clip_that_will_not_open_is_not_asked_for_every_frame(clips, monkeypatch):
+    import time
+    asked = []
+
+    def missing(path, screen=None):
+        asked.append(path)
+        raise FileNotFoundError(f"[Errno 2] No such file: {path}")
+
+    track = player.Track([clip(clips["top"], 0),
+                          clip(clips["top"], 100, ident=2)], later=True)
+    monkeypatch.setattr(player, "open_source", missing)
+    monkeypatch.setattr(player, "OPEN_AGAIN", 0.5)
+    try:
+        ends = time.perf_counter() + 0.4
+        while time.perf_counter() < ends:
+            assert track.take(110, None) is None
+            time.sleep(1 / 60)
+        assert len(asked) == 1, f"asked {len(asked)} times in a few frames"
+        assert "No such file" in track.error
+        time.sleep(0.5)
+        _wait_for(lambda: track.take(110, None) is None and len(asked) >= 2, 2.0)
+        assert len(asked) == 2, "never asked again"
+    finally:
+        track.stop()
+
+
+def test_letting_go_never_waits_for_a_reader():
+    import time
+
+    class Stuck:
+        stopped = False
+
+        def ask_to_stop(self):
+            pass
+
+        def stop(self):
+            time.sleep(2.0)                          # a read that will not end
+            Stuck.stopped = True
+
+    started = time.perf_counter()
+    player.let_go([Stuck(), Stuck()])
+    assert time.perf_counter() - started < 0.1

@@ -119,6 +119,65 @@ class Still:
         pass                       # there is no pool; there is one frame
 
 
+# A clip that would not open is tried again this many seconds later, not on
+# every frame drawn: a file missing from a share, asked for sixty times a
+# second, is sixty trips to the share a second.
+OPEN_AGAIN = 10.0
+
+
+class _Opening:
+    """A clip being opened on a thread of its own.
+
+    Opening a movie reads its header off the disk, and a show's disk is a
+    share on the network: when the share is slow, or the file is not on it,
+    the read takes as long as the network takes. Done on the window's thread
+    -- and a track opens the next clip a second before it is due, from the
+    drawing -- that was the window not answering. A thread of its own waits
+    instead, and the drawing asks again next frame.
+    """
+
+    def __init__(self, path, screen) -> None:
+        self.live = None
+        self.error: Exception | None = None
+        self.done = threading.Event()
+        self._cancelled = False
+        threading.Thread(target=self._run, args=(path, screen), daemon=True,
+                         name="matreshka-open").start()
+
+    def _run(self, path, screen) -> None:
+        try:
+            live = open_source(path, screen)
+            live.start()
+            self.live = live
+            if self._cancelled:
+                let_go([live])
+        except Exception as error:  # noqa: BLE001 -- handed to the track
+            self.error = error
+        finally:
+            self.done.set()
+
+    def cancel(self) -> None:
+        """Not wanted any more: let go of it once it is open."""
+        self._cancelled = True
+        if self.done.is_set() and self.live is not None:
+            let_go([self.live])
+
+
+def let_go(streams) -> None:
+    """Readers told to finish, and stopped on a thread of their own: never
+    waited for here. A reader in the middle of a read from a share that has
+    stopped answering would hold whoever waits for it as long as the share
+    does -- the window, or its closing."""
+    going = [one for one in streams if one is not None]
+    for stream in going:
+        asking = getattr(stream, "ask_to_stop", None)
+        if asking is not None:
+            asking()
+    if going:
+        threading.Thread(target=lambda: [one.stop() for one in going], daemon=True,
+                         name="matreshka-let-go").start()
+
+
 def open_source(path: str | Path, screen=None):
     """A stream for a movie, a still for a picture.
 
@@ -149,11 +208,18 @@ class Track:
 
     `clips` are `show.Clip`s of one row and one level. Missing ones are left
     out: a file that is not here is a gap, not a failure.
+
+    `later`, as the window has it: a clip is opened on a thread of its own
+    (`_Opening`) and the drawing is handed nothing until it is open -- never
+    a wait for the disk on the window's thread; one that would not open is
+    tried again only every OPEN_AGAIN seconds; and one let go of is stopped
+    away from the window too. Off, as a render has it, a clip is opened when
+    it is asked for, and the frame waited for -- a render wants every frame.
     """
 
     LIVE = 2            # clips kept open: the one playing, and the next
 
-    def __init__(self, clips, rate: float = 60.0, screen=None) -> None:
+    def __init__(self, clips, rate: float = 60.0, screen=None, later: bool = False) -> None:
         self.clips = sorted((one for one in clips
                              if not one.missing and one.kind == "video"),
                             key=lambda one: (one.first, one.ident))
@@ -168,6 +234,9 @@ class Track:
         self._out = None                     # the frame the caller holds
         self._out_at: tuple | None = None    # (clip, its own frame) of that
         self._owner: dict[int, object] = {}
+        self.later = bool(later)
+        self._opening: dict[int, _Opening] = {}
+        self._failed: dict[int, float] = {}     # which -> when to try it again
         self._starts = [one.first for one in self.clips]
         # Whether the reader has been put where it was asked to be. Opening a
         # clip leaves it on its own frame zero, and a show opened in the
@@ -248,16 +317,24 @@ class Track:
 
     # -- which clips are open -----------------------------------------------
 
-    def _stream_for(self, which: int):
+    def _stream_for(self, which: int, wait: bool = True):
+        """The clip's stream, opened if it is not; or, with `later` and not
+        `wait`, None while it is being opened -- and while one that would
+        not open waits to be tried again."""
         live = self._live.get(which)
         if live is None:
-            clip = self.clips[which]
-            try:
-                live = open_source(clip.path, self.screen)
-            except Exception as error:  # noqa: BLE001 -- shown beside it
-                self.error = f"{clip.name}: {error}"
-                raise
-            live.start()
+            if self.later and not wait:
+                live = self._opened(which)
+                if live is None:
+                    return None
+            else:
+                clip = self.clips[which]
+                try:
+                    live = open_source(clip.path, self.screen)
+                except Exception as error:  # noqa: BLE001 -- shown beside it
+                    self.error = f"{clip.name}: {error}"
+                    raise
+                live.start()
             self._live[which] = live
         self._used[which] = self._clock
         self._clock += 1
@@ -266,8 +343,30 @@ class Track:
             if oldest == which:
                 break
             self._used.pop(oldest, None)
-            self._live.pop(oldest).stop()
+            if self.later:
+                let_go([self._live.pop(oldest)])
+            else:
+                self._live.pop(oldest).stop()
         return live
+
+    def _opened(self, which: int):
+        """A clip opened on its own thread: the stream once it is, None
+        until then. Asked for when it is not being opened, it starts."""
+        opening = self._opening.get(which)
+        if opening is None:
+            if time.monotonic() < self._failed.get(which, 0.0):
+                return None
+            self._opening[which] = _Opening(self.clips[which].path, self.screen)
+            return None
+        if not opening.done.is_set():
+            return None
+        del self._opening[which]
+        if opening.error is not None or opening.live is None:
+            self._failed[which] = time.monotonic() + OPEN_AGAIN
+            self.error = f"{self.clips[which].name}: {opening.error}"
+            return None
+        self._failed.pop(which, None)
+        return opening.live
 
     def _arm(self, frame: float) -> None:
         """Open the next clip a second before it is due, not on its frame.
@@ -284,7 +383,8 @@ class Track:
             return
         playing = self.which(frame)
         try:
-            self._stream_for(after)
+            if self._stream_for(after, wait=False) is None:
+                return                          # still opening
         except Exception:  # noqa: BLE001 -- said again when it is due
             return
         if playing is not None and playing in self._used:
@@ -342,7 +442,10 @@ class Track:
             self._arm(wanted)
             return None
         clip = self.clips[which]
-        stream = self._stream_for(which)
+        stream = self._stream_for(which, wait=False)
+        if stream is None:                   # being opened, away from here
+            self._arm(wanted)
+            return None
         local = self._local(clip, stream, wanted)
         stream = self._aim(which, local)
         self._arm(wanted)
@@ -402,9 +505,13 @@ class Track:
             self._out, self._out_at = None, None
             return
         try:
-            stream = self._stream_for(which)
-            local = self._local(self.clips[which], stream, index)
+            stream = self._stream_for(which, wait=False)
             self._placed = False          # a seek always moves the reader
+            if stream is None:
+                # Still being opened: aimed when it is, as `_placed` says.
+                self._out, self._out_at = None, None
+                return
+            local = self._local(self.clips[which], stream, index)
             self._aim(which, local)
         except Exception:  # noqa: BLE001 -- said when a frame is asked for
             return
@@ -419,8 +526,13 @@ class Track:
             asking = getattr(live, "ask_to_stop", None)
             if asking is not None:
                 asking()
+        for opening in self._opening.values():
+            opening.cancel()
 
     def stop(self) -> None:
+        for opening in self._opening.values():
+            opening.cancel()
+        self._opening.clear()
         for live in list(self._live.values()):
             live.stop()
         self._live.clear()

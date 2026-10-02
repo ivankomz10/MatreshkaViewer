@@ -12,7 +12,6 @@ import html
 import math
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -1880,14 +1879,7 @@ class Viewer(QMainWindow):
         """Every reader told first, and waited for on a thread of its own:
         each takes about sixty milliseconds to notice, and waited for one at
         a time they were a third of a second of the window standing still."""
-        going = list(streams)
-        for stream in going:
-            asking = getattr(stream, "ask_to_stop", None)
-            if asking is not None:
-                asking()
-        if going:
-            threading.Thread(target=lambda: [one.stop() for one in going],
-                             daemon=True).start()
+        player.let_go(list(streams))
 
     def _let_go_of_screens(self) -> None:
         """Everything that was playing, stopped and handed back."""
@@ -2010,7 +2002,7 @@ class Viewer(QMainWindow):
             for level in show.levels(title):
                 try:
                     track = player.Track(show.on(title, level),
-                                         screen=(across, down))
+                                         screen=(across, down), later=True)
                     if not track.clips:
                         continue
                     surface, carded = kept.get((name, level), (None, False))
@@ -5881,7 +5873,7 @@ class Viewer(QMainWindow):
                 # decided below, not by resampling it into the screen's shape.
                 stream = player.Track(
                     clips, screen=None if row.overlay
-                    else self._pixels(row.screen))
+                    else self._pixels(row.screen), later=True)
                 screen = screen_gpu.Screen(self.device, stream.movie)
             except Exception as error:  # noqa: BLE001 -- shown beside the field
                 row.note.setText(str(error)[:60])
@@ -6914,15 +6906,20 @@ class Viewer(QMainWindow):
         self._remember()
 
     def closeEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        """Closing never waits for the disk. The readers are told to finish
+        and let go of on a thread of their own: one in the middle of a read
+        from a share that has stopped answering held the closing window for
+        as long as the share did, and the program could not end."""
+        logfile.write("exit: the window is closing")
         self._flush_draft()
         self._remember(now=True)
         if self.motors_job is not None:
             self.motors_job.cancel()
-            self.motors_job.wait(10000)
-        for stream in self.streams:
-            stream.stop()
+            self.motors_job.wait(2000)
+        self._stop_readers(self.streams)
         if self.player is not None:
             self.player.stop()
+        logfile.write("exit: readers told to finish, sound stopped")
         super().closeEvent(event)
 
 
@@ -6983,7 +6980,10 @@ def main() -> int:
     # After the window is painted, not during construction: the check talks to
     # the GPU and may open a dialog, and both want something to sit in front of.
     QTimer.singleShot(0, window.check_machine)
-    return app.exec()
+    logfile.quiet_after_quit(app)
+    code = app.exec()
+    logfile.write("exit: the window's loop has ended")
+    return code
 
 
 if __name__ == "__main__":
