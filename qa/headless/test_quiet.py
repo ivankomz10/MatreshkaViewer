@@ -674,6 +674,6 @@ def test_old_english_settings_still_open_on_what_they_say(window):
     main.choose_saved(frame.how, "Fit")
 
 
-def test_the_version_is_the_one_with_the_show_mode():
+def test_the_version_is_the_one_that_never_waits_for_a_share():
     import main
-    assert main.APP_VERSION == "0.4"
+    assert main.APP_VERSION == "0.4.1"

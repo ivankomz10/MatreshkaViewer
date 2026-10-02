@@ -78,7 +78,7 @@ SHOW_SCREENS = (("Top", "Screen_Top"), ("Bottom", "Screen_Bottom"),
 SHOW_MODES = (PREVIEW, "Flat", "Inspection")
 
 APP_NAME = "Matreshka Viewer"
-APP_VERSION = "0.4"
+APP_VERSION = "0.4.1"
 MONO = "IBM Plex Mono, Cascadia Mono, Consolas, DejaVu Sans Mono, Menlo, monospace"
 
 # How the building is drawn: the key each mode is known by in the code and
