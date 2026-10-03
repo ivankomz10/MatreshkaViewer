@@ -450,3 +450,49 @@ def test_a_project_comes_back_as_it_was_saved():
     with pytest.raises(km.ModelError):
         (OUT / "not.kin").write_text(json.dumps({"format": "other"}), "utf-8")
         km.Project.load(OUT / "not.kin")
+
+
+def test_the_export_is_as_long_as_the_motors_move():
+    """Trimmed to the frame the last motor gets there, that frame in: a
+    transition of a few seconds on a minute's timeline is a few seconds."""
+    import json
+    project = km.Project(length=3600)
+    push = project.tracks["push"]
+    one = np.zeros(push.size, bool)
+    one[7] = True
+    push.write(60, np.zeros(push.size), one)
+    push.write(225, np.full(push.size, 0.4), one)
+    written = km.export_motor_json(project, OUT / "trimmed.json")
+    info = json.loads(written.read_text("utf-8"))["info"]
+    assert info["export_range"] == {"start": 0, "end": 226}
+    assert info["total_frames"] == 226
+    assert km.last_arrival(project) == 225
+    # What the show editor makes of it agrees.
+    data = json.loads(written.read_text("utf-8"))["data"]
+    assert showfile.commands_of(data)[0] == 226
+    # A piece that never moves is one frame: its pose.
+    still = km.export_motor_json(km.Project(length=600), OUT / "still.json")
+    assert json.loads(still.read_text("utf-8"))["info"]["total_frames"] == 1
+
+
+def test_an_old_export_read_in_goes_out_in_houdinis_order():
+    """A file this editor wrote before had its groups jack first: read in
+    and written out again, it is laid out as Houdini lays a file out; the
+    ids keep the order they came in."""
+    import json
+    OUT.mkdir(parents=True, exist_ok=True)
+    path, text = _houdini_file(OUT)
+    payload = json.loads(text)
+    for row in payload["data"].values():
+        if "jack" in row:
+            jack = row.pop("jack")
+            row_items = list(row.items())
+            row.clear()
+            row["jack"] = jack
+            row.update(row_items)
+    old = OUT / "old_order_1_of_1.json"
+    old.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+    project, _ = km.from_motor_json(old)
+    back = km.to_motor_json(project)
+    assert list(back["data"]["row_1"]) == ["pusher", "tilt", "jack"]
+    assert list(back["data"]["row_3"]["pusher"]) == list(payload["data"]["row_3"]["pusher"])

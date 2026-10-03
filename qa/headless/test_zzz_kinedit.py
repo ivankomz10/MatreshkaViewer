@@ -1191,3 +1191,28 @@ def test_the_motion_is_worked_out_while_the_window_goes_on(fresh, tick):
     panel = fresh.panels["motors"]
     panel.refresh()
     assert "считается" not in panel.summary.text()
+
+
+def test_the_export_is_trimmed_to_the_last_motor_arriving(fresh):
+    import json
+    cells = np.zeros((ROWS, PER_ROW), bool)
+    cells[5, 0:5] = True
+    fresh._select(cells, "set")
+    fresh.go_to(60)
+    fresh.set_selected("push", 0.0)
+    fresh.go_to(120)
+    fresh.set_selected("push", 0.9)                 # far quicker than a pusher
+    fresh.select_none()
+    # With the plan, the move is the machine's own: its command's end.
+    written = fresh.export_to(OUT / "trim_1_of_1.json")
+    info = json.loads(written.read_text("utf-8"))["info"]
+    assert info["total_frames"] == fresh.last_export_frames < fresh.project.length
+    assert "до последнего доезда" in fresh.status.text()
+    planned = info["total_frames"]
+    # Without, the keys' own end is earlier than the pusher gets there: the
+    # file runs to where it does, as the simulation has it.
+    fresh.set_plan(False)
+    written = fresh.export_to(OUT / "trim_1_of_1.json")
+    late = json.loads(written.read_text("utf-8"))["info"]["total_frames"]
+    assert late > 121 and late >= planned - 1
+    fresh.set_plan(True)

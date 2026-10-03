@@ -2885,11 +2885,22 @@ class KineticEditor(QMainWindow):
             self.export_to(path)
 
     def export_to(self, path) -> Path:
-        written = km.export_motor_json(self.composed(), path)
+        """The motor JSON, as long as the motors move: to the frame the
+        last of them gets there as the machine runs it -- with the plan of
+        moves, the end of its last command; without, later where a move is
+        late."""
+        composed = self.composed()
+        self._resimulate()
+        result = self.simulation()
+        arrives = km.last_arrival(result.project) if result is not None else 0
+        end = max(km.last_arrival(composed), arrives) + 1
+        written = km.export_motor_json(composed, path, end)
+        self.last_export_frames = end
         self.settings["export_folder"] = str(written.parent)
         self._write_settings()
         warnings = self.desired().violations()
-        words = tr("Записан {0}", written.name)
+        words = tr("Записан {0}: {1:.2f} с, до последнего доезда мотора", written.name,
+                   end / km.FPS)
         if warnings:
             words += " — " + tr("наклон вне предела на {0} ключах", len(warnings))
         result = self.simulation()

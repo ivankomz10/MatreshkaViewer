@@ -802,28 +802,48 @@ def _segments(track: Track, motor: int, holds) -> tuple:
 
 
 def _in_order(data: dict, layout: list) -> dict:
-    """The file's rows, groups and ids in the order the file it came from
-    had them; anything that file did not have after, in its own order."""
-    ordered: dict = {}
+    """The ids of each group in the order the file a piece came from had
+    them -- Houdini writes them in its own points' order -- and any it did
+    not have after. Rows and groups stay as Houdini always has them: a
+    file this editor wrote before 2026-10-03 had its groups the other way
+    round, and that is not kept."""
     for row_key, groups in layout:
-        if row_key not in data:
+        row = data.get(row_key)
+        if row is None:
             continue
-        row = ordered.setdefault(row_key, {})
         for group, ids in groups:
-            got = data[row_key].get(group)
+            got = row.get(group)
             if got is None:
                 continue
-            row[group] = {key: got[key] for key in ids if key in got}
-            row[group].update({key: value for key, value in got.items()
-                               if key not in row[group]})
-        for group, got in data[row_key].items():
-            row.setdefault(group, got)
-    for row_key, row in data.items():
-        ordered.setdefault(row_key, row)
-    return ordered
+            ordered = {key: got[key] for key in ids if key in got}
+            ordered.update({key: value for key, value in got.items()
+                            if key not in ordered})
+            row[group] = ordered
+    return data
 
 
-def to_motor_json(project: Project, name: str | None = None) -> dict:
+def last_arrival(project) -> int:
+    """The frame the last motor gets where it is going: the end of the last
+    move of any of them."""
+    last = 0
+    for family in FAMILIES:
+        track = project.tracks[family]
+        frames, values, keyed, _, _ = track._stacked()
+        if len(frames) < 2:
+            continue
+        for motor in range(track.size):
+            mine = np.nonzero(keyed[:, motor])[0]
+            if len(mine) < 2:
+                continue
+            held = values[mine, motor]
+            moving = np.nonzero(np.abs(np.diff(held)) >= 1e-6)[0]
+            if len(moving):
+                last = max(last, int(frames[mine[moving[-1] + 1]]))
+    return last
+
+
+def to_motor_json(project: Project, name: str | None = None,
+                  end: int | None = None) -> dict:
     """The piece as one motor JSON, laid out as Houdini's exporter lays it
     out -- so a file read in and written straight back out is the file it
     was: the same rows in the same order, pusher, tilt and jack in each, the
@@ -831,7 +851,8 @@ def to_motor_json(project: Project, name: str | None = None) -> dict:
     same segments.
 
     A motor says where it starts with a segment of no length at frame 0,
-    unless it starts moving there. The range is the piece's length.
+    unless it starts moving there. The range is the piece's length, or
+    `end` -- the export trims it to the last motor's arrival.
     """
     import datetime
 
@@ -866,7 +887,7 @@ def to_motor_json(project: Project, name: str | None = None) -> dict:
                 segments.append({"frame": int(frame), "start": said_start,
                                  "dest": said_dest, "length": int(length)})
             data[f"row_{row}"][group][f"id_{which}"] = segments
-    end = int(project.length)
+    end = int(project.length if end is None else end)
     if written.layout:
         data = _in_order(data, written.layout)
     return {
@@ -885,12 +906,17 @@ def to_motor_json(project: Project, name: str | None = None) -> dict:
     }
 
 
-def export_motor_json(project: Project, path: str | Path) -> Path:
-    """Write the piece as `<name>_1_of_1.json` beside `path`, or at it."""
+def export_motor_json(project: Project, path: str | Path, end: int | None = None) -> Path:
+    """Write the piece as `<name>_1_of_1.json` beside `path`, or at it --
+    as long as `end` frames, or as long as its motors move: to the frame the
+    last of them gets where it is going, that frame included. A clip as
+    long as its piece's timeline held the show a while after the motion
+    was over."""
     path = Path(path)
     if not path.stem.endswith("_of_1"):
         path = path.with_name(f"{path.stem}_1_of_1.json")
-    payload = to_motor_json(project, path.stem.removesuffix("_1_of_1"))
+    end = last_arrival(project) + 1 if end is None else int(end)
+    payload = to_motor_json(project, path.stem.removesuffix("_1_of_1"), end)
     temporary = path.with_name(path.name + ".writing")
     temporary.write_text(json.dumps(payload, indent=4), encoding="utf-8")
     temporary.replace(path)

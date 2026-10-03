@@ -538,7 +538,6 @@ EN: dict = {
     'облёт; СКМ или Shift — сдвиг; колесо — ближе':
         'orbit; MMB or Shift to slide; the wheel comes closer',
     'Открыто: {0}': 'Opened: {0}',
-    'Записан {0}': 'Wrote {0}',
     'К следующему ключу, где наклон вне предела':
         'To the next key where a tilt is past its limit',
     ' с': ' s',
@@ -951,4 +950,6 @@ EN: dict = {
     'домкрат ряда 30 двигается, а в TouchDesigner их 29 — файл пронумерован как в Cinema 4D, ряд 30 не читается':
         'the jack of row 30 moves, and TouchDesigner has 29: the file is numbered as Cinema 4D numbers it; row 30 is not read',
     'домкрат {0}': 'jack {0}',
+    'Записан {0}: {1:.2f} с, до последнего доезда мотора':
+        'Wrote {0}: {1:.2f} s, to the last motor arriving',
 }
