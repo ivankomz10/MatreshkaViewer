@@ -105,6 +105,11 @@ VERSION = 1
 READING = "machine"
 NO_JACK = 0
 
+# How the editor's own jack array is laid out: lift[r] is the gap under ring
+# r, counted from zero, and the lowest ring (NO_JACK) has none -- the
+# machine's way of saying it, whatever a file says. Files are numbered as
+# TouchDesigner on the site counts the jacks, 1 to 29 from the bottom, as
+# Houdini's exporter writes them: a file's jack row N is lift[N] (`json_row`).
 # A moving primitive is looked at this often, in frames, when it is turned
 # into keys; the plan of moves (`kin_plan`) then makes of that what the
 # motors can carry out.
@@ -119,11 +124,22 @@ class ModelError(Exception):
 
 
 def motor_address(family: str, index: int) -> tuple[int, int]:
-    """(row, id), both from zero, of the motor at a flat index."""
+    """(row, id), both from zero, of the motor at a flat index -- for a
+    jack, the ring whose gap under it it opens."""
     if family == "lift":
         return index, 0
     per = GROUPS if family == "push" else PER_ROW
     return divmod(index, per)
+
+
+def json_row(family: str, index: int):
+    """(row, id) as a motor JSON numbers them, both from one, or None for a
+    motor no file has: jack N (TouchDesigner's, and Houdini's) opens the gap
+    between rings N and N+1, which is lift[N]; the lowest ring has none."""
+    if family == "lift":
+        return (index, 1) if 1 <= index <= ROWS - 1 else None
+    row, which = motor_address(family, index)
+    return row + 1, which + 1
 
 
 # -- one family's keys -------------------------------------------------------
@@ -530,6 +546,10 @@ class Project:
         # moves the machine carries out (`kin_plan`), and its tolerance.
         self.plan = True
         self.tolerance = PLAN_TOLERANCE
+        # How the motor file this came from was written, where keys alone
+        # cannot say it, so that read in and written straight back out it is
+        # the same file (`Written`); None for a piece made here.
+        self.written = None
         # Bumped by whatever changes the masks, the primitives or the layers,
         # which have no versions of their own.
         self.revision = 0
@@ -577,13 +597,13 @@ class Project:
                 self.length, dict(self.profiles), dict(self.masks),
                 [one.state() for one in self.primitives], self.prim_step,
                 dict(self.clips), [one.state() for one in self.layers],
-                self.plan, self.tolerance)
+                self.plan, self.tolerance, self.written)
 
     def restore(self, state) -> None:
         import kin_layers
         import kin_prims
         (tracks, self.length, profiles, masks, primitives, self.prim_step,
-         clips, layers, self.plan, self.tolerance) = state
+         clips, layers, self.plan, self.tolerance, self.written) = state
         self.profiles = dict(profiles)
         self.masks = dict(masks)
         self.primitives = [kin_prims.Primitive.from_state(one) for one in primitives]
@@ -631,6 +651,7 @@ class Project:
             "clips": {name: clip.to_dict() for name, clip in self.clips.items()},
             "layers": [one.state() for one in self.layers],
             "plan": bool(self.plan), "tolerance": float(self.tolerance),
+            "written": self.written.to_dict() if self.written is not None else None,
         }
 
     def save(self, path: str | Path) -> None:
@@ -675,6 +696,7 @@ class Project:
         project.prim_step = int(data.get("prim_step") or PRIM_STEP)
         project.plan = bool(data.get("plan", True))
         project.tolerance = float(data.get("tolerance", PLAN_TOLERANCE))
+        project.written = Written.from_dict(data.get("written"))
         import kin_layers
         try:
             project.clips = {str(name): kin_layers.Clip.from_dict(one, path.name)
@@ -720,49 +742,142 @@ def _number(value: float, family: str):
     return int(value) if float(value).is_integer() else value
 
 
-def to_motor_json(project: Project, name: str | None = None) -> dict:
-    """The piece as one motor JSON, the kind Houdini's exporter writes.
+class Written:
+    """How a motor file was written, where its keys alone cannot say it --
+    kept so that a file read in and written straight back out is the file it
+    was, to the byte:
 
-    Every motor gets a zero-length segment at frame 0 saying where it starts,
-    as Cinema 4D's exporter does, so a file played after another begins from
-    its own pose rather than from wherever the last one left it. The last
-    frame gets one more on the first jack, standing still: the show editor
-    makes a file as long as its last command, and this is what makes it as
-    long as the piece rather than as long as its last movement.
+      holds    segments that hold a motor still, by family: (motor, from
+               frame, to frame). Keys cannot tell a hold from a pause, and
+               Houdini writes both
+      layout   the order of its rows, of the groups in each and the ids in
+               each: Houdini writes the ids in its own points' order
+      floats   whole numbers it wrote with a point -- a pusher's 0.0 for 0 --
+               by family: (motor, frame, "start" or "dest")
+
+    Never changed once read. Nothing here changes what a motor does: a hold
+    is where the motor stays, 0.0 is 0, and the order is only an order.
     """
+
+    def __init__(self, holds=None, layout=None, floats=None) -> None:
+        self.holds = {family: frozenset(spans) for family, spans in (holds or {}).items()}
+        self.layout = layout or None
+        self.floats = {family: frozenset(spots) for family, spots in (floats or {}).items()}
+
+    def to_dict(self) -> dict:
+        return {"holds": {family: sorted(list(one) for one in spans)
+                          for family, spans in self.holds.items() if spans},
+                "layout": self.layout,
+                "floats": {family: sorted(list(one) for one in spots)
+                           for family, spots in self.floats.items() if spots}}
+
+    @classmethod
+    def from_dict(cls, data):
+        if not data:
+            return None
+        return cls({family: [tuple(int(v) for v in one) for one in spans]
+                    for family, spans in (data.get("holds") or {}).items()},
+                   data.get("layout"),
+                   {family: [(int(m), int(f), str(field)) for m, f, field in spots]
+                    for family, spots in (data.get("floats") or {}).items()})
+
+
+def _segments(track: Track, motor: int, holds) -> tuple:
+    """One motor's keys as a file's segments: a move between every two keys
+    that differ, and a hold between two that do not where the file it came
+    from said one -- otherwise the motor simply waits. (first value, [(frame,
+    start, dest, length)])."""
+    frames, values, keyed, _, _ = track._stacked()
+    mine = np.nonzero(keyed[:, motor])[0] if len(frames) else []
+    if not len(mine):
+        return REST[track.family], []
+    at = frames[mine].tolist()
+    held = values[mine, motor].astype(np.float64).tolist()
+    out = []
+    for k in range(len(at) - 1):
+        a, b = held[k], held[k + 1]
+        if abs(b - a) >= 1e-6 or (motor, at[k], at[k + 1]) in holds:
+            out.append((at[k], a, b, at[k + 1] - at[k]))
+    return held[0], out
+
+
+def _in_order(data: dict, layout: list) -> dict:
+    """The file's rows, groups and ids in the order the file it came from
+    had them; anything that file did not have after, in its own order."""
+    ordered: dict = {}
+    for row_key, groups in layout:
+        if row_key not in data:
+            continue
+        row = ordered.setdefault(row_key, {})
+        for group, ids in groups:
+            got = data[row_key].get(group)
+            if got is None:
+                continue
+            row[group] = {key: got[key] for key in ids if key in got}
+            row[group].update({key: value for key, value in got.items()
+                               if key not in row[group]})
+        for group, got in data[row_key].items():
+            row.setdefault(group, got)
+    for row_key, row in data.items():
+        ordered.setdefault(row_key, row)
+    return ordered
+
+
+def to_motor_json(project: Project, name: str | None = None) -> dict:
+    """The piece as one motor JSON, laid out as Houdini's exporter lays it
+    out -- so a file read in and written straight back out is the file it
+    was: the same rows in the same order, pusher, tilt and jack in each, the
+    jacks numbered 1 to 29 as TouchDesigner counts them (`json_row`), and the
+    same segments.
+
+    A motor says where it starts with a segment of no length at frame 0,
+    unless it starts moving there. The range is the piece's length.
+    """
+    import datetime
+
     data: dict = {}
-    last = 0
-    for family in FAMILIES:
+    for row in range(1, ROWS + 1):
+        data[f"row_{row}"] = {"pusher": {}, "tilt": {}}
+        if row <= ROWS - 1:
+            data[f"row_{row}"]["jack"] = {}
+    written = project.written or Written()
+    for family in ("push", "tilt", "lift"):
         track = project.tracks[family]
         group = JSON_GROUP[family]
+        holds = written.holds.get(family, ())
+        floats = written.floats.get(family, ())
         for motor in range(track.size):
-            row, which = motor_address(family, motor)
-            first, moves = track.segments(motor)
-            segments = [{"frame": 0, "start": _number(first, family),
-                         "dest": _number(first, family), "length": 0}]
+            where = json_row(family, motor)
+            if where is None:
+                continue
+            row, which = where
+            first, moves = _segments(track, motor, holds)
+            segments = []
+            if not moves or moves[0][0] > 0:
+                segments.append({"frame": 0, "start": _number(first, family),
+                                 "dest": _number(first, family), "length": 0})
             for frame, start, dest, length in moves:
-                segments.append({"frame": frame,
-                                 "start": _number(start, family),
-                                 "dest": _number(dest, family),
-                                 "length": length})
-                last = max(last, frame + length)
-            data.setdefault(f"row_{row + 1}", {}).setdefault(group, {})[
-                f"id_{which + 1}"] = segments
-    end = max(project.length - 1, last)
-    if end > last:
-        lift = project.tracks["lift"].at(end).reshape(-1)
-        held = _number(float(lift[0]), "lift")
-        data["row_1"]["jack"]["id_1"].append(
-            {"frame": end, "start": held, "dest": held, "length": 0})
+                said_start, said_dest = _number(start, family), _number(dest, family)
+                if floats:
+                    if isinstance(said_start, int) and (motor, frame, "start") in floats:
+                        said_start = float(said_start)
+                    if isinstance(said_dest, int) and (motor, frame, "dest") in floats:
+                        said_dest = float(said_dest)
+                segments.append({"frame": int(frame), "start": said_start,
+                                 "dest": said_dest, "length": int(length)})
+            data[f"row_{row}"][group][f"id_{which}"] = segments
+    end = int(project.length)
+    if written.layout:
+        data = _in_order(data, written.layout)
     return {
         "name": name or project.name,
         "type": "kinematic_preset",
         "data": data,
         "info": {
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "created_at": str(datetime.datetime.now()),
             "version": "1",
             "export_range": {"start": 0, "end": end},
-            "total_frames": end + 1,
+            "total_frames": end,
             "part": 1,
             "total_parts": 1,
             "fps": FPS,
@@ -799,14 +914,20 @@ def from_motor_json(path: str | Path) -> tuple["Project", list[str]]:
     if motors.fps != FPS:
         raise ModelError(tr("{0}: {1:g} к/с, а редактор работает в {2} к/с",
                             path.name, motors.fps, FPS))
-    project = Project(max(motors.frames, 1), empty=True)
+    # As long as the file says, when it says longer than its commands run:
+    # what writing it back out has to say again.
+    declared = (motors.parts[0].declared_frames if len(motors.parts) == 1 else 0)
+    project = Project(max(motors.frames, declared, 1), empty=True)
     project.name = path.stem.split("_1_of_")[0]
     said = []
     ends: dict = {}
     moves: dict = {}
+    holds: dict = {}
+    floats: dict = {}
     overlaps: set = set()
     starts_off: set = set()
     jumps = 0
+    beyond = False
     for part in motors.parts:
         for row_key, groups in part.data.items():
             row = kinetic._number(row_key) - 1
@@ -822,7 +943,14 @@ def from_motor_json(path: str | Path) -> tuple["Project", list[str]]:
                     which = 0 if family == "lift" else kinetic._number(id_key) - 1
                     if not 0 <= which < per:
                         continue
-                    motor = row * per + which if family != "lift" else row
+                    # A jack row of a file is TouchDesigner's jack: row N is
+                    # the gap under ring N+1, lift[N]. Row 30 has no gap.
+                    motor = row * per + which if family != "lift" else row + 1
+                    if family == "lift" and motor >= ROWS:
+                        beyond = beyond or any(
+                            isinstance(one, dict) and one.get("start") != one.get("dest")
+                            for one in segments)
+                        continue
                     mine = ends.setdefault((family, motor), {0})
                     spans = moves.setdefault((family, motor), [])
                     for pass_no in range(part.repeats):
@@ -836,8 +964,19 @@ def from_motor_json(path: str | Path) -> tuple["Project", list[str]]:
                             mine.add(first + length)
                             spans.append((first, length,
                                           float(one.get("start", 0.0))))
+                            if length > 0 and one.get("start") == one.get("dest"):
+                                holds.setdefault(family, set()).add(
+                                    (motor, first, first + length))
+                            for field in ("start", "dest"):
+                                literal = one.get(field)
+                                if isinstance(literal, float) and literal.is_integer():
+                                    floats.setdefault(family, set()).add(
+                                        (motor, first, field))
     last = motors.frames - 1
-    curves = {"lift": motors.jack,
+    # The viewer's reading, by file row; the editor's jacks are one on.
+    jacks = np.full((ROWS, motors.frames), REST["lift"], np.float32)
+    jacks[1:] = motors.jack[:ROWS - 1]
+    curves = {"lift": jacks,
               "push": motors.pusher.reshape(ROWS * GROUPS, -1),
               "tilt": motors.tilt.reshape(ROWS * PER_ROW, -1)}
     # A motor whose segments overlap, or start somewhere it was not, has a
@@ -889,12 +1028,18 @@ def from_motor_json(path: str | Path) -> tuple["Project", list[str]]:
             track = project.tracks[family]
             track.write(0, np.full(track.size, REST[family]),
                         np.ones(track.size, bool))
+    layout = None
+    if len(motors.parts) == 1:
+        layout = [[row_key, [[group, list(ids)] for group, ids in groups.items()
+                             if isinstance(ids, dict)]]
+                  for row_key, groups in motors.parts[0].data.items()
+                  if isinstance(groups, dict)]
+    project.written = Written(holds, layout, floats)
     if jumps:
         said.append(tr("ключей домкратов между положениями: {0}", jumps))
-    first_row = np.array([one[NO_JACK] for one in project.tracks["lift"].values])
-    if READING == "machine" and np.ptp(first_row) > 1e-6:
-        said.append(tr("домкрат ряда 1 двигается, а у машины его нет — файл "
-                       "пронумерован как в Houdini, подъём сдвинут на кольцо"))
+    if beyond:
+        said.append(tr("домкрат ряда 30 двигается, а в TouchDesigner их 29 — файл "
+                       "пронумерован как в Cinema 4D, ряд 30 не читается"))
     if overlaps:
         said.append(tr("моторов с наложенными сегментами: {0}", len(overlaps)))
     if starts_off:

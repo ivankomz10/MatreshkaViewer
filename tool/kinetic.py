@@ -75,22 +75,20 @@ JACK_SCALE = 0.1 if JACK_LIKE_THE_RIG else 1.0
 
 # Which gap a jack row of a file opens. The files disagree, by tool:
 #
-#   "machine"  the lowest ring stands on the base and the jacks are between
-#              the others (the technical director, 2026-09-29): row 1 has no
-#              jack and row N opens the gap under ring N. Cinema 4D numbers
-#              them so -- it writes rows 2 to 30 and holds row 1 still -- and
-#              the viewer and the kinetic editor read them so: they show what
-#              the site will do.
 #   "rig"      row N opens the gap between rings N and N+1, and row 30 has no
-#              gap to open. Houdini's exporter writes rows 1 to 29, and the rig
-#              in the blend moves the rings so. The viewer was checked against
-#              that rig to 5.6 mm reading it this way; set this back to see a
-#              render made from the rig ring for ring.
+#              gap to open: the 29 jacks are counted 1 to 29 from the bottom.
+#              TouchDesigner on the site counts them so, and Houdini's
+#              exporter writes them so (the technical director, 2026-10-03);
+#              the rig in the blend moves the rings so too, and the viewer was
+#              checked against it to 5.6 mm reading it this way. The viewer
+#              and the kinetic editor read and write this: what the site does.
+#   "machine"  row N opens the gap under ring N, and row 1 has none. Cinema
+#              4D numbers them so -- it writes rows 2 to 30 and holds row 1
+#              still -- and this was taken for the site's own way from
+#              2026-09-29 until TouchDesigner's turned out to be the other.
 #
-# Read one way, a file made the other way lifts every ring one ring off: a
-# Houdini show, played by the machine, opens each gap one ring lower than
-# the rig drew it.
-JACK_READING = "machine"
+# Read one way, a file made the other way lifts every ring one ring off.
+JACK_READING = "rig"
 
 ROWS, PER_ROW, PER_PUSHER = 30, 50, 5
 
@@ -219,6 +217,9 @@ class Part:
         # past it -- see show.commands_of. It is also where a show puts the
         # next part, so the chain below lays them end to end by it.
         self.length, _ = showfile.commands_of(self.data)
+        # And as long as the exporter says, which is what writing it back
+        # out says again.
+        self.declared_frames = int(info.get("total_frames") or 0)
         # Where the exporter thinks this part sits, and which of how many it
         # is. Both are what it says about itself, not what the chain decides.
         self.declared_at = start

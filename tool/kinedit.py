@@ -2702,7 +2702,8 @@ class KineticEditor(QMainWindow):
         low, high = km.tilt_bounds(pose["lift"], pose["push"])
         # The lowest ring stands on the base: there is no gap under it.
         gap = ("—" if row == km.NO_JACK
-               else f"{float(kinetic._state_mm(lift)):.0f} " + tr("мм"))
+               else f"{float(kinetic._state_mm(lift)):.0f} " + tr("мм")
+               + " · " + tr("домкрат {0}", row))
         self.hover_label.setText(tr(
             "кольцо {0}, сота {1}: зазор под ним {2}, вынос {3:.0f} мм, "
             "наклон {4:+.1f}° (вниз до {5:.0f}°, вверх до {6:.0f}°)",

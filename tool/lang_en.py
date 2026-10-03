@@ -629,9 +629,7 @@ EN: dict = {
         'cells past the tilt limit: {0} at {1} keys',
     '{0} — не проект редактора кинетики': '{0} is not a kinetic editor project',
     '{0}: ключ не того размера': '{0}: a key of the wrong size',
-    'домкрат ряда 1 двигается, а у машины его нет — файл пронумерован как в Houdini, подъём сдвинут на кольцо':
-        'the row 1 jack moves, and the machine has none: the file is numbered as Houdini numbers it, the lift is one ring off',
-    'Моторы': 'Motors',
+        'Моторы': 'Motors',
     'Ключи': 'Keys',
     'Симуляция': 'Simulation',
     'Оба': 'Both',
@@ -950,4 +948,7 @@ EN: dict = {
     '{0}: на всех сотах; как он меняется — его ключами':
         '{0}: on every cell; how it changes, by its keys',
     'Симуляция не посчиталась: {0}': 'The simulation could not be worked out: {0}',
+    'домкрат ряда 30 двигается, а в TouchDesigner их 29 — файл пронумерован как в Cinema 4D, ряд 30 не читается':
+        'the jack of row 30 moves, and TouchDesigner has 29: the file is numbered as Cinema 4D numbers it; row 30 is not read',
+    'домкрат {0}': 'jack {0}',
 }

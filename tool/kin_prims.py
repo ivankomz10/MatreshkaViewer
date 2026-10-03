@@ -451,6 +451,7 @@ def compose(project: km.Project, base=None) -> km.Project:
         return project
     out = km.Project(project.length, empty=True)
     out.name = project.name
+    out.written = getattr(project, "written", None)
     for family in km.FAMILIES:
         out.tracks[family].restore(project.tracks[family].state())
     step = max(1, int(getattr(project, "prim_step", km.PRIM_STEP)))

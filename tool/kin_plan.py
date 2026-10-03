@@ -204,6 +204,7 @@ def plan(project, pace: dict | None = None, tolerance: float = TOLERANCE):
     out = km.Project(project.length, empty=True)
     out.name, out.video, out.sound = project.name, project.video, project.sound
     out.masks, out.primitives, out.prim_step = (project.masks, [], project.prim_step)
+    out.written = getattr(project, "written", None)
     touched = 0
     for family in km.FAMILIES:
         track = project.tracks[family]

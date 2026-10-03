@@ -335,6 +335,7 @@ def flatten(project):
     out.name, out.video, out.sound = project.name, project.video, project.sound
     out.masks, out.primitives, out.prim_step = (project.masks, project.primitives,
                                                 project.prim_step)
+    out.written = getattr(project, "written", None)
     for family in km.FAMILIES:
         out.tracks[family].restore(project.tracks[family].state())
     own = {family: project.tracks[family].keyed_any() for family in km.FAMILIES}
