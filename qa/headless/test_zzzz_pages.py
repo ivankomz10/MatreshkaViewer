@@ -26,7 +26,8 @@ def paged(window):
 
 def test_the_window_opens_on_the_viewer_with_the_pages_unbuilt(paged):
     assert paged._on_viewer_page()
-    assert set(paged.page_buttons) == {"viewer", "kinetic", "remap"}
+    assert set(paged.page_buttons) == {"viewer", "kinetic"}
+    assert paged.remap_window is None
     assert paged.page_buttons["viewer"].isChecked()
 
 
@@ -71,12 +72,15 @@ def test_in_the_viewer_hands_the_piece_to_this_window(paged, tick):
     assert paged.row_for("Kinetic").field.text().endswith("_1_of_1.json")
 
 
-def test_the_remap_page_keeps_its_work_beside_the_viewer(paged, tick):
-    paged.show_page("remap")
+def test_the_remap_is_a_window_over_the_viewer_keeping_its_work_beside_it(paged, tick):
+    paged.open_remap()
     tick(1.0)
     from remap import constants
-    made = paged.page_widgets["remap"]
-    assert made.window() is paged
+    made = paged.remap_window
+    assert made.isWindow() and made.parent() is paged, "a window of the viewer's own"
+    assert made.isVisible()
+    paged.open_remap()
+    assert paged.remap_window is made, "called up again, the same window"
     assert constants.PROJECT_DIR == HOME, "the remap's settings would go elsewhere"
     assert constants.tables_present()
     for name in ("full", "half", "quarter"):
@@ -91,8 +95,8 @@ def test_the_remap_draws_a_still_dropped_on_it(paged, tick):
     """A picture dropped on the remap's preview goes through the table, as
     it did in the remap on its own."""
     from PySide6.QtGui import QImage
-    paged.show_page("remap")
-    made = paged.page_widgets["remap"]
+    paged.open_remap()
+    made = paged.remap_window
     still = HOME / "remap_still.png"
     picture = QImage(200, 236, QImage.Format.Format_RGB32)
     picture.fill(0xFF3070C0)
@@ -111,8 +115,9 @@ def test_the_viewer_still_draws_after_the_other_pages(paged, tick):
     drawing when it is in front again."""
     paged.show_page("kinetic")
     tick(0.3)
-    paged.show_page("remap")
+    paged.open_remap()
     tick(0.3)
+    paged.remap_window.hide()
     paged.show_page("viewer")
     tick(0.3)
     before = paged.drawn

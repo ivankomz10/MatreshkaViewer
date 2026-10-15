@@ -15,6 +15,14 @@ build/
 /MatreshkaViewer.exe
 /MatreshkaViewer.app/
 /MatreshkaViewer-*.zip
+# What the Windows door lays out beside itself, and the build's halfway files.
+/bin/
+/MatreshkaViewer_bin/
+/MatreshkaViewer_door.exe
+# What the remap window keeps beside the program: work, not source.
+/remap_tool.json*
+/remap_presets.json*
+/ToRemap/
 develop-eggs/
 dist/
 downloads/

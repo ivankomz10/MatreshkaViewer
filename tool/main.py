@@ -4665,6 +4665,7 @@ class Viewer(QMainWindow):
                 self._hint(None)
         if (event.type() == QEvent.Type.KeyPress
                 and self._on_viewer_page()
+                and QApplication.activeWindow() in (None, self)
                 and (layout_key(event) in self.TRANSPORT_KEYS
                      or layout_key(event) in self.ALWAYS_KEYS
                      or event.text() == "?"
@@ -6936,8 +6937,7 @@ class Viewer(QMainWindow):
         self.page_buttons = {}
         group = QButtonGroup(bar)
         group.setExclusive(True)
-        for name, text in (("viewer", tr("Вьюер")), ("kinetic", tr("Кинетика")),
-                           ("remap", tr("Ремап"))):
+        for name, text in (("viewer", tr("Вьюер")), ("kinetic", tr("Кинетика"))):
             button = QPushButton(text)
             button.setObjectName(f"qa_page_{name}")
             button.setCheckable(True)
@@ -6949,6 +6949,14 @@ class Viewer(QMainWindow):
             row.addWidget(button)
             self.page_buttons[name] = button
         row.addStretch(1)
+        # The remap is a window of its own over this one, called up here.
+        remap = QPushButton(tr("Ремап…"))
+        remap.setObjectName("qa_open_remap")
+        remap.setProperty("pill", True)
+        remap.setToolTip(tr("Matreshka Remap — отдельным окном поверх вьюера"))
+        remap.clicked.connect(self.open_remap)
+        row.addWidget(remap)
+        self.remap_window = None
         return bar
 
     def _on_viewer_page(self) -> bool:
@@ -6962,24 +6970,40 @@ class Viewer(QMainWindow):
         started = time.perf_counter()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            if name == "kinetic":
-                import kinedit
-                made = kinedit.KineticEditor(language=lang.language())
-                made.setWindowFlags(Qt.WindowType.Widget)
-                made.viewer_hook = self._from_kinetic
-            else:
-                from remap import page as remap_page
-                made = remap_page.make()
+            import kinedit
+            made = kinedit.KineticEditor(language=lang.language())
+            made.setWindowFlags(Qt.WindowType.Widget)
+            made.viewer_hook = self._from_kinetic
         finally:
             QApplication.restoreOverrideCursor()
         self.pages.addWidget(made)
         self.page_widgets[name] = made
         logfile.write(f"page {name} built in {time.perf_counter() - started:.2f} s")
-        if name == "remap":
+        return made
+
+    def open_remap(self) -> None:
+        """Matreshka Remap in a window of its own, over this one: built the
+        first time it is asked for, and the same one every time after."""
+        if self.remap_window is None:
+            started = time.perf_counter()
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                from remap import page as remap_page
+                self.remap_window = remap_page.make(owner=self)
+            finally:
+                QApplication.restoreOverrideCursor()
+            logfile.write(f"remap window built in {time.perf_counter() - started:.2f} s")
             # As the remap did on its own once its window was up: say what
             # the machine is missing for it.
-            QTimer.singleShot(0, made.check_dependencies)
-        return made
+            QTimer.singleShot(0, self.remap_window.check_dependencies)
+        if self.clock.playing:
+            self._toggle()
+        window = self.remap_window
+        if window.isMinimized():
+            window.showNormal()
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     def show_page(self, name: str) -> None:
         """Bring a page forward. The viewer stops playing when it is left,
@@ -7016,12 +7040,13 @@ class Viewer(QMainWindow):
         as long as the share did, and the program could not end."""
         # The other pages first: the kinetic editor asks about unsaved work,
         # and a "no" there keeps the whole window open.
-        for name in ("kinetic", "remap"):
-            page = self.page_widgets.get(name)
-            if page is not None and not page.close():
-                event.ignore()
-                self.show_page(name)
-                return
+        page = self.page_widgets.get("kinetic")
+        if page is not None and not page.close():
+            event.ignore()
+            self.show_page("kinetic")
+            return
+        if self.remap_window is not None:
+            self.remap_window.close()
         logfile.write("exit: the window is closing")
         self._flush_draft()
         self._remember(now=True)

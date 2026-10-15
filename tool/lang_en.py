@@ -15,7 +15,8 @@ EN: dict = {
     # -- the pages of the window --------------------------------------------
     'Вьюер': 'Viewer',
     'Кинетика': 'Kinetics',
-    'Ремап': 'Remap',
+    'Ремап…': 'Remap…',
+    'Matreshka Remap — отдельным окном поверх вьюера': 'Matreshka Remap, in its own window over the viewer',
     # -- the modes, the layers, the checks, the cards ------------------------
     'Превью': 'Preview',
     'Развертка': 'Flat',

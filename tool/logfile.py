@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime
 import platform
+import os
 import sys
 import threading
 import traceback
@@ -48,7 +49,14 @@ _lock = threading.Lock()
 def app_dir() -> Path:
     """Where this application lives, whether frozen or run from source."""
     if getattr(sys, "frozen", False):
+        # Laid out by the Windows door (launcher.py) in bin/<build> beside
+        # it: the door's folder is the program's, and it says which.
+        told = os.environ.get("MATRESHKA_HOME")
+        if told and Path(told).is_dir():
+            return Path(told)
         here = Path(sys.executable).resolve().parent
+        if here.parent.name == "bin" and (here / ".complete").is_file():
+            return here.parent.parent
         # Out of a macOS bundle, so the folder beside the .app is used.
         for parent in [here] + list(here.parents):
             if parent.suffix == ".app":
