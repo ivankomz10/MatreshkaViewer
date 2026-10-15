@@ -27,6 +27,21 @@ import wgpu
 
 import blockdecode
 
+# rendercanvas, on Windows, wakes each canvas's frame scheduler from a timer
+# thread of its own, through a Qt signal emitted from that thread. Now and
+# then the wake-up is lost -- "Error in CallLaterThread callback: Signal
+# source has been deleted" in the log -- and the canvas it was for never
+# draws again. With one canvas that was rare (cc2's log has the line); with
+# the kinetic editor and the remap as pages of the same window it happened
+# nearly every time one of them was opened, and the viewer's picture froze.
+# Woken by Qt timers on the window's own thread instead, nothing is lost,
+# and it draws as fast (56 frames a second against 48 measured, 2026-10-15).
+try:
+    import rendercanvas.utils.asyncs as _canvas_timing
+    _canvas_timing.USE_THREADED_TIMER = False
+except Exception:  # noqa: BLE001 -- another rendercanvas: leave it be
+    pass
+
 SHADER = """
 struct VOut {
     @builtin(position) pos: vec4<f32>,

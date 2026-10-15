@@ -254,6 +254,9 @@ class KineticEditor(QMainWindow):
         lang.set_language(language or self.settings.get("language")
                           or lang.language())
         self.context = None
+        # Set by the viewer when the editor is a page of its window: «Во
+        # вьюере» then hands the files over there instead of starting one.
+        self.viewer_hook = None
 
         self.project = km.Project()
         self.frame = 0
@@ -2718,6 +2721,10 @@ class KineticEditor(QMainWindow):
                 and not spot.isReadOnly())
 
     def eventFilter(self, watched, event):          # noqa: N802
+        # A page of the viewer's window that is not the one open hears
+        # nothing: the keys belong to the page in front.
+        if not self.isVisible():
+            return False
         if self._modal is not None:
             kind = event.type()
             if kind == QEvent.Type.MouseMove:
@@ -2929,6 +2936,10 @@ class KineticEditor(QMainWindow):
         folder = (self.project.path.parent if self.project.path
                   else logfile.app_dir())
         written = self.export_to(folder / f"{self.project.name}_1_of_1.json")
+        if self.viewer_hook is not None:
+            # A page of the viewer's own window: hand it over there.
+            self.viewer_hook(str(written), self.project.video, self.project.sound)
+            return True
         if getattr(sys, "frozen", False):
             command = [sys.executable, "--motors", str(written)]
         else:

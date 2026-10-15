@@ -105,12 +105,23 @@ if os.path.isfile(ffmpeg_source):
 else:
     print("build.spec: no ffmpeg to bundle; the app will find or download one")
 
+# The remap page: its lookup tables, its icons and the layout map, under
+# remap/ in the bundle, where remap/constants.py and remap/icons.py look.
+remap = os.path.join(TOOL, "remap")
+datas += [(os.path.join(remap, "tables", name), os.path.join("remap", "tables"))
+          for name in sorted(os.listdir(os.path.join(remap, "tables")))
+          if name.endswith(".npz")]
+datas += [(os.path.join(remap, "icons", name), os.path.join("remap", "icons"))
+          for name in sorted(os.listdir(os.path.join(remap, "icons")))
+          if name.endswith(".png")]
+datas += [(os.path.join(remap, "Check.png"), "remap")]
+
 a = Analysis(
     [os.path.join(TOOL, "main.py")],
     pathex=[TOOL],
     binaries=[],
     datas=datas,
-    hiddenimports=["rendercanvas.pyside6"],
+    hiddenimports=["rendercanvas.pyside6", "remap.page", "kinedit"],
     excludes=[
         "cv2", "tkinter", "matplotlib", "scipy", "PIL", "pandas",
         "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",

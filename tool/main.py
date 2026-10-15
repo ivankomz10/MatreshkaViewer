@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox,
                                QScrollArea, QSplitter, QToolButton,
                                QWidgetAction,
                                QStyle, QStyleFactory, QToolTip, QVBoxLayout,
-                               QWidget)
+                               QStackedWidget, QWidget)
 from rendercanvas.pyside6 import RenderCanvas
 
 import numpy as np
@@ -1046,8 +1046,22 @@ class Viewer(QMainWindow):
             except Exception as error:  # noqa: BLE001 -- said in the window
                 logfile.write(f"no baked geometry in {folder}: {error}")
 
+        # Three programs in one window, a page each: the viewer itself, the
+        # kinetic editor and the remap. The two others are built the first
+        # time they are opened -- each brings its own card device and files.
+        host = QWidget()
+        self.setCentralWidget(host)
+        hosting = QVBoxLayout(host)
+        hosting.setContentsMargins(0, 0, 0, 0)
+        hosting.setSpacing(0)
+        hosting.addWidget(self._page_bar())
+        self.pages = QStackedWidget()
+        self.pages.setObjectName("qa_pages")
+        hosting.addWidget(self.pages, 1)
+        self.page_widgets = {}
         central = QWidget()
-        self.setCentralWidget(central)
+        self.pages.addWidget(central)
+        self.page_widgets["viewer"] = central
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -4512,7 +4526,8 @@ class Viewer(QMainWindow):
             shortcut = QShortcut(QKeySequence(keys), self)
             shortcut.activated.connect(
                 lambda only=wanted: (self._toggle_full()
-                                     if only is None or self._full else None))
+                                     if self._on_viewer_page()
+                                     and (only is None or self._full) else None))
 
     def _frame_line(self) -> None:
         """The rectangle that will be written, drawn on the picture.
@@ -4649,6 +4664,7 @@ class Viewer(QMainWindow):
                                   QEvent.Type.MouseButtonPress):
                 self._hint(None)
         if (event.type() == QEvent.Type.KeyPress
+                and self._on_viewer_page()
                 and (layout_key(event) in self.TRANSPORT_KEYS
                      or layout_key(event) in self.ALWAYS_KEYS
                      or event.text() == "?"
@@ -6905,11 +6921,107 @@ class Viewer(QMainWindow):
         self._show_stats()
         self._remember()
 
+    # -- the pages: viewer, kinetic editor, remap ----------------------------
+
+    def _page_bar(self) -> QWidget:
+        """The strip over every page that says which of the three is open."""
+        bar = QWidget()
+        bar.setObjectName("qa_page_bar")
+        bar.setFixedHeight(32)
+        bar.setStyleSheet(f"QWidget#qa_page_bar {{ background:{theme.DEEP};"
+                          f" border-bottom:1px solid {theme.SEAM}; }}")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(10, 2, 10, 2)
+        row.setSpacing(2)
+        self.page_buttons = {}
+        group = QButtonGroup(bar)
+        group.setExclusive(True)
+        for name, text in (("viewer", tr("Вьюер")), ("kinetic", tr("Кинетика")),
+                           ("remap", tr("Ремап"))):
+            button = QPushButton(text)
+            button.setObjectName(f"qa_page_{name}")
+            button.setCheckable(True)
+            button.setChecked(name == "viewer")
+            button.setProperty("segment", True)
+            button.setStyleSheet("padding:3px 14px;")
+            button.clicked.connect(lambda _=False, name=name: self.show_page(name))
+            group.addButton(button)
+            row.addWidget(button)
+            self.page_buttons[name] = button
+        row.addStretch(1)
+        return bar
+
+    def _on_viewer_page(self) -> bool:
+        pages = getattr(self, "pages", None)
+        return pages is None or pages.currentIndex() == 0
+
+    def page(self, name: str):
+        """The page's widget, built the first time it is asked for."""
+        if name in self.page_widgets:
+            return self.page_widgets[name]
+        started = time.perf_counter()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            if name == "kinetic":
+                import kinedit
+                made = kinedit.KineticEditor(language=lang.language())
+                made.setWindowFlags(Qt.WindowType.Widget)
+                made.viewer_hook = self._from_kinetic
+            else:
+                from remap import page as remap_page
+                made = remap_page.make()
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.pages.addWidget(made)
+        self.page_widgets[name] = made
+        logfile.write(f"page {name} built in {time.perf_counter() - started:.2f} s")
+        if name == "remap":
+            # As the remap did on its own once its window was up: say what
+            # the machine is missing for it.
+            QTimer.singleShot(0, made.check_dependencies)
+        return made
+
+    def show_page(self, name: str) -> None:
+        """Bring a page forward. The viewer stops playing when it is left,
+        so its sound does not go on under another page."""
+        if name != "viewer" and self.clock.playing:
+            self._toggle()
+        widget = self.page(name)
+        self.pages.setCurrentWidget(widget)
+        self.page_buttons[name].setChecked(True)
+        if name == "viewer":
+            self.canvas.setFocus()
+            self.touch()
+        logfile.write(f"page: {name}")
+
+    def _from_kinetic(self, motors: str, top: str | None, heard: str | None) -> None:
+        """The kinetic editor's «Во вьюере»: its JSON, video and sound onto
+        the quick look's rows, in this same window."""
+        self.show_page("viewer")
+        if self.level != "view":
+            self._set_level("view")
+        handed = {"Kinetic": motors, "Top": top, "Sound": heard}
+        for title, path in handed.items():
+            row = self.row_for(title)
+            if path and row is not None:
+                row.field.setText(path)
+        logfile.write("handed over: " + ", ".join(
+            f"{title} {Path(path).name}" for title, path in handed.items() if path))
+        self._load()
+
     def closeEvent(self, event) -> None:  # noqa: N802 -- Qt naming
         """Closing never waits for the disk. The readers are told to finish
         and let go of on a thread of their own: one in the middle of a read
         from a share that has stopped answering held the closing window for
         as long as the share did, and the program could not end."""
+        # The other pages first: the kinetic editor asks about unsaved work,
+        # and a "no" there keeps the whole window open.
+        for name in ("kinetic", "remap"):
+            page = self.page_widgets.get(name)
+            if page is not None and not page.close():
+                event.ignore()
+                self.show_page(name)
+                return
         logfile.write("exit: the window is closing")
         self._flush_draft()
         self._remember(now=True)
