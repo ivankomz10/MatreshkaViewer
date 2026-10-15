@@ -203,30 +203,50 @@ def raise_splash(app) -> None:
         return
     try:
         from PySide6.QtCore import Qt
-        from PySide6.QtGui import QColor, QPixmap
-        from PySide6.QtWidgets import QSplashScreen
+        from PySide6.QtGui import QColor, QPainter, QPixmap
+        from PySide6.QtWidgets import QWidget
     except Exception:  # noqa: BLE001 -- no Qt, no splash, no matter
         return
-    class Loading(QSplashScreen):
+
+    class Loading(QWidget):
         """The same picture, with the line in the same place as the loader's.
 
-        QSplashScreen puts its message against an edge of the picture. The
-        bootloader's splash draws at a point, just under the rule. On Windows
-        one of these replaces the other while the eye is on it, so the line
-        had better not jump.
+        A plain frameless window rather than QSplashScreen: that one waits,
+        when it is shown, for the system to say the window is on screen --
+        up to a second, and on Windows it took the whole second, every start
+        (measured 2026-10-15: 1.03 s against 0.14 for this). The line is drawn
+        at a point, just under the rule, as the bootloader's splash draws it,
+        so when one replaces the other the line does not jump.
         """
 
-        def drawContents(self, painter) -> None:  # noqa: N802 -- Qt naming
+        def __init__(self, pixmap) -> None:
+            super().__init__(None, Qt.WindowType.SplashScreen
+                             | Qt.WindowType.FramelessWindowHint)
+            self._pixmap = pixmap
+            self._message = ""
+            self.setFixedSize(pixmap.size())
+            screen = self.screen().availableGeometry()
+            self.move(screen.center() - self.rect().center())
+
+        def message(self) -> str:
+            return self._message
+
+        def showMessage(self, text: str) -> None:  # noqa: N802 -- as QSplashScreen
+            self._message = text
+            self.repaint()
+
+        def paintEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+            painter = QPainter(self)
+            painter.drawPixmap(0, 0, self._pixmap)
             painter.setPen(QColor("#b0b0b0"))
             font = painter.font()
             font.setPointSize(9)
             painter.setFont(font)
-            painter.drawText(SPLASH_TEXT_AT[0], SPLASH_TEXT_AT[1],
-                             self.message())
+            painter.drawText(SPLASH_TEXT_AT[0], SPLASH_TEXT_AT[1], self._message)
+            painter.end()
 
     _own_app = app
     _own = Loading(QPixmap(str(picture)))
-    _own.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
     if _last_said:
         _own.showMessage(_last_said[:SPLASH_WIDTH])
     _own.show()

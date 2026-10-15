@@ -23,6 +23,9 @@ build/
 /remap_tool.json*
 /remap_presets.json*
 /ToRemap/
+# Made by the build and by a run from source (wgpu_fast.py); kept by the program.
+tool/wgpu_ffi_built.py
+/cache/
 develop-eggs/
 dist/
 downloads/

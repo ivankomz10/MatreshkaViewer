@@ -42,6 +42,59 @@ try:
 except Exception:  # noqa: BLE001 -- another rendercanvas: leave it be
     pass
 
+# The same signal carried the other wake-up too: wgpu's poll thread saying a
+# frame has come back off the card (the canvas presents through a readback),
+# handed to the window's thread by rendercanvas's call_soon_threadsafe. When
+# that one was lost the canvas waited for its present forever -- caught in
+# the pages test as "draw asked True, waiting for a present True", one run in
+# four. Here it goes by QCoreApplication.postEvent instead, which Qt makes
+# safe from any thread and which has no signal source to lose: the calls
+# queue up, one event says there are some, and the window's thread runs them.
+
+
+def _deliver_on_the_window_thread() -> None:
+    import logging
+    import queue
+
+    from PySide6.QtCore import QCoreApplication, QEvent, QObject
+    import rendercanvas.qt as canvas_qt
+
+    kind = QEvent.Type(QEvent.registerEventType())
+
+    class Courier(QObject):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = queue.SimpleQueue()
+
+        def event(self, event) -> bool:  # noqa: N802 -- Qt naming
+            if event.type() != kind:
+                return super().event(event)
+            while True:
+                try:
+                    call = self.calls.get_nowait()
+                except queue.Empty:
+                    return True
+                try:
+                    call()
+                except Exception as error:  # noqa: BLE001 -- as the loop would
+                    logging.getLogger("rendercanvas").error(
+                        f"call from another thread: {error}")
+
+    courier = Courier()            # made here, on the thread that imports this
+
+    def call_soon_threadsafe(self, callback) -> None:
+        courier.calls.put(callback)
+        QCoreApplication.postEvent(courier, QEvent(kind))
+
+    canvas_qt.QtLoop._rc_call_soon_threadsafe = call_soon_threadsafe
+    canvas_qt._courier = courier   # kept for as long as the program runs
+
+
+try:
+    _deliver_on_the_window_thread()
+except Exception:  # noqa: BLE001 -- another rendercanvas: leave it be
+    pass
+
 SHADER = """
 struct VOut {
     @builtin(position) pos: vec4<f32>,

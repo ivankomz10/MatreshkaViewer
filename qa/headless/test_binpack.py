@@ -130,3 +130,41 @@ def test_the_program_keeps_its_things_beside_the_door(monkeypatch, tmp_path):
     monkeypatch.setenv("MATRESHKA_HOME", str(tmp_path))
     assert module.app_dir() == tmp_path
     assert patched.app_dir is here
+
+
+def test_the_native_door_carries_its_installer_and_says_where(place):
+    """door.c reads one line at the very end of the file -- the zip's
+    comment -- to find the build and the installer; the installer then reads
+    the program out of the same file, past the door and itself."""
+    folder = place / "built"
+    _program(folder, {"MatreshkaViewer.exe": b"program", "_internal/a.dll": b"a" * 3000})
+    door = place / "door_native.exe"
+    door.write_bytes(b"MZ native door" * 500)
+    installer = place / "installer.exe"
+    installer.write_bytes(b"MZ the installer" * 700)
+    out = place / "MatreshkaViewer.exe"
+    said = binpack.pack_native(door, installer, folder, "0.5", out)
+    whole = out.read_bytes()
+    tail = whole[-8192:]
+    line = tail[tail.rindex(b"MTRBIN1;"):].decode("ascii")
+    fields = dict(part.split("=", 1) for part in line.split(";") if "=" in part)
+    assert fields["id"] == said["id"]
+    offset, length = (int(x) for x in fields["installer"].split(","))
+    assert whole[offset:offset + length] == installer.read_bytes()
+    assert whole[:len(door.read_bytes())] == door.read_bytes()
+    archive = zipfile.ZipFile(out)
+    assert json.loads(archive.read(launcher.MANIFEST))["id"] == said["id"]
+    root = place / "bin" / said["id"]
+    launcher.lay_out(archive, said, root)
+    assert (root / "_internal" / "a.dll").read_bytes() == b"a" * 3000
+
+
+def test_the_doors_compile_where_there_is_a_compiler(tmp_path):
+    from pathlib import Path
+    source = Path(binpack.__file__).with_name("door.c")
+    if not binpack.compile_door(source, tmp_path / "door.exe"):
+        pytest.skip("no Microsoft C compiler on this machine")
+    assert binpack.compile_door(source, tmp_path / "kinetic.exe", kinetic=True)
+    for name in ("door.exe", "kinetic.exe"):
+        assert (tmp_path / name).read_bytes()[:2] == b"MZ"
+        assert (tmp_path / name).stat().st_size < 400_000

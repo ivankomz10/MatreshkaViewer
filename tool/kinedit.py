@@ -55,6 +55,8 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QComboBox,
                                QLabel, QLineEdit, QMainWindow, QMessageBox,
                                QPushButton, QScrollArea, QSplitter,
                                QStackedWidget, QVBoxLayout, QWidget)
+import wgpu_fast  # noqa: E402 -- before wgpu: see wgpu_fast.py
+wgpu_fast.install()
 from rendercanvas.pyside6 import RenderCanvas
 
 import kin_model as km

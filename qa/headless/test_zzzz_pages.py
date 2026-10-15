@@ -124,7 +124,12 @@ def test_the_viewer_still_draws_after_the_other_pages(paged, tick):
     for _ in range(5):
         paged.touch()
         tick(0.15)
-    assert paged.drawn > before, "the viewer's picture stopped drawing"
+    inner = paged.canvas._subwidget
+    scheduler = inner._BaseRenderCanvas__scheduler
+    state = (f"draw asked {scheduler._draw_requested}, waiting for a present "
+             f"{scheduler._ready_for_present is not None}, visible {inner.isVisible()}, "
+             f"size {inner.get_physical_size()}, job {paged.job}")
+    assert paged.drawn > before, "the viewer's picture stopped drawing: " + state
     editor = paged.page_widgets["kinetic"]
     paged.show_page("kinetic")
     tick(0.3)

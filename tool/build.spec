@@ -116,12 +116,18 @@ datas += [(os.path.join(remap, "icons", name), os.path.join("remap", "icons"))
           if name.endswith(".png")]
 datas += [(os.path.join(remap, "Check.png"), "remap")]
 
+# wgpu's C interface, prepared now rather than parsed on every start (see
+# wgpu_fast.py): made from the header of the wgpu this build packs.
+sys.path.insert(0, TOOL)
+import wgpu_fast  # noqa: E402
+print(f"build.spec: prepared wgpu interface {wgpu_fast.generate()}")
+
 a = Analysis(
     [os.path.join(TOOL, "main.py")],
     pathex=[TOOL],
     binaries=[],
     datas=datas,
-    hiddenimports=["rendercanvas.pyside6", "remap.page", "kinedit"],
+    hiddenimports=["rendercanvas.pyside6", "remap.page", "kinedit", "wgpu_ffi_built"],
     excludes=[
         "cv2", "tkinter", "matplotlib", "scipy", "PIL", "pandas",
         "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
@@ -187,6 +193,7 @@ exe = EXE(
     entitlements_file=None,
 )
 
+NATIVE_KINETIC = None
 if not MAC:
     import re as _re
     import shutil as _shutil
@@ -242,8 +249,25 @@ if not MAC:
     sys.path.insert(0, TOOL)
     import binpack
     door = _Path(DISTPATH) / "MatreshkaViewer_door.exe"
-    packed = binpack.pack(door, _Path(DISTPATH) / folder_name, version)
-    os.replace(door, _Path(DISTPATH) / "MatreshkaViewer.exe")
+    final = _Path(DISTPATH) / "MatreshkaViewer.exe"
+    # The door in C when there is a compiler (door.c): it starts in
+    # milliseconds, where the Python one spends most of a second unpacking its
+    # own Python on every start. The Python one then only installs, from
+    # inside it. Without a compiler the Python door is the door.
+    native = _Path(TOOL) / "build" / "door_native.exe"
+    kinetic_native = _Path(TOOL) / "build" / "door_kinetic.exe"
+    source = _Path(TOOL) / "door.c"
+    if binpack.compile_door(source, native) and \
+            binpack.compile_door(source, kinetic_native, kinetic=True):
+        packed = binpack.pack_native(native, door, _Path(DISTPATH) / folder_name,
+                                     version, final)
+        door.unlink()
+        NATIVE_KINETIC = kinetic_native      # put in place once its own is built
+        print("build.spec: the doors are native (door.c)")
+    else:
+        packed = binpack.pack(door, _Path(DISTPATH) / folder_name, version)
+        os.replace(door, final)
+        print("build.spec: no C compiler; the Python door it is")
     _shutil.rmtree(_Path(DISTPATH) / folder_name, ignore_errors=True)
     print(f"build.spec: packed build {packed['id']}, {len(packed['files'])} files")
 
@@ -306,3 +330,8 @@ if MAC:
             "NSRequiresAquaSystemAppearance": False,
         },
     )
+
+# The kinetic editor's door in C, when it was built, in place of the Python
+# one just made: the same job, in milliseconds.
+if NATIVE_KINETIC is not None:
+    os.replace(NATIVE_KINETIC, os.path.join(DISTPATH, "MatreshkaKinetic.exe"))

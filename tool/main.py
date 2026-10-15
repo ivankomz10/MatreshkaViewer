@@ -9,7 +9,9 @@ is doing costs more than any feature it might have instead.
 from __future__ import annotations
 
 import html
+import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -29,6 +31,11 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox,
                                QWidgetAction,
                                QStyle, QStyleFactory, QToolTip, QVBoxLayout,
                                QStackedWidget, QWidget)
+# Before anything brings wgpu in: its C interface, prepared ahead of time
+# (see wgpu_fast.py) -- three seconds off every start.
+import wgpu_fast  # noqa: E402
+WGPU_INTERFACE = wgpu_fast.install()
+
 from rendercanvas.pyside6 import RenderCanvas
 
 import numpy as np
@@ -3052,7 +3059,7 @@ class Viewer(QMainWindow):
         quarters of its area cannot be made to match one that covers all of
         it, only met in the middle.
         """
-        self.cover = self.solid.measure_cover()
+        self.cover = self._cover_remembered()
         for name, value in sorted(self.cover.items()):
             logfile.write(f"cover: {name} lights {value:.4f} of its own area")
 
@@ -3069,6 +3076,42 @@ class Viewer(QMainWindow):
         for name, gain in sorted(self.gains.items()):
             logfile.write(f"match: {name} x {gain[0]:.4f}")
         self._matching_changed()
+
+    COVER_CACHE = "cover.json"
+
+    def _cover_remembered(self) -> dict:
+        """The screens' cover, measured once per baked scene and kept.
+
+        It is a fact about the geometry and the camera: the same scene gives
+        the same numbers every time, and measuring them is a render of every
+        screen -- a fifth of a second of each start. So it is kept in
+        cache/cover.json beside the program, against the scene file's size and
+        date and this version, and measured again only when one of them is
+        different. The folder can be deleted at any time.
+        """
+        folder = logfile.bundled(BAKED) or (logfile.app_dir() / BAKED)
+        scene = folder / "scene_mesh.npz"
+        try:
+            facts = scene.stat()
+            key = f"{APP_VERSION}:{facts.st_size}:{int(facts.st_mtime)}"
+        except OSError:
+            key = None
+        kept = logfile.app_dir() / "cache" / self.COVER_CACHE
+        if key is not None:
+            try:
+                said = json.loads(kept.read_text("utf-8"))
+                if said.get("key") == key:
+                    return {name: float(value) for name, value in said["cover"].items()}
+            except (OSError, ValueError, KeyError, AttributeError):
+                pass
+        cover = self.solid.measure_cover()
+        if key is not None:
+            try:
+                kept.parent.mkdir(parents=True, exist_ok=True)
+                kept.write_text(json.dumps({"key": key, "cover": {n: float(v) for n, v in cover.items()}}), "utf-8")
+            except OSError as error:
+                logfile.write(f"cover not kept: {error}")
+        return cover
 
     def _matching_changed(self, *_) -> None:
         self._gains_changed()
@@ -7080,6 +7123,7 @@ def main() -> int:
         import kinedit
         return kinedit.main([one for one in sys.argv if one != "--kinetic"])
     written = logfile.start(APP_NAME, APP_VERSION)
+    logfile.write(f"wgpu interface: {WGPU_INTERFACE}")
     app = QApplication(sys.argv)
     # The design's own faces when they travel with the program, then the
     # window's type and its sheet: see theme.py.
@@ -7092,7 +7136,17 @@ def main() -> int:
     app.setStyleSheet(STYLESHEET)
     # Before the window is built, because building it is what takes the time.
     logfile.raise_splash(app)
+    # MATRESHKA_PROFILE=1: where the building of the window goes, written
+    # beside the log as startup.prof (read with python -m pstats).
+    profiling = None
+    if os.environ.get("MATRESHKA_PROFILE"):
+        import cProfile
+        profiling = cProfile.Profile()
+        profiling.enable()
     window = Viewer()
+    if profiling is not None:
+        profiling.disable()
+        profiling.dump_stats(str(logfile.folder() / "startup.prof"))
     if written is not None:
         logfile.write(f"log: {written}")
     window.show()

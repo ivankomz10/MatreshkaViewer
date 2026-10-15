@@ -1,4 +1,9 @@
-"""MatreshkaViewer.exe on Windows: the program laid out once, beside itself.
+"""The installer behind MatreshkaViewer.exe on Windows: the program laid out
+once, beside the door.
+
+The door itself is door.c, which starts in milliseconds and runs this only
+when bin\<build> is not laid out yet (as bin\install-<build>.exe --from
+<the door>). Built without a C compiler, this is the door.
 
 A one-file build unpacks its whole archive into a temporary folder on every
 start -- two seconds before Python is even running, every time. This is that
@@ -133,6 +138,12 @@ def clear_old(bins: Path, keep: str) -> None:
     if not bins.is_dir():
         return
     for folder in bins.iterdir():
+        if folder.is_file() and folder.name.startswith("install-")                 and folder.name != f"install-{keep}.exe":
+            try:
+                folder.unlink()             # an older build's installer
+            except OSError:
+                pass
+            continue
         if not folder.is_dir() or folder.name == keep:
             continue
         program = folder / TARGET
@@ -145,7 +156,14 @@ def clear_old(bins: Path, keep: str) -> None:
 
 
 def main() -> int:
+    # Started by the C door (door.c) as bin\install-<build>.exe --from <door>:
+    # the program is packed on the door, not on this file. Started on its
+    # own -- the door when no compiler was there for the C one -- it is.
+    arguments = sys.argv[1:]
     here = Path(sys.executable).resolve()
+    if arguments[:1] == ["--from"] and len(arguments) >= 2:
+        here = Path(arguments[1]).resolve()
+        arguments = arguments[2:]
     home = here.parent
     try:
         archive = zipfile.ZipFile(here)
@@ -164,7 +182,7 @@ def main() -> int:
     program = root / TARGET
     environment = dict(os.environ, MATRESHKA_HOME=str(home))
     _close_splash()
-    subprocess.Popen([str(program), *sys.argv[1:]], cwd=str(home), env=environment,
+    subprocess.Popen([str(program), *arguments], cwd=str(home), env=environment,
                      close_fds=True)
     clear_old(bins, root.name)
     return 0

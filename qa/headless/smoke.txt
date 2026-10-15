@@ -1,0 +1,51 @@
+# The quick set: `pytest -m smoke` in qa\headless, or qa\run_smoke.bat.
+# A few tests from every part, each of them short, so that a step can be
+# checked in about half a minute instead of the whole quiet suite's minutes.
+# One test per line, as file.py::name (a whole file: file.py); # starts a note.
+# Anything that fails here, run its whole file next.
+
+# the window: it opens, draws, changes mode, plays, writes a snapshot
+test_quiet.py::test_the_mode_is_called_preview
+test_quiet.py::test_flat_swaps_the_lists_and_puts_them_back
+test_quiet.py::test_every_screen_plays_through_a_track
+test_quiet.py::test_the_snapshot_leaves_the_window_as_it_was
+test_quiet.py::test_files_go_to_rows_by_their_names
+test_quiet.py::test_nothing_went_wrong_the_whole_time
+test_quiet.py::test_the_version_is_the_one_that_writes_motors_as_houdini
+
+# the show
+test_show_mode.py::test_into_the_show_and_back_loses_nothing
+test_editor.py::test_without_the_editor_nothing_changes
+
+# the scene, the readers, the exit
+test_baked.py::test_the_moving_screen_has_its_fifteen_hundred
+test_track.py::test_a_screen_is_a_list_of_tracks_that_add
+test_track.py::test_letting_go_never_waits_for_a_reader
+test_exit.py
+
+# the languages
+test_lang.py::test_no_word_of_the_window_goes_round_tr
+test_lang.py::test_every_word_has_its_english_with_the_same_pieces
+
+# the kinetics, without a window
+test_kin_model.py::test_a_new_piece_stands_at_rest_and_says_every_motor
+test_kin_model.py::test_a_houdini_file_read_in_and_written_out_is_the_same_file
+test_kin_model.py::test_the_jacks_are_numbered_as_touchdesigner_counts_them
+test_kin_model.py::test_the_export_is_as_long_as_the_motors_move
+test_kin_sim.py::test_a_move_asked_too_fast_arrives_at_the_motors_pace
+test_kin_plan.py::test_keys_side_by_side_become_one_move_that_is_carried_out
+test_motors.py::test_nothing_jumps_where_two_parts_meet
+
+# the start: the prepared interface, the kept cover, the door
+test_startup_cache.py
+test_binpack.py::test_an_update_writes_only_what_changed_and_clears_the_old
+test_binpack.py::test_the_native_door_carries_its_installer_and_says_where
+
+# the kinetic editor and the pages (last: they bring canvases of their own)
+test_zzz_kinedit.py::test_the_editor_opens_on_a_resting_piece
+test_zzz_kinedit.py::test_a_brush_stroke_keys_what_it_touched_at_the_playhead
+test_zzz_kinedit.py::test_what_is_exported_opens_again_as_the_same_piece
+test_zzzz_pages.py::test_the_kinetic_page_is_the_editor_drawing_in_the_same_window
+test_zzzz_pages.py::test_a_key_on_one_page_is_not_taken_by_the_other
+test_zzzz_pages.py::test_the_remap_is_a_window_over_the_viewer_keeping_its_work_beside_it
+test_zzzz_pages.py::test_the_viewer_still_draws_after_the_other_pages
