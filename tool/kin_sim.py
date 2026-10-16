@@ -33,10 +33,21 @@ from dataclasses import dataclass, field
 import numpy as np
 
 import kin_model as km
-from kinetic import PER_ROW, ROWS
+from kinetic import PER_ROW, ROWS, TILT_DEGREES, TILT_LIMIT_DEGREES
 
-# Cinema 4D's Moving Time and Delay Time, seconds, by family.
-PACE = {"lift": (15.0, 0.5), "push": (4.0, 0.5), "tilt": (1.25, 0.2)}
+# Moving Time and Delay Time, seconds, by family: the time a motor takes to
+# go from one end of its own travel to the other, and what it rests
+# afterwards. `travel` below is what turns a value into a fraction of that
+# travel, so these numbers mean exactly what they say and nothing has to be
+# converted when reading them against a specification.
+#
+# The jack's and the pusher's are Cinema 4D's. The tilt's 1.5 s, end to end,
+# is the machine's own (the technical director, 2026-10-16); Cinema 4D said
+# 1.25 for the same journey.
+#
+# Not modelled: the specification also says the speed inside the tilt's range
+# is not linear, and the curve for it is written down nowhere here.
+PACE = {"lift": (15.0, 0.5), "push": (4.0, 0.5), "tilt": (1.5, 0.2)}
 
 # Where a jack's four places are along its travel, as Cinema 4D snaps its
 # field: 0, a quarter, a half and all of it.
@@ -54,10 +65,21 @@ LATE_SLACK = 1
 
 
 def travel(family: str, value) -> np.ndarray:
-    """A value as a distance along the motor's travel, 0..1."""
+    """A value as a distance along the motor's own travel, 0..1.
+
+    The tilt is the one where the file and the motor disagree: a JSON tilt can
+    name 90 degrees end to end and the motor goes 60 (`TILT_LIMIT_DEGREES`).
+    Scaled here rather than folded into `PACE`, so that the numbers up there
+    stay the ones the specification states -- 1.5 s from one end to the other
+    -- instead of a figure nobody could check against it. A file written past
+    the motor's reach simply comes out as a distance over 1.0, and takes
+    proportionally longer, which is the truth about it.
+    """
     value = np.asarray(value, np.float64)
     if family == "lift":
         return np.interp(value, [0, 1, 2, 3], LIFT_TRAVEL)
+    if family == "tilt":
+        return value * TILT_DEGREES / (2.0 * TILT_LIMIT_DEGREES)
     return value
 
 

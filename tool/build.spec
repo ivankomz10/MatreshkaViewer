@@ -105,12 +105,29 @@ if os.path.isfile(ffmpeg_source):
 else:
     print("build.spec: no ffmpeg to bundle; the app will find or download one")
 
+# The remap page: its lookup tables, its icons and the layout map, under
+# remap/ in the bundle, where remap/constants.py and remap/icons.py look.
+remap = os.path.join(TOOL, "remap")
+datas += [(os.path.join(remap, "tables", name), os.path.join("remap", "tables"))
+          for name in sorted(os.listdir(os.path.join(remap, "tables")))
+          if name.endswith(".npz")]
+datas += [(os.path.join(remap, "icons", name), os.path.join("remap", "icons"))
+          for name in sorted(os.listdir(os.path.join(remap, "icons")))
+          if name.endswith(".png")]
+datas += [(os.path.join(remap, "Check.png"), "remap")]
+
+# wgpu's C interface, prepared now rather than parsed on every start (see
+# wgpu_fast.py): made from the header of the wgpu this build packs.
+sys.path.insert(0, TOOL)
+import wgpu_fast  # noqa: E402
+print(f"build.spec: prepared wgpu interface {wgpu_fast.generate()}")
+
 a = Analysis(
     [os.path.join(TOOL, "main.py")],
     pathex=[TOOL],
     binaries=[],
     datas=datas,
-    hiddenimports=["rendercanvas.pyside6"],
+    hiddenimports=["rendercanvas.pyside6", "remap.page", "kinedit", "wgpu_ffi_built"],
     excludes=[
         "cv2", "tkinter", "matplotlib", "scipy", "PIL", "pandas",
         "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
@@ -127,12 +144,10 @@ a.datas = [item for item in a.datas if keep(item)]
 
 pyz = PYZ(a.pure)
 
-# A one-file build spends its first seconds unpacking, before Python is even
-# running, and nothing on screen says so. The splash comes from the bootloader
-# itself, so it is up in that gap; once Python starts, every line written to
-# the log is also written across it, and it closes when the window appears.
-# Windows and Linux only -- PyInstaller has no splash for macOS, and the mac
-# build is a folder that starts at once anyway.
+# The splash comes from the bootloader itself, so it is up before Python is
+# running; once Python starts, every line written to the log is also written
+# across it, and it closes when the window appears. Windows and Linux only --
+# PyInstaller has no splash for macOS, and the mac build starts at once.
 splash = None if MAC else Splash(
     os.path.join(TOOL, "splash.png"),
     binaries=a.binaries,
@@ -140,31 +155,27 @@ splash = None if MAC else Splash(
     text_pos=(30, 152),
     text_size=9,
     text_color="#b0b0b0",
-    text_default="unpacking...",
+    text_default="loading...",
     minify_script=True,
     always_on_top=False,
 )
 
-# One file on Windows, a folder on macOS, and the difference matters.
+# A folder on both systems now, and on Windows one file all the same.
 #
-# A one-file build is a stub that unpacks the whole archive into a temporary
-# folder on *every* launch and then starts a second process to run it. That is
-# why it takes seconds to appear and why two processes show up: the parent is
-# the unpacker, the child is the application.
-#
-# On Windows one file is worth that, because a single .exe is the thing you
-# hand to somebody. On macOS it buys nothing: a .app is already a folder, so
-# packing a folder into one file inside it only adds the unpacking. Built as a
-# folder it starts at once, shows one process, and is the layout codesigning
-# and notarisation expect.
+# A one-file build unpacks its whole archive into a temporary folder on
+# *every* launch -- two seconds before Python is even running. So on Windows
+# the program is built as a folder, and that folder is packed onto the end of
+# a small door, launcher.py, which is the MatreshkaViewer.exe handed over: the
+# first start lays the folder out in bin/<build> beside it, every start after
+# runs it from there at once, and an update writes only the files that
+# changed (see launcher.py and binpack.py). On macOS a .app is a folder
+# already.
 exe = EXE(
     pyz,
+    *([] if MAC else [splash]),
     a.scripts,
-    *([] if MAC else [splash, splash.binaries]),
-    [] if MAC else a.binaries,
-    [] if MAC else a.datas,
     [],
-    exclude_binaries=MAC,
+    exclude_binaries=True,
     name="MatreshkaViewer",
     debug=False,
     strip=False,
@@ -181,6 +192,84 @@ exe = EXE(
     codesign_identity=os.environ.get("CODESIGN_IDENTITY") or None,
     entitlements_file=None,
 )
+
+NATIVE_KINETIC = None
+if not MAC:
+    import re as _re
+    import shutil as _shutil
+    from pathlib import Path as _Path
+
+    folder_name = "MatreshkaViewer_bin"
+    COLLECT(exe, splash.binaries, a.binaries, a.datas, strip=False, upx=False,
+            name=folder_name)
+
+    # The door: a few megabytes of Python with the same picture, which shows
+    # how far the laying out has gone.
+    gate = Analysis(
+        [os.path.join(TOOL, "launcher.py")],
+        pathex=[TOOL],
+        binaries=[],
+        datas=[],
+        hiddenimports=[],
+        excludes=["numpy", "PySide6", "wgpu", "rendercanvas", "tkinter",
+                  "unittest", "pydoc", "email", "http", "xml"],
+        noarchive=False,
+    )
+    gate_splash = Splash(
+        os.path.join(TOOL, "splash.png"),
+        binaries=gate.binaries,
+        datas=gate.datas,
+        text_pos=(30, 152),
+        text_size=9,
+        text_color="#b0b0b0",
+        text_default="Matreshka Viewer",
+        minify_script=True,
+        always_on_top=False,
+    )
+    EXE(
+        PYZ(gate.pure),
+        gate_splash,
+        gate_splash.binaries,
+        gate.scripts,
+        gate.binaries,
+        gate.datas,
+        [],
+        # Its own name while it is built -- the program inside is
+        # MatreshkaViewer too, and the two would share the work files --
+        # and the program's once it is packed.
+        name="MatreshkaViewer_door",
+        debug=False,
+        strip=False,
+        upx=False,
+        console=False,
+    )
+    version = _re.search(r'^APP_VERSION = "([^"]+)"',
+                         open(os.path.join(TOOL, "main.py"), encoding="utf-8").read(),
+                         _re.M).group(1)
+    sys.path.insert(0, TOOL)
+    import binpack
+    door = _Path(DISTPATH) / "MatreshkaViewer_door.exe"
+    final = _Path(DISTPATH) / "MatreshkaViewer.exe"
+    # The door in C when there is a compiler (door.c): it starts in
+    # milliseconds, where the Python one spends most of a second unpacking its
+    # own Python on every start. The Python one then only installs, from
+    # inside it. Without a compiler the Python door is the door.
+    native = _Path(TOOL) / "build" / "door_native.exe"
+    kinetic_native = _Path(TOOL) / "build" / "door_kinetic.exe"
+    source = _Path(TOOL) / "door.c"
+    if binpack.compile_door(source, native) and \
+            binpack.compile_door(source, kinetic_native, kinetic=True):
+        packed = binpack.pack_native(native, door, _Path(DISTPATH) / folder_name,
+                                     version, final)
+        door.unlink()
+        NATIVE_KINETIC = kinetic_native      # put in place once its own is built
+        print("build.spec: the doors are native (door.c)")
+    else:
+        packed = binpack.pack(door, _Path(DISTPATH) / folder_name, version)
+        os.replace(door, final)
+        print("build.spec: no C compiler; the Python door it is")
+    _shutil.rmtree(_Path(DISTPATH) / folder_name, ignore_errors=True)
+    print(f"build.spec: packed build {packed['id']}, {len(packed['files'])} files")
 
 # The kinetic editor's own name on Windows: MatreshkaKinetic.exe, a few
 # megabytes that start MatreshkaViewer.exe --kinetic beside it (see
@@ -241,3 +330,8 @@ if MAC:
             "NSRequiresAquaSystemAppearance": False,
         },
     )
+
+# The kinetic editor's door in C, when it was built, in place of the Python
+# one just made: the same job, in milliseconds.
+if NATIVE_KINETIC is not None:
+    os.replace(NATIVE_KINETIC, os.path.join(DISTPATH, "MatreshkaKinetic.exe"))

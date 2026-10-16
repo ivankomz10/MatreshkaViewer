@@ -9,7 +9,9 @@ is doing costs more than any feature it might have instead.
 from __future__ import annotations
 
 import html
+import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -28,7 +30,12 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox,
                                QScrollArea, QSplitter, QToolButton,
                                QWidgetAction,
                                QStyle, QStyleFactory, QToolTip, QVBoxLayout,
-                               QWidget)
+                               QStackedWidget, QWidget)
+# Before anything brings wgpu in: its C interface, prepared ahead of time
+# (see wgpu_fast.py) -- three seconds off every start.
+import wgpu_fast  # noqa: E402
+WGPU_INTERFACE = wgpu_fast.install()
+
 from rendercanvas.pyside6 import RenderCanvas
 
 import numpy as np
@@ -1046,8 +1053,22 @@ class Viewer(QMainWindow):
             except Exception as error:  # noqa: BLE001 -- said in the window
                 logfile.write(f"no baked geometry in {folder}: {error}")
 
+        # Three programs in one window, a page each: the viewer itself, the
+        # kinetic editor and the remap. The two others are built the first
+        # time they are opened -- each brings its own card device and files.
+        host = QWidget()
+        self.setCentralWidget(host)
+        hosting = QVBoxLayout(host)
+        hosting.setContentsMargins(0, 0, 0, 0)
+        hosting.setSpacing(0)
+        hosting.addWidget(self._page_bar())
+        self.pages = QStackedWidget()
+        self.pages.setObjectName("qa_pages")
+        hosting.addWidget(self.pages, 1)
+        self.page_widgets = {}
         central = QWidget()
-        self.setCentralWidget(central)
+        self.pages.addWidget(central)
+        self.page_widgets["viewer"] = central
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -3038,7 +3059,7 @@ class Viewer(QMainWindow):
         quarters of its area cannot be made to match one that covers all of
         it, only met in the middle.
         """
-        self.cover = self.solid.measure_cover()
+        self.cover = self._cover_remembered()
         for name, value in sorted(self.cover.items()):
             logfile.write(f"cover: {name} lights {value:.4f} of its own area")
 
@@ -3055,6 +3076,42 @@ class Viewer(QMainWindow):
         for name, gain in sorted(self.gains.items()):
             logfile.write(f"match: {name} x {gain[0]:.4f}")
         self._matching_changed()
+
+    COVER_CACHE = "cover.json"
+
+    def _cover_remembered(self) -> dict:
+        """The screens' cover, measured once per baked scene and kept.
+
+        It is a fact about the geometry and the camera: the same scene gives
+        the same numbers every time, and measuring them is a render of every
+        screen -- a fifth of a second of each start. So it is kept in
+        cache/cover.json beside the program, against the scene file's size and
+        date and this version, and measured again only when one of them is
+        different. The folder can be deleted at any time.
+        """
+        folder = logfile.bundled(BAKED) or (logfile.app_dir() / BAKED)
+        scene = folder / "scene_mesh.npz"
+        try:
+            facts = scene.stat()
+            key = f"{APP_VERSION}:{facts.st_size}:{int(facts.st_mtime)}"
+        except OSError:
+            key = None
+        kept = logfile.app_dir() / "cache" / self.COVER_CACHE
+        if key is not None:
+            try:
+                said = json.loads(kept.read_text("utf-8"))
+                if said.get("key") == key:
+                    return {name: float(value) for name, value in said["cover"].items()}
+            except (OSError, ValueError, KeyError, AttributeError):
+                pass
+        cover = self.solid.measure_cover()
+        if key is not None:
+            try:
+                kept.parent.mkdir(parents=True, exist_ok=True)
+                kept.write_text(json.dumps({"key": key, "cover": {n: float(v) for n, v in cover.items()}}), "utf-8")
+            except OSError as error:
+                logfile.write(f"cover not kept: {error}")
+        return cover
 
     def _matching_changed(self, *_) -> None:
         self._gains_changed()
@@ -4512,7 +4569,8 @@ class Viewer(QMainWindow):
             shortcut = QShortcut(QKeySequence(keys), self)
             shortcut.activated.connect(
                 lambda only=wanted: (self._toggle_full()
-                                     if only is None or self._full else None))
+                                     if self._on_viewer_page()
+                                     and (only is None or self._full) else None))
 
     def _frame_line(self) -> None:
         """The rectangle that will be written, drawn on the picture.
@@ -4649,6 +4707,8 @@ class Viewer(QMainWindow):
                                   QEvent.Type.MouseButtonPress):
                 self._hint(None)
         if (event.type() == QEvent.Type.KeyPress
+                and self._on_viewer_page()
+                and QApplication.activeWindow() in (None, self)
                 and (layout_key(event) in self.TRANSPORT_KEYS
                      or layout_key(event) in self.ALWAYS_KEYS
                      or event.text() == "?"
@@ -6905,11 +6965,131 @@ class Viewer(QMainWindow):
         self._show_stats()
         self._remember()
 
+    # -- the pages: viewer, kinetic editor, remap ----------------------------
+
+    def _page_bar(self) -> QWidget:
+        """The strip over every page that says which of the three is open."""
+        bar = QWidget()
+        bar.setObjectName("qa_page_bar")
+        bar.setFixedHeight(32)
+        bar.setStyleSheet(f"QWidget#qa_page_bar {{ background:{theme.DEEP};"
+                          f" border-bottom:1px solid {theme.SEAM}; }}")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(10, 2, 10, 2)
+        row.setSpacing(2)
+        self.page_buttons = {}
+        group = QButtonGroup(bar)
+        group.setExclusive(True)
+        for name, text in (("viewer", tr("Вьюер")), ("kinetic", tr("Кинетика"))):
+            button = QPushButton(text)
+            button.setObjectName(f"qa_page_{name}")
+            button.setCheckable(True)
+            button.setChecked(name == "viewer")
+            button.setProperty("segment", True)
+            button.setStyleSheet("padding:3px 14px;")
+            button.clicked.connect(lambda _=False, name=name: self.show_page(name))
+            group.addButton(button)
+            row.addWidget(button)
+            self.page_buttons[name] = button
+        row.addStretch(1)
+        # The remap is a window of its own over this one, called up here.
+        remap = QPushButton(tr("Ремап…"))
+        remap.setObjectName("qa_open_remap")
+        remap.setProperty("pill", True)
+        remap.setToolTip(tr("Matreshka Remap — отдельным окном поверх вьюера"))
+        remap.clicked.connect(self.open_remap)
+        row.addWidget(remap)
+        self.remap_window = None
+        return bar
+
+    def _on_viewer_page(self) -> bool:
+        pages = getattr(self, "pages", None)
+        return pages is None or pages.currentIndex() == 0
+
+    def page(self, name: str):
+        """The page's widget, built the first time it is asked for."""
+        if name in self.page_widgets:
+            return self.page_widgets[name]
+        started = time.perf_counter()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            import kinedit
+            made = kinedit.KineticEditor(language=lang.language())
+            made.setWindowFlags(Qt.WindowType.Widget)
+            made.viewer_hook = self._from_kinetic
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.pages.addWidget(made)
+        self.page_widgets[name] = made
+        logfile.write(f"page {name} built in {time.perf_counter() - started:.2f} s")
+        return made
+
+    def open_remap(self) -> None:
+        """Matreshka Remap in a window of its own, over this one: built the
+        first time it is asked for, and the same one every time after."""
+        if self.remap_window is None:
+            started = time.perf_counter()
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                from remap import page as remap_page
+                self.remap_window = remap_page.make(owner=self)
+            finally:
+                QApplication.restoreOverrideCursor()
+            logfile.write(f"remap window built in {time.perf_counter() - started:.2f} s")
+            # As the remap did on its own once its window was up: say what
+            # the machine is missing for it.
+            QTimer.singleShot(0, self.remap_window.check_dependencies)
+        if self.clock.playing:
+            self._toggle()
+        window = self.remap_window
+        if window.isMinimized():
+            window.showNormal()
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def show_page(self, name: str) -> None:
+        """Bring a page forward. The viewer stops playing when it is left,
+        so its sound does not go on under another page."""
+        if name != "viewer" and self.clock.playing:
+            self._toggle()
+        widget = self.page(name)
+        self.pages.setCurrentWidget(widget)
+        self.page_buttons[name].setChecked(True)
+        if name == "viewer":
+            self.canvas.setFocus()
+            self.touch()
+        logfile.write(f"page: {name}")
+
+    def _from_kinetic(self, motors: str, top: str | None, heard: str | None) -> None:
+        """The kinetic editor's «Во вьюере»: its JSON, video and sound onto
+        the quick look's rows, in this same window."""
+        self.show_page("viewer")
+        if self.level != "view":
+            self._set_level("view")
+        handed = {"Kinetic": motors, "Top": top, "Sound": heard}
+        for title, path in handed.items():
+            row = self.row_for(title)
+            if path and row is not None:
+                row.field.setText(path)
+        logfile.write("handed over: " + ", ".join(
+            f"{title} {Path(path).name}" for title, path in handed.items() if path))
+        self._load()
+
     def closeEvent(self, event) -> None:  # noqa: N802 -- Qt naming
         """Closing never waits for the disk. The readers are told to finish
         and let go of on a thread of their own: one in the middle of a read
         from a share that has stopped answering held the closing window for
         as long as the share did, and the program could not end."""
+        # The other pages first: the kinetic editor asks about unsaved work,
+        # and a "no" there keeps the whole window open.
+        page = self.page_widgets.get("kinetic")
+        if page is not None and not page.close():
+            event.ignore()
+            self.show_page("kinetic")
+            return
+        if self.remap_window is not None:
+            self.remap_window.close()
         logfile.write("exit: the window is closing")
         self._flush_draft()
         self._remember(now=True)
@@ -6943,6 +7123,7 @@ def main() -> int:
         import kinedit
         return kinedit.main([one for one in sys.argv if one != "--kinetic"])
     written = logfile.start(APP_NAME, APP_VERSION)
+    logfile.write(f"wgpu interface: {WGPU_INTERFACE}")
     app = QApplication(sys.argv)
     # The design's own faces when they travel with the program, then the
     # window's type and its sheet: see theme.py.
@@ -6955,7 +7136,17 @@ def main() -> int:
     app.setStyleSheet(STYLESHEET)
     # Before the window is built, because building it is what takes the time.
     logfile.raise_splash(app)
+    # MATRESHKA_PROFILE=1: where the building of the window goes, written
+    # beside the log as startup.prof (read with python -m pstats).
+    profiling = None
+    if os.environ.get("MATRESHKA_PROFILE"):
+        import cProfile
+        profiling = cProfile.Profile()
+        profiling.enable()
     window = Viewer()
+    if profiling is not None:
+        profiling.disable()
+        profiling.dump_stats(str(logfile.folder() / "startup.prof"))
     if written is not None:
         logfile.write(f"log: {written}")
     window.show()

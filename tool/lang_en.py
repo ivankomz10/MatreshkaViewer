@@ -12,6 +12,11 @@ Keep, Flat, ReBake...), so a settings file from then reads the same.
 """
 
 EN: dict = {
+    # -- the pages of the window --------------------------------------------
+    'Вьюер': 'Viewer',
+    'Кинетика': 'Kinetics',
+    'Ремап…': 'Remap…',
+    'Matreshka Remap — отдельным окном поверх вьюера': 'Matreshka Remap, in its own window over the viewer',
     # -- the modes, the layers, the checks, the cards ------------------------
     'Превью': 'Preview',
     'Развертка': 'Flat',

@@ -40,11 +40,12 @@ and each gap allows
 -- and then the beam: with its pusher out less than 0.1 a cell tilts 30
 degrees at most, from 0.2 out the whole 45. Cinema 4D's rule -- the narrower
 gap, both ways, 0, 10 or 30 -- is kept beside it (`TILT_RULE`).
-Which gap is beside which ring is the machine's (kinetic.JACK_READING): the
-lowest ring stands on the base and the jacks are between the others, so row
-1 has no jack and row N opens the gap under ring N -- Cinema 4D's numbering.
-Houdini's exporter and the rig number them one lower; a file made there comes
-in with its row 1 moving, and the editor says so.
+Which gap is beside which ring is settled by `kinetic.JACK_READING`, and since
+2026-10-03 that is the site's own: TouchDesigner counts the jacks 1 to 29 from
+the bottom, as Houdini's exporter writes them, so a file's row N opens the gap
+between rings N and N+1 and its row 30 has no jack at all. Cinema 4D numbered
+them one ring higher -- rows 2 to 30, row 1 held still -- and a file made that
+way comes in with its row 30 moving, which the editor says on opening.
 """
 from __future__ import annotations
 
@@ -100,16 +101,18 @@ LIFT_THRESHOLDS = (16.5 / 130.0, 49.5 / 130.0, 98.0 / 130.0)
 FORMAT = "matreshka-kinetic"
 VERSION = 1
 
-# The machine's numbering of the jacks (see kinetic.JACK_READING): row 1's is
-# not there, and nothing the tools do moves it.
+# How the editor's own jack array is laid out -- not a reading of any file.
+# `lift[r]` is the gap under ring r, counted from zero, so the lowest ring
+# (NO_JACK) has none and the array holds 29 jacks in 30 places. The name is
+# the one `kinetic.rise_mm` and `gaps_around` know this layout by.
+#
+# A file is numbered the way the site counts the jacks, 1 to 29 from the
+# bottom (`kinetic.JACK_READING`, the technical director 2026-10-03): its jack
+# row N is `lift[N]` and opens the gap between rings N and N+1 (`json_row`).
+# The two line up by one index, which is the whole of the conversion.
 READING = "machine"
 NO_JACK = 0
 
-# How the editor's own jack array is laid out: lift[r] is the gap under ring
-# r, counted from zero, and the lowest ring (NO_JACK) has none -- the
-# machine's way of saying it, whatever a file says. Files are numbered as
-# TouchDesigner on the site counts the jacks, 1 to 29 from the bottom, as
-# Houdini's exporter writes them: a file's jack row N is lift[N] (`json_row`).
 # A moving primitive is looked at this often, in frames, when it is turned
 # into keys; the plan of moves (`kin_plan`) then makes of that what the
 # motors can carry out.
@@ -408,10 +411,11 @@ class Track:
 def gaps_around(lift) -> tuple[np.ndarray, np.ndarray]:
     """The jack state of the gap below and above each ring, inf for none.
 
-    The machine's reading: jack N (from zero) opens the gap under ring N, so
-    the lowest ring stands on the base with nothing below it, and jack 0 is
-    not there. Cinema 4D's own rule reads exactly so: ring r between up[r]
-    and up[r+1], the lowest ring by up[1] alone, the top one by up[29].
+    In this array's own layout (`READING`): `lift[r]` opens the gap under ring
+    r, so the lowest ring stands on the base with nothing below it and
+    `lift[0]` is not a jack. Ring r therefore sits between `lift[r]` and
+    `lift[r + 1]`, the lowest held by `lift[1]` alone and the top one by
+    `lift[29]`.
     """
     lift = np.asarray(lift, np.float64).reshape(ROWS)
     below = np.full(ROWS, np.inf)
@@ -461,6 +465,9 @@ def tilt_bounds(lift, push=None, rule: str | None = None):
 
     Cinema 4D's rule, kept beside it: the narrower gap, the same both ways,
     0, 10 or 30 degrees, and no beam.
+
+    Either rule is then held to `kinetic.TILT_LIMIT_DEGREES`, which is how far
+    the motor goes at all.
     """
     rule = rule or TILT_RULE
     if rule == "c4d":
@@ -473,8 +480,11 @@ def tilt_bounds(lift, push=None, rule: str | None = None):
             else np.asarray(push, np.float64).reshape(ROWS, GROUPS))
     beam = np.interp(spread("push", push), [BEAM_PUSH[0], BEAM_PUSH[1]],
                      [BEAM_DEGREES[0], BEAM_DEGREES[1]])
-    return (-np.minimum(up, beam) / kinetic.TILT_DEGREES,
-            np.minimum(down, beam) / kinetic.TILT_DEGREES)
+    # And over both of them, the motor itself: it reaches 30 degrees, so the
+    # 45 the ramp and the beam speak of is a clearance nothing can use.
+    reach = kinetic.TILT_LIMIT_DEGREES
+    return (-np.minimum(np.minimum(up, beam), reach) / kinetic.TILT_DEGREES,
+            np.minimum(np.minimum(down, beam), reach) / kinetic.TILT_DEGREES)
 
 
 def clamp_tilt(tilt, lift, push=None) -> np.ndarray:

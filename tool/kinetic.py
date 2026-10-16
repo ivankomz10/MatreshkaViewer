@@ -51,8 +51,24 @@ from lang import tr
 TILT_DEGREES = 90.0            # value x this: +-1/3 is 30 degrees, the widest
 PUSHER_MM = 1000.0             # value x this, radially outward
 
+# How far a tilt motor actually goes, either way, whatever the two gap rules
+# would otherwise allow: the machine's specification (the technical director,
+# 2026-10-16). The JSON encoding reaches +-45 and Houdini's ramp allows it at
+# a wide enough gap, but no such motor exists -- of 2 949 692 tilt values in
+# the 96 shows on disk, 102 pass 30 degrees, and 100 of those are one test
+# file sitting at exactly 45. Files are still read as they are; `tilt_bounds`
+# holds new work to this.
+TILT_LIMIT_DEGREES = 30.0
+
 # Jack states, in millimetres of ring gap.
 JACK_STATE_MM = {0: 0.0, 1: 330.0, 2: 660.0, 3: 1300.0}
+
+# State 0 is the machine's own technological position -- rings shut -- and not
+# a pose to compose in: the specification names it so (the technical director,
+# 2026-10-16). Some finished shows do drive through it anyway, and files that
+# use it are read and played as they are; this is what the editor and the
+# documents are to say about it, not a thing the code forbids.
+JACK_SERVICE_STATE = 0
 
 # Which state the geometry this drives already sits at. A ring moves by the
 # difference from here, not by the whole of the commanded gap.

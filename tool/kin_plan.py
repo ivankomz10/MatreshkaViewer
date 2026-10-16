@@ -35,7 +35,7 @@ import numpy as np
 import kin_model as km
 import kin_sim
 
-TOLERANCE = km.PLAN_TOLERANCE   # of a motor's travel: 20 mm of push, 1.8 degrees of tilt
+TOLERANCE = km.PLAN_TOLERANCE   # of a motor's travel: 20 mm of push, 1.2 degrees of tilt
 HOLD = 30             # frames a value has to stand to be a shape to reach
 FLAT = 1e-4           # keys this close are the same place
 

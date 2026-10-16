@@ -15,6 +15,17 @@ build/
 /MatreshkaViewer.exe
 /MatreshkaViewer.app/
 /MatreshkaViewer-*.zip
+# What the Windows door lays out beside itself, and the build's halfway files.
+/bin/
+/MatreshkaViewer_bin/
+/MatreshkaViewer_door.exe
+# What the remap window keeps beside the program: work, not source.
+/remap_tool.json*
+/remap_presets.json*
+/ToRemap/
+# Made by the build and by a run from source (wgpu_fast.py); kept by the program.
+tool/wgpu_ffi_built.py
+/cache/
 develop-eggs/
 dist/
 downloads/
@@ -270,3 +281,12 @@ drafts/
 # which are the artists' work.
 kinedit.json
 *.kin
+
+# Big local working files beside the program: not source, not small.
+/Matreshka_Viewer.rar
+/full_mech.fbx
+/kinetic_1_of_1.json
+/kinedit.json
+/settings.json
+# What the MCP server keeps beside itself: its log, its settings, its scratch.
+/mcp/scratch/

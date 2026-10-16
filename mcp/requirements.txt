@@ -1,0 +1,7 @@
+# On top of what the viewer itself needs (tool/requirements.txt): the MCP SDK
+# and what the tests use. The server imports the viewer's own modules, so it
+# must run on the interpreter that can run the viewer.
+mcp>=2.3,<3
+pillow>=10
+pytest>=8
+anyio>=4

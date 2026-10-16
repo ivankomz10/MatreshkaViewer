@@ -290,12 +290,13 @@ def test_tilts_are_held_the_houdini_way_by_the_gap_they_swing_into():
     up, down = _degrees(lift)
     assert down[10] == pytest.approx(2) and up[10] == pytest.approx(10)
     assert up[9] == pytest.approx(2) and down[9] == pytest.approx(10)
-    # A gap of 660 mm lets 45 through, and the beam holds it to 30 until the
-    # pusher is out: 0.1 still 30, 0.2 all 45, half way half way.
+    # A gap of 660 mm lets 45 through and the beam opens from 30 to 45 as the
+    # pusher goes out -- but the motor itself reaches 30, so the pusher buys
+    # no swing at all (kinetic.TILT_LIMIT_DEGREES, the specification).
     lift = np.full(ROWS, 2.0)
-    for push, want in ((0.0, 30), (0.1, 30), (0.15, 37.5), (0.2, 45), (0.8, 45)):
+    for push in (0.0, 0.1, 0.15, 0.2, 0.8):
         up, down = _degrees(lift, np.full((ROWS, km.GROUPS), push))
-        assert np.allclose(up, want) and np.allclose(down, want), push
+        assert np.allclose(up, 30) and np.allclose(down, 30), push
     # Row 1 has no jack; a jack between two places is between their degrees.
     lift[0] = 0.0
     assert np.allclose(_degrees(lift)[1], 30)

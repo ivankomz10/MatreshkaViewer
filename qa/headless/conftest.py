@@ -182,3 +182,42 @@ def render_and_wait(window, tick, within: float = 180.0) -> str:
                  and any(word in window.eta.text() for word in endings)
                  else ""),
         "the render never finished", within)
+
+
+# -- the quick set ---------------------------------------------------------
+#
+# smoke.txt names a few tests from each part -- the window, the kinetic
+# editor, the pages, the door, the languages -- that between them answer
+# "is it still standing" in well under a minute: `pytest -m smoke`, or
+# qa
+# qa\run_smoke.bat. Everything else still runs without -m.
+
+SMOKE = HERE / "smoke.txt"
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "smoke: the quick set, see smoke.txt")
+
+
+def pytest_collection_modifyitems(config, items):
+    try:
+        wanted = {line.split("#")[0].strip() for line in
+                  SMOKE.read_text(encoding="utf-8").splitlines()}
+    except OSError:
+        return
+    wanted.discard("")
+    found = set()
+    for item in items:
+        file, _, name = item.nodeid.partition("::")
+        base = name.split("[")[0]
+        for key in (f"{Path(file).name}::{name}", f"{Path(file).name}::{base}",
+                    Path(file).name):
+            if key in wanted:
+                item.add_marker(pytest.mark.smoke)
+                found.add(key)
+    # A test renamed or gone would drop out of the quick set without a word.
+    if config.getoption("markexpr") == "smoke":
+        lost = sorted(wanted - found)
+        if lost:
+            raise pytest.UsageError(
+                "smoke.txt names tests that are not there: " + ", ".join(lost))
