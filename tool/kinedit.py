@@ -197,7 +197,8 @@ class PoseMotors:
                 * kinetic.PUSHER_MM)
 
     def rise(self, frame=None) -> np.ndarray:
-        # The machine's numbering, not the rig's: row N lifts ring N.
+        # Read in this array's own layout, not a file's: `lift[r]` is the gap
+        # under ring r, so every ring above it rises by that much.
         return kinetic.rise_mm(self.pose["lift"], km.READING)
 
 

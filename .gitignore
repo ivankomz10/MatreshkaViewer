@@ -281,3 +281,12 @@ drafts/
 # which are the artists' work.
 kinedit.json
 *.kin
+
+# Big local working files beside the program: not source, not small.
+/Matreshka_Viewer.rar
+/full_mech.fbx
+/kinetic_1_of_1.json
+/kinedit.json
+/settings.json
+# What the MCP server keeps beside itself: its log, its settings, its scratch.
+/mcp/scratch/
