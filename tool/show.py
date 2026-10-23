@@ -2,7 +2,8 @@
 
 The show editor that runs the building on site keeps a show as a `.trix` --
 JSON, one file per show, forty of them in `D:\\Content\\_SHOW`. This reads one
-into the least model the viewer needs, and never writes one back.
+into the least model the viewer needs, and keeps the file as it was read
+beside it, so that `trixfile` can write the show back the way it came.
 
 Everything about the format below was measured across all forty files rather
 than read off the schema, because the schema allows far more than anybody
@@ -101,6 +102,10 @@ class Clip:
     value: int = 0
     missing: bool = False
     transform: dict = field(default_factory=dict)
+    # Which entry of the show file it was read from -- "Tiles-pixels:5",
+    # "audio:3" -- so that exporting writes back into that same entry and
+    # leaves the rest of it as it was. Empty for a clip made in the editor.
+    origin: str = ""
 
     @property
     def name(self) -> str:
@@ -173,6 +178,11 @@ class Show:
     # the frame before whatever arrives next. A show cut into blocks waits at
     # every join, so there can be several.
     loops: list = field(default_factory=list)
+    # The show file as it was read, whole: everything this model leaves out
+    # -- the black backdrop, the transforms, the order of the keys -- is in
+    # here, and an export is this with the edits written into it (trixfile).
+    # None for a show that never came from a file.
+    raw: dict | None = None
 
     @property
     def duration(self) -> float:
@@ -392,8 +402,12 @@ def read(path: str | Path) -> Show:
         raise ShowError(tr("{0} — это не файл шоу", path.name))
 
     project = raw.get("project") or {}
+    # A number everywhere but one old file, which says "v01"; whatever it
+    # says goes back out as it was (trixfile), so the digits are enough here.
+    version = "".join(ch for ch in str(project.get("version") or 1)
+                      if ch.isdigit())
     show = Show(name=str(project.get("name") or path.stem),
-                version=int(project.get("version") or 1),
+                version=int(version or 1),
                 length=int(project.get("length") or LENGTH),
                 path=str(path))
 
@@ -412,26 +426,30 @@ def read(path: str | Path) -> Show:
                 loop=bool(clip.get("loop")),
                 loop_range=tuple(clip.get("loop_custom_range") or (0, 100)),
                 ident=int(ident), missing=got is None,
-                transform=dict(clip.get("transform") or {})))
+                transform=dict(clip.get("transform") or {}),
+                origin=f"{canvas}:{ident}"))
     for ident, clip in (raw.get("audio") or {}).items():
         got = sound_frames(clip["path"])
         show.clips.append(Clip(
             kind="audio", row="Sound", level=int(clip.get("level", 0)),
             path=str(clip["path"]), tx=int(clip["tx"]), frames=got or 0,
-            ident=int(ident), missing=got is None))
+            ident=int(ident), missing=got is None, origin=f"audio:{ident}"))
     for ident, clip in (raw.get("jsons") or {}).items():
         declared, tail = motor_frames(clip["path"])
         show.clips.append(Clip(
             kind="kinetic", row="Kinetic", level=0, path=str(clip["path"]),
             tx=int(clip["tx"]), frames=declared or 0, tail=tail,
-            ident=int(ident), missing=declared is None))
+            ident=int(ident), missing=declared is None,
+            origin=f"jsons:{ident}"))
     for ident, clip in (raw.get("cue") or {}).items():
         show.clips.append(Clip(
             kind="cue", row="Cue", level=int(clip.get("level", 0)), path="",
             tx=int(clip["frame"]), universe=int(clip.get("universe", 0)),
             channel=int(clip.get("channel", 0)),
-            value=int(clip.get("value", 0)), ident=int(ident)))
+            value=int(clip.get("value", 0)), ident=int(ident),
+            origin=f"cue:{ident}"))
 
+    show.raw = raw
     show.loops = loops_of(raw, show.length)
     _stills_until_next(show)
     return show

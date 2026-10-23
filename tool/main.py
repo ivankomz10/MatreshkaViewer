@@ -56,6 +56,7 @@ import screen_gpu
 import sound
 import theme
 import timeline
+import trixfile
 import lang
 from lang import tr
 
@@ -1404,6 +1405,11 @@ class Viewer(QMainWindow):
         button(tr("Новое шоу"), "qa_new_show",
                tr("Пустое шоу на 22 минуты, сразу в редакторе: файлы бросаются "
                   "из проводника прямо на дорожки."), lambda: self._new_show())
+        button(tr("Экспорт .trix…"), "qa_export_show",
+               tr("Записать шоу как .trix для редактора шоу на площадке: "
+                  "исходный файл с правками, всё остальное в нём как было. "
+                  "Новой версией рядом (-v002 возле -v001); поверх исходного "
+                  "файла не пишет."), lambda: self._export_show())
 
         # The name over what is in the show: two lines, the name the larger.
         names = QWidget()
@@ -1823,6 +1829,42 @@ class Viewer(QMainWindow):
             self, tr("Открыть шоу"), start, tr("Шоу (*.trix);;Все файлы (*)"))
         if chosen:
             self.open_show_file(chosen)
+
+    def _export_show(self) -> None:
+        show = self.show_open
+        if show is None or self.level != "show":
+            return
+        source = self.trix_path or show.path
+        if source:
+            offered = trixfile.next_version(source)
+        else:
+            offered = Path(SHOW_FOLDER if SHOW_FOLDER.exists()
+                           else logfile.app_dir()) / f"{show.name or 'show'}.trix"
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, tr("Экспорт шоу"), str(offered),
+            tr("Шоу (*.trix);;Все файлы (*)"))
+        if chosen:
+            self.export_show_file(chosen)
+
+    def export_show_file(self, target: str):
+        """The open show, as edited, written out as a .trix at `target`.
+        Returns where it went, or None, having said why."""
+        show = self.show_open
+        if show is None:
+            return None
+        self._flush_draft()
+        try:
+            written = trixfile.export(show, target, self.trix_path)
+        except trixfile.ExportError as error:
+            self.show_view.say(str(error))
+            logfile.write(f"show: not exported: {error}")
+            return None
+        said = trixfile.notes(show, self.show_view.file_loops)
+        self.show_view.say("; ".join([tr("записано: {0}", written.name)]
+                                     + said))
+        logfile.write(f"show: exported to {written}"
+                      + (f" ({'; '.join(said)})" if said else ""))
+        return written
 
     def open_show_file(self, path: str) -> None:
         """Open a show and go to it. Opening one is asking for the show mode.

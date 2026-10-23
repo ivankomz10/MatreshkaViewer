@@ -86,6 +86,26 @@ def put_back(show, raw: dict) -> None:
     show.loops[:] = other.loops
 
 
+def _find_origins(show, source: str) -> None:
+    """For a draft begun before drafts kept their show file: the file read
+    again, and each clip matched to its entry by id, which is unique in a
+    show file. Nothing is matched if the file is gone or no longer a show."""
+    try:
+        raw = json.loads(Path(source).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 -- an export from scratch, then
+        return
+    if not isinstance(raw, dict) or "video" not in raw:
+        return
+    import trixfile                     # noqa: PLC0415 -- it imports show
+    for clip in show.clips:
+        section = trixfile.section_of(clip)
+        entries = ((raw.get("video") or {}).get(section)
+                   if section in showfile.CANVASES else raw.get(section))
+        if section and not clip.origin and str(clip.ident) in (entries or {}):
+            clip.origin = f"{section}:{clip.ident}"
+    show.raw = raw
+
+
 def next_ident(show) -> int:
     return max([one.ident for one in show.clips] or [0]) + 1
 
@@ -223,7 +243,11 @@ class Draft:
                 "started": self.started, "saved": self.saved,
                 "changes": self.changes,
                 "file_loops": [list(one) for one in self.file_loops],
-                "show": show_to_dict(show)}
+                "show": show_to_dict(show),
+                # The show file as it was read, so that an export from the
+                # draft -- a week later, the file changed or gone -- writes
+                # the same file back with the edits in (trixfile).
+                "source_raw": show.raw}
         spare = self.where.with_suffix(".writing")
         spare.write_text(json.dumps(body, ensure_ascii=False, indent=1),
                          encoding="utf-8")
@@ -250,6 +274,9 @@ class Draft:
         draft.file_loops = [(int(low), int(high))
                             for low, high in body.get("file_loops") or []]
         show = show_from_dict(body.get("show") or {})
+        show.raw = body.get("source_raw")
+        if show.raw is None and draft.source:
+            _find_origins(show, draft.source)
         for clip in show.clips:
             if clip.kind != "cue":
                 clip.missing = not Path(clip.path).exists()

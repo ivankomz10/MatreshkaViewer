@@ -16,6 +16,8 @@ test_quiet.py::test_the_version_is_the_one_that_writes_motors_as_houdini
 # the show
 test_show_mode.py::test_into_the_show_and_back_loses_nothing
 test_editor.py::test_without_the_editor_nothing_changes
+test_trix.py::test_a_show_read_and_written_is_the_same_file
+test_trix.py::test_the_window_exports_what_its_editor_changed
 
 # the scene, the readers, the exit
 test_baked.py::test_the_moving_screen_has_its_fifteen_hundred

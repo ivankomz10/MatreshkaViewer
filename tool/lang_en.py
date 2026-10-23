@@ -174,6 +174,15 @@ EN: dict = {
     'файлы на дорожку': 'files onto a lane',
     'Открыть шоу': 'Open show',
     'Шоу (*.trix);;Все файлы (*)': 'Shows (*.trix);;All files (*)',
+    'Экспорт .trix…': 'Export .trix…',
+    'Записать шоу как .trix для редактора шоу на площадке: исходный файл с правками, всё остальное в нём как было. Новой версией рядом (-v002 возле -v001); поверх исходного файла не пишет.':
+        'Write the show as a .trix for the show editor on site: the file it came from with the edits in, everything else in it as it was. As a new version beside it (-v002 next to -v001); never over the file it came from.',
+    'Экспорт шоу': 'Export show',
+    'записано: {0}': 'written: {0}',
+    'лупы из редактора в .trix не пишутся: в файле остаются лупы клипов, как были':
+        'loops from the editor are not written to the .trix: the file keeps its clips\' loops as they were',
+    '{0} — это исходный файл шоу; экспорт пишет новый файл рядом':
+        '{0} is the show\'s own file; an export writes a new file beside it',
     '{0}  —  показаны строки Просмотра': '{0}  —  showing the quick look\'s cards',
     'строки Просмотра как шоу · ': 'the quick look\'s cards as a show · ',
     'строки Просмотра': 'the quick look\'s cards',
