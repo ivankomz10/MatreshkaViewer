@@ -33,10 +33,14 @@ _applied: list[tuple[object, str, int]] = []
 
 
 def _where() -> Path | None:
-    """Beside this file when run from source, inside the bundle when frozen."""
+    """Beside this file: in tool/remap from source, in remap/ inside the
+    bundle (build.spec puts them there). Never the bundle's own icons folder,
+    which is the viewer's: looked there first, the remap found eight of its
+    thirty, in the viewer's drawing, and none of the rest."""
     here = Path(__file__).resolve().parent / FOLDER
     bundle = getattr(sys, "_MEIPASS", None)
-    for candidate in ([Path(bundle) / FOLDER] if bundle else []) + [here]:
+    for candidate in [here] + ([Path(bundle) / "remap" / FOLDER]
+                               if bundle else []):
         if candidate.is_dir():
             return candidate
     return None
