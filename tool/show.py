@@ -102,6 +102,11 @@ class Clip:
     value: int = 0
     missing: bool = False
     transform: dict = field(default_factory=dict)
+    # The advanced mode's layers over this clip's own picture (layers.Layer,
+    # bottom first): the clip is a package, its source and what lies on it.
+    # Kept in the draft; a .trix knows nothing of them, and a clip with
+    # layers is written out baked into a file of its own (trix_export).
+    layers: list = field(default_factory=list)
 
     @property
     def name(self) -> str:

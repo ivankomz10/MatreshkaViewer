@@ -31,6 +31,7 @@ import shutil
 import time
 from pathlib import Path
 
+import layers
 import show as showfile
 
 FORMAT = "matreshka-show-draft"
@@ -50,6 +51,7 @@ def clip_to_dict(clip) -> dict:
     out = {name: getattr(clip, name) for name in _FIELDS}
     out["loop_range"] = list(out["loop_range"])
     out["transform"] = dict(out["transform"])
+    out["layers"] = [one.to_dict() for one in clip.layers]
     return out
 
 
@@ -57,6 +59,8 @@ def clip_from_dict(raw: dict):
     known = {name: raw[name] for name in _FIELDS if name in raw}
     known["loop_range"] = tuple(known.get("loop_range") or (0, 100))
     known["transform"] = dict(known.get("transform") or {})
+    known["layers"] = [layers.Layer.from_dict(one) for one in known.get("layers") or []
+                       if isinstance(one, dict)]
     return showfile.Clip(**known)
 
 

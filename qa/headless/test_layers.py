@@ -239,3 +239,25 @@ def test_a_folder_is_masked_as_one(device, tmp_path):
     got = composer.to_array()
     assert np.allclose(got[:, : width // 2, :3], 0.2, atol=4e-3)   # masked out: what is under
     assert np.allclose(got[:, width // 2:, :3], 1.0, atol=4e-3)
+
+
+# -- step 10: layers on show clips ------------------------------------------------------
+
+def test_a_clips_layers_are_kept_in_the_draft_and_not_in_the_trix(tmp_path):
+    import json
+    import draft
+    import show as showfile
+    import trix_export
+    clip = showfile.Clip(kind="video", row="Bottom", level=0, path="D:/x/a.mov", tx=100,
+                         frames=600, ident=7)
+    stacks = layers.Stacks.of_clip(clip)
+    stacks.add("Bottom", layers.Layer("image", "p", path="p.png", opacity=0.5))
+    assert clip.layers[0].name == "p"                      # the clip's own list
+    clip.layers[0].add_mask()
+    show = showfile.Show(name="s", length=2000)
+    show.clips = [clip]
+    back = draft.show_from_dict(json.loads(json.dumps(draft.show_to_dict(show))))
+    again = back.clips[0].layers
+    assert again[0].name == "p" and again[0].opacity == 0.5 and again[0].mask
+    written = trix_export.export(show, tmp_path / "s-v001.trix")
+    assert "layers" not in written.read_text(encoding="utf-8")

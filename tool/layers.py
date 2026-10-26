@@ -225,6 +225,14 @@ class Stacks:
     def __init__(self) -> None:
         self.screens = {name: [] for name in SCREENS}
 
+    @classmethod
+    def of_clip(cls, clip) -> "Stacks":
+        """A show clip's own stack, as the stacks of its one screen: the
+        clip's list itself, so what is done here is done to the clip."""
+        made = cls()
+        made.screens = {clip.row: clip.layers}
+        return made
+
     def stack(self, screen: str) -> list:
         return self.screens.setdefault(screen, [])
 
