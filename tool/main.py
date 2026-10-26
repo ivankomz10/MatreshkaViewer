@@ -52,6 +52,7 @@ import renderer3d
 import scene3d
 import kinetic
 import layer_gpu
+import layer_video
 import layers
 import layers_ui
 import picking
@@ -2420,8 +2421,14 @@ class Viewer(QMainWindow):
         if not self.composers:
             return None
         premultiplied = self.alpha_mode() == "premultiplied"
-        return (lambda seconds, held, p=premultiplied: self._compose(
-            None, seconds, lambda index, h=held: h[index] is not None, p))
+        return (lambda seconds, held, p=premultiplied: (
+            self._exact_layer_movies(seconds),
+            self._compose(None, seconds, lambda index, h=held: h[index] is not None, p)))
+
+    def _exact_layer_movies(self, seconds: float) -> None:
+        """A render's video layers, each on the very frame of `seconds`."""
+        if self.advanced and self.layer_stacks.playing():
+            self._pictures().movies.exact(seconds, self.layer_stacks.playing())
 
     def _keys_card(self) -> None:
         """The keys and the mouse, over the picture's top left, when asked for."""
@@ -4816,7 +4823,19 @@ class Viewer(QMainWindow):
     def _pictures(self):
         if self.layer_pictures is None:
             self.layer_pictures = layer_gpu.Pictures(self.device)
+            self.layer_pictures.movies = layer_video.Movies(self.device)
+        self.layer_pictures.premultiplied = self.alpha_mode() == "premultiplied"
         return self.layer_pictures
+
+    def _feed_layer_movies(self, seconds: float) -> bool:
+        """The video layers brought to the clock, the ones gone let go of.
+        True while one waits for its frame: draw again."""
+        if self.layer_pictures is None and not self.advanced:
+            return False
+        playing = self.layer_stacks.playing() if self.advanced else []
+        if not playing and self.layer_pictures is None:
+            return False
+        return self._pictures().movies.feed(seconds, playing)
 
     def _layer_thumbnail(self, path: str):
         """A layer's picture, small, for its row; None if it will not open."""
@@ -4992,7 +5011,7 @@ class Viewer(QMainWindow):
         the event was the picture's and not the view's."""
         stack = getattr(self.drawer, "stack", None)
         layer = stack.chosen if stack is not None else None
-        if layer is None or layer.kind != "image":
+        if layer is None or layer.kind not in layers.PICTURED:
             return False
         name = {v: k for k, v in theme.BAKED.items()}.get(stack.screen)
         kind = event["event_type"]
@@ -6804,6 +6823,9 @@ class Viewer(QMainWindow):
             if (not between and not stream.at_end
                     and (standing is None or standing.index < wanted)):
                 starved = True
+
+        if self._feed_layer_movies(seconds):
+            starved = True
 
         # The size comes off the texture being drawn into, not off the canvas.
         # They are the same number all but one frame in a lifetime -- and the

@@ -126,7 +126,7 @@ struct Remap {
     // the camera's picture in pixels, y down -> the layer's 0..1
     row0: vec4<f32>,
     row1: vec4<f32>,
-    // xy the camera's picture in pixels
+    // xy the camera's picture in pixels, z 1 when the picture is premultiplied
     camera: vec4<f32>,
 };
 
@@ -171,7 +171,9 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         let uv = vec2<f32>(dot(how.row0.xyz, at), dot(how.row1.xyz, at));
         if (all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0))) {
             top = textureSampleLevel(picture, picture_sampler, uv, 0.0);
-            top = vec4<f32>(top.rgb * top.a, top.a);
+            if (how.camera.z < 0.5) {
+                top = vec4<f32>(top.rgb * top.a, top.a);
+            }
         }
     }
     return laid(base, top * how.info.y, i32(how.info.x + 0.5));
@@ -338,6 +340,17 @@ class Pictures:
     def __init__(self, device) -> None:
         self.device = device
         self._held: dict = {}
+        self.movies = None            # layer_video.Movies, where layers play video
+        self.premultiplied = True     # how the movies' alpha is read, as the tracks'
+
+    def of(self, encoder, layer):
+        """(texture, (width, height), premultiplied) a layer shows, or None."""
+        if layer.kind == "video":
+            movie = self.movies.get(layer) if self.movies is not None else None
+            texture = movie.texture(encoder, self.premultiplied) if movie is not None else None
+            return None if texture is None else (texture, movie.size, True)
+        got = self.get(layer.path)
+        return None if got is None else (got[0], got[1], False)
 
     def get(self, path: str):
         """(texture, (width, height)) of a picture, or None if it will not open."""
@@ -370,6 +383,9 @@ class Pictures:
     def thumbnail(self, path: str, side: int = 34):
         """A small RGBA array of a picture, for the stack's rows."""
         from PIL import Image
+        import layer_video
+        if Path(path).suffix.lower() in layer_video.MOVIES:
+            return layer_video.thumbnail(path, side)
         try:
             with Image.open(path) as opened:
                 small = opened.convert("RGBA")
@@ -488,7 +504,7 @@ class LayerBlender:
         return self._remap_uniforms[index]
 
     def _lay_remapped(self, encoder, under, layer_texture, layer, mode: int, into,
-                      surface, seen) -> None:
+                      surface, seen, premultiplied: bool = False) -> None:
         """A picture as a camera sees it on the building: what is under
         copied across first, then the screen's mesh drawn over it in its UV."""
         index = self._pass
@@ -499,7 +515,7 @@ class LayerBlender:
             [eye[0], eye[1], eye[2], 1.0],
             [mode, layer.opacity, 1.0 if surface.moving else 0.0, 1.0 if at_rest else 0.0],
             [*rows[0], 0.0], [*rows[1], 0.0],
-            [frame[0], frame[1], 0.0, 0.0]]).astype(np.float32)
+            [frame[0], frame[1], 1.0 if premultiplied else 0.0, 0.0]]).astype(np.float32)
         buffer = self._remap_uniform(index)
         self.device.queue.write_buffer(buffer, 0, values.tobytes())
         encoder.copy_texture_to_texture({"texture": under}, {"texture": into},
@@ -548,19 +564,20 @@ class LayerBlender:
                           layer.opacity, True, target)
                 now = target
                 continue
-            got = pictures.get(layer.path)
+            got = pictures.of(encoder, layer)
             if got is None:
                 continue
-            texture, size = got
+            texture, size, premultiplied = got
             target = pair[0] if now is not pair[0] else pair[1]
             if layer.remap:
                 seen = None if remap is None else seen_by(layer, size, remap[1])
                 if seen is None:
                     continue
-                self._lay_remapped(encoder, now, texture, layer, mode, target, remap[0], seen)
+                self._lay_remapped(encoder, now, texture, layer, mode, target, remap[0], seen,
+                                   premultiplied)
             else:
                 self._lay(encoder, now, texture, placed((self.width, self.height), size, layer),
-                          mode, layer.opacity, False, target)
+                          mode, layer.opacity, premultiplied, target)
             now = target
         return now
 

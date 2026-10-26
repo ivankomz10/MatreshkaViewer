@@ -470,11 +470,28 @@ class TransformPanel(QFrame):
         fit.clicked.connect(self._fit)
         grid.addWidget(fit, 3, 2)
         grid.addWidget(self.aim, 3, 3)
+        # A movie's place on the clock.
+        self.start_label = QLabel(tr("Старт, с"))
+        self.start_label.setStyleSheet(f"color:{theme.QUIET}; font-size:11px;")
+        self.start = QDoubleSpinBox()
+        self.start.setObjectName("qa_transform_offset")
+        self.start.setRange(-36000, 36000)
+        self.start.setDecimals(2)
+        self.start.setSingleStep(0.1)
+        self.start.setToolTip(tr("Когда видео начинается по часам вьюера, в секундах"))
+        self.start.valueChanged.connect(lambda value: self._typed("offset", value))
+        self.loop = QCheckBox(tr("По кругу"))
+        self.loop.setObjectName("qa_transform_loop")
+        self.loop.setToolTip(tr("Видео идёт заново, дойдя до конца"))
+        self.loop.toggled.connect(lambda on: self._typed("loop", on))
+        grid.addWidget(self.start_label, 4, 0)
+        grid.addWidget(self.start, 4, 1)
+        grid.addWidget(self.loop, 4, 2, 1, 2)
         self._saying = False
         self.show_layer(None)
 
     def show_layer(self, layer) -> None:
-        self.layer = layer if layer is not None and layer.kind == "image" else None
+        self.layer = layer if layer is not None and layer.kind in stacks.PICTURED else None
         self.setVisible(self.layer is not None)
         self.refresh()
 
@@ -491,6 +508,12 @@ class TransformPanel(QFrame):
             self.flip.setChecked(self.layer.flip)
             self.bind.setCurrentIndex(max(0, self.bind.findData(self.layer.bind)))
             self.aim.setVisible(self.layer.bind == "view")
+            moving = self.layer.kind == "video"
+            for widget in (self.start_label, self.start, self.loop):
+                widget.setVisible(moving)
+            if not self.start.hasFocus():
+                self.start.setValue(self.layer.offset)
+            self.loop.setChecked(self.layer.loop)
             self.head.setText({
                 "camera": tr("Трансформ · по камере, как видит зритель"),
                 "decal": tr("Трансформ · сантиметры по поверхности"),
@@ -504,8 +527,8 @@ class TransformPanel(QFrame):
             return
         if key == "scale":
             self.layer.scale = max(0.01, value / 100.0)
-        elif key == "flip":
-            self.layer.flip = bool(value)
+        elif key in ("flip", "loop"):
+            setattr(self.layer, key, bool(value))
         else:
             setattr(self.layer, key, float(value))
         self.view.changed_picture()
@@ -564,7 +587,7 @@ class StackView(QWidget):
         row.setContentsMargins(4, 4, 4, 4)
         row.setSpacing(2)
         for name, text, hint, act in (
-                ("picture", tr("+ Картинка…"), tr("Картинка с диска новым слоем"), self._pick),
+                ("picture", tr("+ Файл…"), tr("Картинка или видео с диска новым слоем"), self._pick),
                 ("folder", tr("+ Папка"), tr("Папка: её слои ложатся вместе, как один"), self._folder),
                 ("delete", "✕", tr("Удалить выбранный слой"), self._delete)):
             button = QPushButton(text)
@@ -647,9 +670,11 @@ class StackView(QWidget):
     def add_pictures(self, paths, near=None) -> list:
         made = []
         for path in paths:
-            if Path(path).suffix.lower() not in PICTURES:
+            suffix = Path(path).suffix.lower()
+            if suffix not in PICTURES and suffix not in stacks.MOVIES:
                 continue
-            layer = stacks.Layer("image", Path(path).stem, path=str(path))
+            layer = stacks.Layer("video" if suffix in stacks.MOVIES else "image",
+                                 Path(path).stem, path=str(path))
             self.stacks.add(self.screen, layer, near=near if near is not None else None)
             near = layer
             made.append(layer)
@@ -661,8 +686,9 @@ class StackView(QWidget):
     def _pick(self) -> None:
         from PySide6.QtWidgets import QFileDialog
         chosen, _ = QFileDialog.getOpenFileNames(
-            self, tr("Картинка новым слоем"), "",
-            tr("Картинки (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);;Все файлы (*)"))
+            self, tr("Картинка или видео новым слоем"), "",
+            tr("Картинки и видео (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp "
+               "*.mov *.mp4 *.m4v *.mkv *.avi *.mxf);;Все файлы (*)"))
         if chosen:
             self.add_pictures(chosen, near=self.chosen)
 

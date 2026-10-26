@@ -39,12 +39,14 @@ SHORT = {"normal": "Norm", "multiply": "Mult", "screen": "Scrn", "overlay": "Ovr
          "add": "Add", "difference": "Diff", "soft": "Soft"}
 SCREENS = ("Top", "Bottom", "Lamels")
 BINDS = ("frame", "camera", "decal", "view")
+PICTURED = ("image", "video")       # the kinds that show something of their own
+MOVIES = (".mov", ".mp4", ".m4v", ".mkv", ".avi", ".mxf")
 _ids = itertools.count(1)
 
 
 @dataclass
 class Layer:
-    kind: str                       # image | folder
+    kind: str                       # image | video | folder
     name: str
     path: str = ""
     visible: bool = True
@@ -69,6 +71,9 @@ class Layer:
     normal: list | None = None          # decal: which way the surface faces there
     projector: list | None = None       # view: the camera's matrix, sixteen numbers
     projector_size: list | None = None  # view: its picture in pixels
+    # video: when it starts on the clock, in seconds, and whether it goes round
+    offset: float = 0.0
+    loop: bool = False
     ident: int = field(default_factory=lambda: next(_ids))
 
     @property
@@ -86,7 +91,9 @@ class Layer:
         out = {"kind": self.kind, "name": self.name, "path": self.path,
                "visible": self.visible, "opacity": round(float(self.opacity), 4),
                "blend": self.blend, "open": self.open}
-        if self.kind == "image":
+        if self.kind == "video":
+            out.update(offset=round(self.offset, 4), loop=self.loop)
+        if self.kind in PICTURED:
             out.update(x=round(self.x, 3), y=round(self.y, 3), scale=round(self.scale, 5),
                        rotation=round(self.rotation, 4), flip=self.flip, bind=self.bind)
             for key in ("anchor", "normal", "projector_size"):
@@ -102,7 +109,7 @@ class Layer:
     @classmethod
     def from_dict(cls, raw: dict) -> "Layer":
         kind = raw.get("kind", "image")
-        made = cls(kind=kind if kind in ("image", "folder") else "image",
+        made = cls(kind=kind if kind in ("image", "video", "folder") else "image",
                    name=str(raw.get("name") or ""), path=str(raw.get("path") or ""),
                    visible=bool(raw.get("visible", True)),
                    opacity=float(max(0.0, min(1.0, raw.get("opacity", 1.0)))),
@@ -113,6 +120,8 @@ class Layer:
                    rotation=float(raw.get("rotation", 0.0)), flip=bool(raw.get("flip", False)),
                    bind=raw.get("bind") if raw.get("bind") in BINDS
                    else ("camera" if raw.get("remap") else "frame"))
+        made.offset = float(raw.get("offset", 0.0))
+        made.loop = bool(raw.get("loop", False))
         for key, length in (("anchor", 3), ("normal", 3), ("projector", 16), ("projector_size", 2)):
             got = raw.get(key)
             if isinstance(got, list) and len(got) == length:
@@ -207,6 +216,20 @@ class Stacks:
                     out.append((one, None))
             return out
         return keep(self.stack(screen))
+
+    def playing(self) -> list:
+        """The video layers on show, on every screen: what is read."""
+        out = []
+
+        def walk(shown):
+            for one, inner in shown:
+                if inner is not None:
+                    walk(inner)
+                elif one.kind == "video":
+                    out.append(one)
+        for screen in self.screens:
+            walk(self.shown(screen))
+        return out
 
 
 # -- the sums, for holding the graphics card to -------------------------------------

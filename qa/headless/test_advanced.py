@@ -347,3 +347,54 @@ def test_a_decal_is_put_where_pointed_and_a_projector_thrown_from_the_view(advan
         window.layer_stacks = stacks.Stacks()
         window.mode.setCurrentText(PREVIEW)
         tick(0.2)
+
+
+# -- step 7: video in layers -----------------------------------------------------------
+
+def test_a_movie_dropped_in_a_drawer_plays_on_its_screen(advanced, clips, tick):
+    import layers as stacks
+    window = advanced
+    window.rail.buttons["Bottom"].click()
+    tick(0.1)
+    stack = window.drawer.stack
+    across, down = window._pixels("Screen_Bottom")
+    window._move(0.0)
+    tick(0.3)
+    plain = window._screen_to_array("Screen_Bottom", across, down)
+    try:
+        layer = stack.add_pictures([str(clips["top"])])[0]
+        assert layer.kind == "video"
+        panel = stack.transform
+        assert panel.isVisible() and panel.start.isVisible() and panel.loop.isVisible()
+        for _ in range(40):
+            tick(0.05)
+            if window._pictures().movies.get(layer).showing:
+                break
+        tick(0.2)
+        first = window._screen_to_array("Screen_Bottom", across, down)
+        assert np.abs(first - plain).mean() > 0.01            # the movie is over the source
+        window._move(0.6)
+        for _ in range(40):
+            tick(0.05)
+            movie = window._pictures().movies.get(layer)
+            if movie.on_card is not None and movie.on_card >= movie.stream.index_at(0.6):
+                break
+        tick(0.2)
+        later = window._screen_to_array("Screen_Bottom", across, down)
+        assert np.abs(later - first).mean() > 0.001           # and it moved on with the clock
+        # Started later than the clock: nothing of it yet.
+        panel.start.setValue(30.0)
+        assert layer.offset == 30.0
+        tick(0.3)
+        assert not window._pictures().movies.get(layer).showing
+        saved = window._settings_now()["layers"]["Bottom"][0]
+        assert saved["kind"] == "video" and saved["offset"] == 30.0
+        # Gone from the stack, the movie is let go of.
+        stack.choose(layer)
+        stack.findChild(QWidget, "qa_stack_delete").click()
+        tick(0.2)
+        assert not window._pictures().movies._held
+    finally:
+        window.layer_stacks = stacks.Stacks()
+        window._move(0.0)
+        tick(0.2)
