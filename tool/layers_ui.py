@@ -329,6 +329,7 @@ class LayerRow(QFrame):
         right.setSpacing(2)
         self.blend = QComboBox()
         self.blend.setObjectName("qa_layer_blend")
+        self.blend.setProperty("fixed_items", True)     # Norm, Add... in both languages
         for key in stacks.BLENDS:
             self.blend.addItem(stacks.SHORT[key], key)
         self.blend.setCurrentIndex(stacks.BLENDS.index(layer.blend))

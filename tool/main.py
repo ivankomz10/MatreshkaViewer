@@ -2800,7 +2800,9 @@ class Viewer(QMainWindow):
                 said = turned(widget.placeholderText())
                 if said is not None:
                     widget.setPlaceholderText(said)
-            if isinstance(widget, QComboBox):
+            # A combo can keep only its items (`fixed_items`): the blend modes
+            # are Norm, Add... in both languages, and Add is the English of Сложение.
+            if isinstance(widget, QComboBox) and not widget.property("fixed_items"):
                 for index in range(widget.count()):
                     said = turned(widget.itemText(index))
                     if said is not None:
