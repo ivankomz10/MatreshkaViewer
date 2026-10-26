@@ -17,6 +17,14 @@ Photoshop, Substance and the browsers: `blend` below is the reference the
 graphics card's pass (layer_gpu) is held to. A folder's layers are laid
 together first, on nothing, and the folder then lies as one layer.
 
+A picture lies on the screen's frame, or is bound to the building (`bind`):
+
+  frame    on the frame, in its pixels
+  camera   as the audience sees it from the file's camera
+  decal    flat on the surface where it is put, as a sticker: the cells carry
+           it as they move
+  view     thrown from a camera of the Inspector, as a projector would
+
 Kept with the settings as plain data, paths and all.
 """
 from __future__ import annotations
@@ -30,6 +38,7 @@ BLENDS = ("normal", "multiply", "screen", "overlay", "add", "difference", "soft"
 SHORT = {"normal": "Norm", "multiply": "Mult", "screen": "Scrn", "overlay": "Ovrl",
          "add": "Add", "difference": "Diff", "soft": "Soft"}
 SCREENS = ("Top", "Bottom", "Lamels")
+BINDS = ("frame", "camera", "decal", "view")
 _ids = itertools.count(1)
 
 
@@ -51,11 +60,21 @@ class Layer:
     scale: float = 1.0
     rotation: float = 0.0
     flip: bool = False
-    # Laid on the building as the audience sees it from the file's camera,
-    # instead of on the screen's frame; x, y then count pixels of the
-    # camera's 9:16 picture, y upwards.
-    remap: bool = False
+    # Bound to the building instead of the frame (see above). For `camera`
+    # and `view` x, y count pixels of that camera's picture, y upwards; for
+    # `decal` centimetres along the surface from `anchor`, where the picture
+    # is two metres wide at a scale of one.
+    bind: str = "frame"
+    anchor: list | None = None          # decal: the point of the building, at rest
+    normal: list | None = None          # decal: which way the surface faces there
+    projector: list | None = None       # view: the camera's matrix, sixteen numbers
+    projector_size: list | None = None  # view: its picture in pixels
     ident: int = field(default_factory=lambda: next(_ids))
+
+    @property
+    def remap(self) -> bool:
+        """Bound to the building, laid by the remap pass."""
+        return self.bind != "frame"
 
     def fit(self) -> None:
         """Back to fitted whole and centred."""
@@ -69,7 +88,13 @@ class Layer:
                "blend": self.blend, "open": self.open}
         if self.kind == "image":
             out.update(x=round(self.x, 3), y=round(self.y, 3), scale=round(self.scale, 5),
-                       rotation=round(self.rotation, 4), flip=self.flip, remap=self.remap)
+                       rotation=round(self.rotation, 4), flip=self.flip, bind=self.bind)
+            for key in ("anchor", "normal", "projector_size"):
+                if getattr(self, key) is not None:
+                    out[key] = [round(float(v), 6) for v in getattr(self, key)]
+            if self.projector is not None:
+                # A projection's numbers are small: kept whole, not rounded.
+                out["projector"] = [float(v) for v in self.projector]
         if self.kind == "folder":
             out["children"] = [one.to_dict() for one in self.children]
         return out
@@ -86,7 +111,12 @@ class Layer:
                    x=float(raw.get("x", 0.0)), y=float(raw.get("y", 0.0)),
                    scale=float(raw.get("scale", 1.0)) or 1.0,
                    rotation=float(raw.get("rotation", 0.0)), flip=bool(raw.get("flip", False)),
-                   remap=bool(raw.get("remap", False)))
+                   bind=raw.get("bind") if raw.get("bind") in BINDS
+                   else ("camera" if raw.get("remap") else "frame"))
+        for key, length in (("anchor", 3), ("normal", 3), ("projector", 16), ("projector_size", 2)):
+            got = raw.get(key)
+            if isinstance(got, list) and len(got) == length:
+                setattr(made, key, [float(v) for v in got])
         if made.kind == "folder":
             made.children = [cls.from_dict(one) for one in raw.get("children") or []]
         return made

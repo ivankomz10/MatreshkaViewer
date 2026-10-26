@@ -4803,6 +4803,7 @@ class Viewer(QMainWindow):
             stack = layers_ui.StackView(self.layer_stacks, key, self._layer_thumbnail)
             stack.changed.connect(self._layers_changed)
             stack.moving.connect(self._set_layer_tool)
+            stack.bound.connect(self._place_bound)
             stack.move_button.setChecked(self.layer_tool)
         self.drawer.show_screen(key, row, self.level == "show", stack=stack)
         self.rail.show_open(key)
@@ -4851,9 +4852,75 @@ class Viewer(QMainWindow):
         m = np.asarray(self._cells_now, np.float64)[cell]
         return {scene3d.KINETIC_SCREEN: np.einsum("vij,vj->vi", m[:, :3, :3], rest) + m[:, :3, 3]}
 
-    def _camera_under(self, event):
-        """(baked screen, (x, y) pixels of the file camera's picture, y down)
-        of the place on the building under the pointer, or None."""
+    def _rest_under(self, event):
+        """(baked screen, surface, point, normal) of the place on the building
+        under the pointer with the cells at rest, or None: where a decal goes."""
+        if self.mesh is None:
+            return None
+        if self._picker is None:
+            self._picker = picking.Picker(self.mesh.raw)
+        if self.mode.currentText() in ("Flat", "ReBake"):
+            under = self._frame_under(event)
+            if under is None:
+                return None
+            name, (x, y) = under
+            across, down = self._pixels(name)
+            surface = self._top_surface(name)
+            got = self._picker.frame_hit(surface, (x / across, y / down))
+            if got is None:
+                return None
+            return (name, surface, *self._picker.at_rest(surface, *got))
+        wide, tall = self.canvas.get_logical_size()
+        got = self._picker.hit(self.mesh.view_projection(), (wide, tall),
+                               (event.get("x", 0.0), event.get("y", 0.0)),
+                               self._shown_surfaces(), self._posed())
+        if got is None:
+            return None
+        name, surface, triangle, b1, b2 = got
+        return (name, surface, *self._picker.at_rest(surface, triangle, b1, b2))
+
+    def _put_decal(self, layer, event, name: str) -> bool:
+        """The decal's middle onto the place under the pointer, on its screen."""
+        got = self._rest_under(event)
+        if got is None or got[0] != name:
+            return False
+        layer.anchor = [float(v) for v in got[2]]
+        layer.normal = [float(v) for v in got[3]]
+        layer.x = layer.y = 0.0
+        return True
+
+    def _place_bound(self, layer) -> None:
+        """Somewhere for a layer just bound to the building to be thrown from:
+        a projector where the view's camera is now; a decal, if it has no place
+        yet, in the middle of what is seen of its screen, or of its frame."""
+        stack = getattr(self.drawer, "stack", None)
+        name = {v: k for k, v in theme.BAKED.items()}.get(stack.screen) if stack is not None else None
+        if self.mesh is None or layer is None:
+            return
+        wide, tall = self.canvas.get_logical_size()
+        if layer.bind == "view":
+            layer.projector = [float(v) for v in np.asarray(self.mesh.view_projection()).reshape(-1)]
+            layer.projector_size = [float(wide), float(tall)]
+            logfile.write(f"layers: {layer.name} thrown from the view, {wide:.0f} x {tall:.0f}")
+        elif layer.bind == "decal" and layer.anchor is None and name is not None:
+            if not self._put_decal(layer, {"x": wide / 2, "y": tall / 2}, name):
+                if self._picker is None:
+                    self._picker = picking.Picker(self.mesh.raw)
+                surface = self._top_surface(name)
+                got = self._picker.frame_hit(surface, (0.5, 0.5))
+                if got is not None:
+                    point, normal = self._picker.at_rest(surface, *got)
+                    layer.anchor, layer.normal = [float(v) for v in point], [float(v) for v in normal]
+            logfile.write(f"layers: {layer.name} put as a decal at {layer.anchor}")
+        if stack is not None:
+            stack.transform.refresh()
+        self._remember()
+        self.touch()
+
+    def _camera_under(self, event, layer=None):
+        """(baked screen, (x, y) pixels of a camera's picture, y down) of the
+        place on the building under the pointer, or None: the file's camera,
+        or the projector of a layer thrown from the view."""
         if self.mesh is None:
             return None
         if self._picker is None:
@@ -4880,11 +4947,15 @@ class Viewer(QMainWindow):
                                        self._shown_surfaces(), self._posed())
         if point is None:
             return None
-        view_projection, _ = self.file_camera()
+        if layer is not None and layer.bind == "view" and layer.projector is not None:
+            view_projection = np.asarray(layer.projector, np.float64).reshape(4, 4)
+            across, down = layer.projector_size
+        else:
+            view_projection, _ = self.file_camera()
+            across, down = layer_gpu.CAMERA_PICTURE
         clip = view_projection @ np.array([*point, 1.0])
         if clip[3] <= 0:
             return None
-        across, down = layer_gpu.CAMERA_PICTURE
         return name, ((clip[0] / clip[3] + 1) / 2 * across, (1 - clip[1] / clip[3]) / 2 * down)
 
     def _frame_under(self, event):
@@ -4927,19 +4998,27 @@ class Viewer(QMainWindow):
             steps = -event.get("dy", 0) / 120.0
             layer.scale = max(0.01, layer.scale * 1.06 ** steps)
         elif kind == "pointer_down":
-            under = self._camera_under(event) if layer.remap else self._frame_under(event)
+            shift = "Shift" in (event.get("modifiers", ()) or ())
+            if layer.bind == "decal" and not shift:
+                # A decal is put where it is pointed at, and follows the hand.
+                if not self._put_decal(layer, event, name):
+                    return True
+                under = (name, (0.0, 0.0))
+            else:
+                under = self._camera_under(event, layer) if layer.remap else self._frame_under(event)
             if under is None or under[0] != name:
                 return True
-            shift = "Shift" in (event.get("modifiers", ()) or ())
             self._layer_drag = (under[1], event.get("x", 0.0), layer.x, layer.y, layer.rotation, shift)
             return True
         elif kind == "pointer_move" and self._layer_drag is not None:
             start, start_x, x0, y0, turn0, shift = self._layer_drag
             if shift:
                 layer.rotation = turn0 + (event.get("x", 0.0) - start_x) * 0.4
+            elif layer.bind == "decal":
+                self._put_decal(layer, event, name)
             elif layer.remap:
                 # The camera's picture has no seam, and up in it is plus.
-                under = self._camera_under(event)
+                under = self._camera_under(event, layer)
                 if under is None:
                     return True
                 layer.x = x0 + under[1][0] - start[0]

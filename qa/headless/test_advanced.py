@@ -256,7 +256,7 @@ def test_a_remapped_picture_lies_as_the_camera_sees_it_and_drags_there(advanced,
         panel = stack.transform
         assert not layer.remap and "кадра" in panel.head.text()
         layer.x = 40.0
-        panel.remap.setChecked(True)
+        panel.bind.setCurrentIndex(panel.bind.findData("camera"))
         assert layer.remap and layer.x == 0.0 and "камере" in panel.head.text()
         tick(0.3)
         across, down = window._pixels("Screen_Bottom")
@@ -264,7 +264,7 @@ def test_a_remapped_picture_lies_as_the_camera_sees_it_and_drags_there(advanced,
         reddish = (got[..., 0] > 240) & (got[..., 1] < 15)
         # Only where the camera sees the screen: some of it, never all of it.
         assert 0.01 < reddish.mean() < 0.9, reddish.mean()
-        assert window._settings_now()["layers"]["Bottom"][0]["remap"] is True
+        assert window._settings_now()["layers"]["Bottom"][0]["bind"] == "camera"
         # Dragged on the flat strip, it moves in the camera's pixels.
         window.mode.setCurrentText("Flat")
         tick(0.3)
@@ -284,9 +284,65 @@ def test_a_remapped_picture_lies_as_the_camera_sees_it_and_drags_there(advanced,
         assert abs(layer.y + (end[1][1] - start[1][1])) < 1e-6
         assert end[1][1] < start[1][1] and layer.y > 0       # dragged up: plus
         # Back to the frame's pixels, fitted again.
-        panel.remap.setChecked(False)
+        panel.bind.setCurrentIndex(panel.bind.findData("frame"))
         assert not layer.remap and (layer.x, layer.y) == (0.0, 0.0)
         stack.move_button.setChecked(False)
+    finally:
+        window.layer_stacks = stacks.Stacks()
+        window.mode.setCurrentText(PREVIEW)
+        tick(0.2)
+
+
+# -- step 6: decal and the view's projector ---------------------------------------------
+
+def test_a_decal_is_put_where_pointed_and_a_projector_thrown_from_the_view(advanced, tick, tmp_path):
+    from PIL import Image
+    import layers as stacks
+    window = advanced
+    red = np.zeros((90, 160, 4), np.uint8)
+    red[..., 0], red[..., 3] = 255, 255
+    Image.fromarray(red).save(tmp_path / "red.png")
+    window.rail.buttons["Bottom"].click()
+    tick(0.1)
+    stack = window.drawer.stack
+    try:
+        layer = stack.add_pictures([str(tmp_path / "red.png")])[0]
+        tick(0.2)
+        panel = stack.transform
+        panel.bind.setCurrentIndex(panel.bind.findData("decal"))
+        assert layer.bind == "decal" and layer.anchor is not None and layer.normal is not None
+        assert "поверхности" in panel.head.text() and not panel.aim.isVisible()
+        tick(0.3)
+        across, down = window._pixels("Screen_Bottom")
+        got = window._screen_to_array("Screen_Bottom", across, down)
+        reddish = (got[..., 0] > 240) & (got[..., 1] < 15)
+        assert 0.001 < reddish.mean() < 0.5, reddish.mean()
+        # Dragged on the strip, its middle goes where the hand is.
+        window.mode.setCurrentText("Flat")
+        tick(0.3)
+        stack.move_button.setChecked(True)
+        wide, tall = window.canvas.get_logical_size()
+        boxes = dict(window._strips(window._flat_showing(), int(wide), int(tall)))
+        left, top, strip, high = boxes["Screen_Bottom"]
+        at = (left + strip * 0.3, top + high * 0.5)
+        window._canvas_event({"event_type": "pointer_down", "x": at[0], "y": at[1], "button": 1})
+        window._canvas_event({"event_type": "pointer_up", "x": at[0], "y": at[1], "button": 1})
+        want = window._rest_under({"x": at[0], "y": at[1]})
+        assert np.allclose(layer.anchor, want[2]) and np.allclose(layer.normal, want[3])
+        saved = window._settings_now()["layers"]["Bottom"][0]
+        assert saved["bind"] == "decal" and len(saved["anchor"]) == 3
+        stack.move_button.setChecked(False)
+        # Thrown from the view: the projector is the view's camera as it stands.
+        window.mode.setCurrentText(PREVIEW)
+        tick(0.3)
+        panel.bind.setCurrentIndex(panel.bind.findData("view"))
+        assert layer.bind == "view" and panel.aim.isVisible()
+        assert np.allclose(np.reshape(layer.projector, (4, 4)), window.mesh.view_projection())
+        tick(0.3)
+        got = window._screen_to_array("Screen_Bottom", across, down)
+        assert ((got[..., 0] > 240) & (got[..., 1] < 15)).mean() > 0.001
+        back = stacks.Layer.from_dict(layer.to_dict())
+        assert back.bind == "view" and np.allclose(back.projector, layer.projector)
     finally:
         window.layer_stacks = stacks.Stacks()
         window.mode.setCurrentText(PREVIEW)

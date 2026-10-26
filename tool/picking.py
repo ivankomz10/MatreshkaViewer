@@ -62,12 +62,14 @@ class Picker:
 
     def __init__(self, raw) -> None:
         self.surfaces = {}
+        self.normals = {}
         for name in {one for group in SURFACES.values() for one in group}:
             if f"{name}__points" not in raw.files:
                 continue
             self.surfaces[name] = (np.asarray(raw[f"{name}__points"], np.float64),
                                    np.asarray(raw[f"{name}__triangles"], np.int64),
                                    np.asarray(raw[f"{name}__uv"], np.float64))
+            self.normals[name] = np.asarray(raw[f"{name}__normals"], np.float64)
 
     def pick(self, view_projection, size, at, shown=None, posed=None):
         """(screen, (u, v) of its frame with v down) under a point, or None.
@@ -109,14 +111,41 @@ class Picker:
                     best = got[0]
         return None if best is None else origin + direction * best
 
-    def on_frame(self, name, at, posed=None):
-        """The point of the building a point of a surface's frame is on --
-        (u, v) with v down -- or None where the frame shows nothing."""
+    def hit(self, view_projection, size, at, shown=None, posed=None):
+        """(screen, surface, triangle, b1, b2) met under a point of the canvas,
+        or None: where on which triangle, by the weights of its 2nd and 3rd corners."""
+        origin, direction = ray(view_projection, size, at)
+        best = None
+        for screen, names in SURFACES.items():
+            for name in names:
+                if name not in self.surfaces or (shown is not None and name not in shown):
+                    continue
+                points, triangles, _ = self.surfaces[name]
+                if posed is not None and name in posed:
+                    points = posed[name]
+                got = meet(origin, direction, points, triangles)
+                if got is not None and (best is None or got[0] < best[0]):
+                    best = (got[0], screen, name, got[1], got[2], got[3])
+        return None if best is None else best[1:]
+
+    def at_rest(self, name, triangle, b1, b2):
+        """(point, normal) of a place on a triangle with the cells at rest:
+        where a decal is put, which the cells then carry."""
+        points, triangles, _ = self.surfaces[name]
+        corners = points[triangles[triangle]]
+        point = corners[0] * (1 - b1 - b2) + corners[1] * b1 + corners[2] * b2
+        normal = np.cross(corners[1] - corners[0], corners[2] - corners[0])
+        normal /= max(np.linalg.norm(normal), 1e-12)
+        if normal @ self.normals[name][triangles[triangle]].sum(axis=0) < 0:
+            normal = -normal
+        return point, normal
+
+    def frame_hit(self, name, at):
+        """(triangle, b1, b2) of a point of a surface's frame -- (u, v) with
+        v down -- or None where the frame shows nothing."""
         if name not in self.surfaces:
             return None
-        points, triangles, uv = self.surfaces[name]
-        if posed is not None and name in posed:
-            points = posed[name]
+        _, triangles, uv = self.surfaces[name]
         want = np.array([at[0], 1.0 - at[1]])
         a, b, c = (uv[triangles[:, k]] for k in range(3))
         e1, e2, s = b - a, c - a, want - a
@@ -129,5 +158,17 @@ class Picker:
         if not inside.any():
             return None
         index = int(np.nonzero(inside)[0][0])
+        return index, float(u[index]), float(v[index])
+
+    def on_frame(self, name, at, posed=None):
+        """The point of the building a point of a surface's frame is on --
+        (u, v) with v down -- or None where the frame shows nothing."""
+        got = self.frame_hit(name, at)
+        if got is None:
+            return None
+        points, triangles, _ = self.surfaces[name]
+        if posed is not None and name in posed:
+            points = posed[name]
+        index, u, v = got
         corners = points[triangles[index]]
-        return corners[0] * (1 - u[index] - v[index]) + corners[1] * u[index] + corners[2] * v[index]
+        return corners[0] * (1 - u - v) + corners[1] * u + corners[2] * v

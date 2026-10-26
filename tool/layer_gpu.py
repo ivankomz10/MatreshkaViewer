@@ -110,15 +110,18 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
 
 REMAP_SHADER = """
-// A picture laid on the building as the file's camera sees it. The screen's
-// own mesh is drawn in its own UV -- every triangle onto the part of the
-// frame it shows -- and each fragment knows where on the building it is, the
-// top screen's cells posed as they stand; that point seen through the camera
-// is where in the picture it takes its colour from.
+// A picture laid on the building as a camera sees it: the file's, the
+// Inspector's as a projector, or a decal's -- straight onto the surface. The
+// screen's own mesh is drawn in its own UV -- every triangle onto the part of
+// the frame it shows -- and each fragment knows where on the building it is,
+// the top screen's cells posed as they stand (or at rest, for a decal, which
+// the cells then carry); that point seen through the camera is where in the
+// picture it takes its colour from.
 struct Remap {
     view_projection: mat4x4<f32>,
     eye: vec4<f32>,
-    // x mode, y opacity, z 1 when the cells move (cells[] applies), w unused
+    // x mode, y opacity, z 1 when the cells move (cells[] applies), w 1 when
+    // the picture is taken from the cells at rest
     info: vec4<f32>,
     // the camera's picture in pixels, y down -> the layer's 0..1
     row0: vec4<f32>,
@@ -144,7 +147,7 @@ fn vs_main(@location(0) point: vec3<f32>, @location(1) normal: vec3<f32>,
            @location(2) uv: vec2<f32>, @location(3) cell: f32) -> VOut {
     var placed = mat4x4<f32>(vec4<f32>(1.0, 0.0, 0.0, 0.0), vec4<f32>(0.0, 1.0, 0.0, 0.0),
                              vec4<f32>(0.0, 0.0, 1.0, 0.0), vec4<f32>(0.0, 0.0, 0.0, 1.0));
-    if (how.info.z > 0.5) {
+    if (how.info.z > 0.5 && how.info.w < 0.5) {
         placed = cells[u32(cell)];
     }
     var out: VOut;
@@ -161,7 +164,8 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let clip = how.view_projection * vec4<f32>(in.world, 1.0);
     var top = vec4<f32>(0.0);
     let facing = dot(in.normal, how.eye.xyz - in.world) > 0.0;
-    if (clip.w > 0.0 && facing) {
+    let depth = clip.z / clip.w;
+    if (clip.w > 0.0 && facing && depth >= 0.0 && depth <= 1.0) {
         let ndc = clip.xy / clip.w;
         let at = vec3<f32>((ndc.x + 1.0) * 0.5 * how.camera.x, (1.0 - ndc.y) * 0.5 * how.camera.y, 1.0);
         let uv = vec2<f32>(dot(how.row0.xyz, at), dot(how.row1.xyz, at));
@@ -211,13 +215,81 @@ class Surface:
             self.device.queue.write_buffer(self.cells, 0, m.tobytes())
 
 
-def camera_rows(picture: tuple, layer) -> tuple:
-    """`placed` in the camera's picture, its y counted upwards as a person
+def camera_rows(picture: tuple, layer, frame: tuple = CAMERA_PICTURE) -> tuple:
+    """`placed` in a camera's picture, its y counted upwards as a person
     reads it: up is plus."""
     import copy
     upright = copy.copy(layer)
     upright.y = -layer.y
-    return placed(CAMERA_PICTURE, picture, upright)
+    return placed(frame, picture, upright)
+
+
+DECAL_WIDE = 2.0        # metres, a decal at a scale of one
+
+
+def decal_axes(layer, picture: tuple):
+    """(middle, right, up, normal, width, height) of a decal, in metres: its
+    right and up as one looking at the surface sees them, turned clockwise
+    and mirrored as the layer says."""
+    normal = np.asarray(layer.normal, np.float64)
+    normal = normal / max(np.linalg.norm(normal), 1e-12)
+    upward = np.array([0.0, 0.0, 1.0]) if abs(normal[2]) < 0.95 else np.array([0.0, 1.0, 0.0])
+    right = np.cross(-normal, upward)
+    right /= np.linalg.norm(right)
+    up = np.cross(right, -normal)
+    middle = np.asarray(layer.anchor, np.float64) + right * layer.x / 100.0 + up * layer.y / 100.0
+    turn = np.radians(layer.rotation)
+    right, up = (np.cos(turn) * right - np.sin(turn) * up, np.cos(turn) * up + np.sin(turn) * right)
+    if layer.flip:
+        right = -right
+    width = DECAL_WIDE * layer.scale
+    height = width * picture[1] / max(picture[0], 1)
+    return middle, right, up, normal, width, height
+
+
+def decal_matrix(layer, picture: tuple) -> np.ndarray:
+    """The decal as a camera looking straight at the surface: the picture
+    fills its frame, and it reaches as deep as it is wide either way."""
+    middle, right, up, normal, width, height = decal_axes(layer, picture)
+    deep = max(width, height)
+    m = np.zeros((4, 4))
+    m[0, :3], m[1, :3], m[2, :3] = right * 2.0 / width, up * 2.0 / height, normal * 0.5 / deep
+    m[0, 3] = -m[0, :3] @ middle
+    m[1, 3] = -m[1, :3] @ middle
+    m[2, 3] = 0.5 - m[2, :3] @ middle
+    m[3, 3] = 1.0
+    return m
+
+
+def eye_of(view_projection) -> np.ndarray:
+    """Where a perspective camera stands: the point its x, y and w all miss."""
+    m = np.asarray(view_projection, np.float64)
+    rows = m[[0, 1, 3]]
+    return np.linalg.solve(rows[:, :3], -rows[:, 3])
+
+
+def seen_by(layer, picture: tuple, file_camera):
+    """(view_projection, eye, frame, rows, at_rest) a bound layer is laid by,
+    or None while it has nowhere yet to be thrown from."""
+    if layer.bind == "camera":
+        if file_camera is None:
+            return None
+        return (file_camera[0], file_camera[1], CAMERA_PICTURE,
+                camera_rows(picture, layer), False)
+    if layer.bind == "decal":
+        if layer.anchor is None or layer.normal is None:
+            return None
+        middle, *_ = decal_axes(layer, picture)
+        eye = middle + np.asarray(layer.normal, np.float64) * 1000.0
+        whole = ((1.0 / picture[0], 0.0, 0.0), (0.0, 1.0 / picture[1], 0.0))
+        return decal_matrix(layer, picture), eye, tuple(picture), whole, True
+    if layer.bind == "view":
+        if layer.projector is None or layer.projector_size is None:
+            return None
+        matrix = np.asarray(layer.projector, np.float64).reshape(4, 4)
+        size = tuple(layer.projector_size)
+        return matrix, eye_of(matrix), size, camera_rows(picture, layer, size), False
+    return None
 
 
 def fitted(frame: tuple, picture: tuple) -> tuple:
@@ -415,20 +487,19 @@ class LayerBlender:
                 size=160, usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST))
         return self._remap_uniforms[index]
 
-    def _lay_remapped(self, encoder, under, layer_texture, size, layer, mode: int, into,
-                      surface, camera) -> None:
-        """A picture as the camera sees it on the building: what is under
+    def _lay_remapped(self, encoder, under, layer_texture, layer, mode: int, into,
+                      surface, seen) -> None:
+        """A picture as a camera sees it on the building: what is under
         copied across first, then the screen's mesh drawn over it in its UV."""
         index = self._pass
         self._pass += 1
-        rows = camera_rows(size, layer)
-        view_projection, eye = camera
+        view_projection, eye, frame, rows, at_rest = seen
         values = np.concatenate([
             np.asarray(view_projection, np.float32).T.reshape(-1),
             [eye[0], eye[1], eye[2], 1.0],
-            [mode, layer.opacity, 1.0 if surface.moving else 0.0, 0.0],
+            [mode, layer.opacity, 1.0 if surface.moving else 0.0, 1.0 if at_rest else 0.0],
             [*rows[0], 0.0], [*rows[1], 0.0],
-            [CAMERA_PICTURE[0], CAMERA_PICTURE[1], 0.0, 0.0]]).astype(np.float32)
+            [frame[0], frame[1], 0.0, 0.0]]).astype(np.float32)
         buffer = self._remap_uniform(index)
         self.device.queue.write_buffer(buffer, 0, values.tobytes())
         encoder.copy_texture_to_texture({"texture": under}, {"texture": into},
@@ -483,9 +554,10 @@ class LayerBlender:
             texture, size = got
             target = pair[0] if now is not pair[0] else pair[1]
             if layer.remap:
-                if remap is None:
+                seen = None if remap is None else seen_by(layer, size, remap[1])
+                if seen is None:
                     continue
-                self._lay_remapped(encoder, now, texture, size, layer, mode, target, *remap)
+                self._lay_remapped(encoder, now, texture, layer, mode, target, remap[0], seen)
             else:
                 self._lay(encoder, now, texture, placed((self.width, self.height), size, layer),
                           mode, layer.opacity, False, target)
