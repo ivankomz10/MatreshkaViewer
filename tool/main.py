@@ -52,6 +52,7 @@ import renderer3d
 import scene3d
 import kinetic
 import show as showfile
+import trix_export
 import screen_gpu
 import sound
 import theme
@@ -1025,6 +1026,8 @@ class Viewer(QMainWindow):
         self._took = False             # whether the change begun took a snapshot
         self.draft = None
         self.ask_resume = self._ask_resume
+        # And what asks where a show goes out as a .trix: (path or None).
+        self.ask_export = self._ask_export
         self._show_source = ""         # trix | draft | rows
         self.layer_of: list = []       # which level each show track is
         self._wavs: dict = {}          # the show's sounds, read once
@@ -1467,6 +1470,11 @@ class Viewer(QMainWindow):
                                  "font-size:14px; }")
         for widget in self.editor_only:
             widget.setVisible(False)
+        self.export_button = button(
+            tr("Выгрузить .trix…"), "qa_export_trix",
+            tr("Записать шоу новым файлом рядом с исходным, следующей версией: "
+               "…-v001.trix → …-v002.trix. Исходный .trix не трогается, поверх "
+               "готового файла ничего не пишется."), lambda: self._export_trix())
         self.editor_button = button(
             tr("✎ Редактор"), "qa_editor",
             tr("Отпереть шоу: клипы тащатся, поля справа пишут в клип, лупы "
@@ -1665,6 +1673,77 @@ class Viewer(QMainWindow):
             self._set_level("show")
         self.show_view.set_editing(True)
         self._remember()
+
+    # -- out to the site ----------------------------------------------------
+
+    def _export_source(self) -> str:
+        """The show file the open show came from, if it came from one."""
+        if self.draft is not None:
+            return self.draft.source
+        return self.trix_path if self._show_source == "trix" else ""
+
+    def _export_trix(self) -> Path | None:
+        """The show as a new .trix: the next version beside the file it came
+        from, which is never written (see trix_export)."""
+        show = self.show_open
+        if show is None or self.job is not None:
+            return None
+        self._flush_draft()
+        source = self._export_source()
+        if source and not Path(source).exists():
+            logfile.write(f"show: {source} is no longer there; exported from the show alone")
+            source = ""
+        notes = trix_export.notes_for(
+            show, self.show_view.file_loops if source else None, source)
+        if self.draft is not None and self.draft.source_changed():
+            notes.append(tr("Файл шоу изменился после того, как черновик был начат: "
+                            "новая версия собрана на файле, как он есть сейчас."))
+        suggested = (trix_export.next_version(source) if source else
+                     trix_export.next_version(
+                         (SHOW_FOLDER if SHOW_FOLDER.exists() else Path.home())
+                         / f"{show.name or tr('Новое шоу')}.trix"))
+        target = self.ask_export(suggested, notes, bool(source))
+        if not target:
+            return None
+        try:
+            written = trix_export.export(show, target, source)
+        except trix_export.ExportError as trouble:
+            logfile.write(f"show: export failed: {trouble}")
+            self.show_view.say(tr("не выгрузилось: {0}", trouble))
+            QMessageBox.warning(self, tr("Выгрузка .trix"), str(trouble))
+            return None
+        logfile.write(f"show: exported as {written}"
+                      + (f" from {source}" if source else ""))
+        self.show_view.say(tr("выгружено: {0}", written.name))
+        return written
+
+    def _ask_export(self, suggested: Path, notes: list, beside: bool):
+        """Where to write it: the next version as offered, somewhere else, or
+        nowhere."""
+        said = tr("Шоу будет записано новым файлом:\n{0}\n\nв папку {1}.",
+                  suggested.name, suggested.parent)
+        if beside:
+            said += tr("\nИсходный .trix не трогается.")
+        if notes:
+            said += "\n\n" + "\n\n".join(notes)
+        box = QMessageBox(self)
+        box.setWindowTitle(tr("Выгрузка .trix"))
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(said)
+        write = box.addButton(tr("Выгрузить"), QMessageBox.ButtonRole.AcceptRole)
+        elsewhere = box.addButton(tr("Другое место…"), QMessageBox.ButtonRole.ActionRole)
+        box.addButton(tr("Отмена"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(write)
+        box.exec()
+        chosen = box.clickedButton()
+        if chosen is write:
+            return suggested
+        if chosen is elsewhere:
+            picked, _ = QFileDialog.getSaveFileName(
+                self, tr("Выгрузить шоу"), str(suggested),
+                tr("Шоу (*.trix);;Все файлы (*)"))
+            return Path(picked) if picked else None
+        return None
 
     def _revert(self) -> None:
         """Give the draft up and open the show file as it is."""

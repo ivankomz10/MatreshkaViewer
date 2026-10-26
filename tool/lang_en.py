@@ -155,6 +155,26 @@ EN: dict = {
     'Вернуть файл': 'Revert to file',
     'Бросить черновик и открыть .trix как он есть. Черновик не стирается: уходит в drafts\\old.':
         'Drop the draft and open the .trix as it is. The draft is not deleted: it goes to drafts\\old.',
+    # -- the show out as a new .trix ------------------------------------------
+    'Выгрузить .trix…': 'Export .trix…',
+    'Записать шоу новым файлом рядом с исходным, следующей версией: …-v001.trix → …-v002.trix. Исходный .trix не трогается, поверх готового файла ничего не пишется.':
+        'Write the show as a new file beside the one it came from, as its next version: …-v001.trix → …-v002.trix. The original .trix is not touched, and nothing is written over a file that is already there.',
+    'Файл шоу изменился после того, как черновик был начат: новая версия собрана на файле, как он есть сейчас.':
+        'The show file has changed since the draft was begun: the new version is built on the file as it is now.',
+    'не выгрузилось: {0}': 'not exported: {0}',
+    'Выгрузка .trix': 'Export .trix',
+    'выгружено: {0}': 'exported: {0}',
+    'Шоу будет записано новым файлом:\n{0}\n\nв папку {1}.': 'The show will be written as a new file:\n{0}\n\nin {1}.',
+    '\nИсходный .trix не трогается.': '\nThe original .trix is not touched.',
+    'Выгрузить': 'Export',
+    'Другое место…': 'Somewhere else…',
+    'Выгрузить шоу': 'Export the show',
+    'Лупы, нарисованные в редакторе, в .trix не пишутся: в файле луп — это флажок клипа. Ушли лупы, которые были в файле.':
+        'Loops drawn in the editor are not written to the .trix: in the file a loop is a flag on a clip. The loops the file had have gone out.',
+    'Шоу новое: в него положена чёрная подложка за каждым экраном с лупом с 800-го кадра, как во всех шоу.':
+        'The show is new: a black backdrop is put behind every screen, looped from frame 800, as in every show.',
+    '{0}: в исходный файл шоу не пишется': '{0}: the show file it came from is not written',
+    '{0} уже есть, поверх не пишется': '{0} is already there, and is not written over',
     'Отменить: {0} (Ctrl+Z)': 'Undo: {0} (Ctrl+Z)',
     'Нечего отменять': 'Nothing to undo',
     'Вернуть: {0} (Ctrl+Y)': 'Redo: {0} (Ctrl+Y)',

@@ -2,7 +2,8 @@
 
 The show editor that runs the building on site keeps a show as a `.trix` --
 JSON, one file per show, forty of them in `D:\\Content\\_SHOW`. This reads one
-into the least model the viewer needs, and never writes one back.
+into the least model the viewer needs, and never writes one back: a show
+goes out as a new version beside its file, through `trix_export`.
 
 Everything about the format below was measured across all forty files rather
 than read off the schema, because the schema allows far more than anybody
@@ -381,6 +382,15 @@ def _stills_until_next(show: Show) -> None:
                     clip.until = (min(later) if later else show.length)
 
 
+def _number(value, default: int) -> int:
+    """A number a show file may have written as one -- or, in an old show,
+    as "v01"."""
+    if isinstance(value, (int, float)):
+        return int(value)
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return int(digits) if digits else default
+
+
 def read(path: str | Path) -> Show:
     """One show file, with every clip's length found out from its media."""
     path = Path(path)
@@ -393,7 +403,7 @@ def read(path: str | Path) -> Show:
 
     project = raw.get("project") or {}
     show = Show(name=str(project.get("name") or path.stem),
-                version=int(project.get("version") or 1),
+                version=_number(project.get("version"), 1),
                 length=int(project.get("length") or LENGTH),
                 path=str(path))
 

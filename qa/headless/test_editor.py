@@ -463,3 +463,51 @@ def test_moving_a_sound_moves_it_in_the_mix(editor, tick):
         window.player.set_volume(0.0)
     offsets = [offset for _, offset, _ in window.mix._pieces]
     assert round(clip.tx / 60.0 * window.mix.rate) in offsets
+
+
+# -- out as a new .trix ----------------------------------------------------------
+
+@needs_rusday
+def test_the_show_goes_out_as_its_next_version_and_its_file_stays(editor, tick,
+                                                                  tmp_path):
+    import show as showfile
+    import trix_export
+    window = editor
+    window.open_show_file(str(RUSDAY))
+    tick(0.3)
+    assert window.export_button.isVisible() and window.export_button.isEnabled()
+    before = RUSDAY.read_bytes()
+    offered = []
+
+    def ask(suggested, notes, beside):
+        offered.append((suggested, notes, beside))
+        return tmp_path / suggested.name
+
+    # Unchanged, it is the file it came from; offered beside it, numbered on.
+    window.ask_export = ask
+    written = window._export_trix()
+    suggested, notes, beside = offered[-1]
+    assert suggested == trix_export.next_version(RUSDAY) and beside and not notes
+    assert suggested.parent == RUSDAY.parent and suggested != RUSDAY
+    assert written.read_bytes() == before
+
+    # Edited: a clip moved and a cue added, and only that.
+    window._set_editing(True)
+    first = window.show_open.on("Top")[0]
+    window.show_view.pick(first)
+    window._move(2000 / 60.0)
+    window.show_view.put_clip(True)
+    cues = len([one for one in window.show_open.clips if one.kind == "cue"])
+    window.show_view.add_cue()
+    window.ask_export = lambda *asked: tmp_path / "edited.trix"
+    written = window._export_trix()
+    back = showfile.read(written)
+    assert any(one.tx == 2000 for one in back.on("Top"))
+    assert len([one for one in back.clips if one.kind == "cue"]) == cues + 1
+
+    # Asked and let go of: nothing written. And the show file as it was.
+    window.ask_export = lambda *asked: None
+    assert window._export_trix() is None
+    assert sorted(one.name for one in tmp_path.iterdir()) \
+        == sorted([suggested.name, "edited.trix"])
+    assert RUSDAY.read_bytes() == before

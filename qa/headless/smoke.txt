@@ -49,3 +49,8 @@ test_zzzz_pages.py::test_the_kinetic_page_is_the_editor_drawing_in_the_same_wind
 test_zzzz_pages.py::test_a_key_on_one_page_is_not_taken_by_the_other
 test_zzzz_pages.py::test_the_remap_is_a_window_over_the_viewer_keeping_its_work_beside_it
 test_zzzz_pages.py::test_the_viewer_still_draws_after_the_other_pages
+
+# the show out as a new .trix
+test_trix_export.py::test_a_show_written_out_unchanged_is_the_same_file
+test_trix_export.py::test_nothing_is_written_over
+test_editor.py::test_the_show_goes_out_as_its_next_version_and_its_file_stays
