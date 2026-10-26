@@ -34,6 +34,15 @@ def press_at(window, where: QPoint) -> None:
     QApplication.sendEvent(target, event)
 
 
+def _no_drafts(window):
+    """No show draft anywhere: a clip's layers changed are a change of the
+    show, and a draft left behind would open as the next test's show."""
+    import shutil
+    from conftest import HOME
+    window.draft = None
+    shutil.rmtree(HOME / "drafts", ignore_errors=True)
+
+
 def _open_screen(window, key):
     """The screen's drawer open: a click on its button when it is not, since
     a click when it is puts it away."""
@@ -577,6 +586,7 @@ def test_in_a_show_the_drawer_is_the_clip_under_the_playhead(advanced, clips, ti
     red = np.zeros((90, 160, 4), np.uint8)
     red[..., 0], red[..., 3] = 255, 255
     Image.fromarray(red).save(tmp_path / "red.png")
+    _no_drafts(window)
     put_back(window, clips, tick)
     window._set_level("show")
     settled_at(window, tick, 30)
@@ -617,9 +627,12 @@ def test_in_a_show_the_drawer_is_the_clip_under_the_playhead(advanced, clips, ti
         window._close_drawer()
         window.history.clear()
         window._say_undo()
+        window._flush_draft()
+        window.draft = None
         window._set_level("view")
         put_back(window, clips, tick)
         window.layer_stacks = stacks.Stacks()
+        _no_drafts(window)
         tick(0.2)
 
 
@@ -634,6 +647,7 @@ def test_a_show_with_layers_goes_out_with_its_clips_baked(advanced, clips, tick,
     red = np.zeros((40, 40, 4), np.uint8)
     red[..., 0], red[..., 3] = 255, 255
     Image.fromarray(red).save(tmp_path / "red.png")
+    _no_drafts(window)
     put_back(window, clips, tick)
     window._set_level("show")
     settled_at(window, tick, 30)
@@ -662,6 +676,9 @@ def test_a_show_with_layers_goes_out_with_its_clips_baked(advanced, clips, tick,
         window.ask_export = asked
         window.history.clear()
         window._say_undo()
+        window._flush_draft()
+        window.draft = None
         window._set_level("view")
         put_back(window, clips, tick)
+        _no_drafts(window)
         tick(0.2)
