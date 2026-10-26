@@ -53,6 +53,8 @@ import scene3d
 import kinetic
 import show as showfile
 import trix_export
+import blender_export
+import blender_dialog
 import screen_gpu
 import sound
 import theme
@@ -1028,6 +1030,10 @@ class Viewer(QMainWindow):
         self.ask_resume = self._ask_resume
         # And what asks where a show goes out as a .trix: (path or None).
         self.ask_export = self._ask_export
+        # And what asks how the top screen goes to Blender: (request, exe) or None.
+        self.ask_blender = self._ask_blender
+        self.blender_path = ""           # blender.exe, once found or chosen
+        self._blender_job = None
         self._show_source = ""         # trix | draft | rows
         self.layer_of: list = []       # which level each show track is
         self._wavs: dict = {}          # the show's sounds, read once
@@ -1215,6 +1221,7 @@ class Viewer(QMainWindow):
         self.show_view.dropped.connect(self._drop_files)
         self.show_view.editing_changed.connect(self._editing_shown)
         self.show_view.range_wanted.connect(self._range_from_show)
+        self.show_view.blender_wanted.connect(self._to_blender)
         across.addWidget(self.split, 1)
         layout.addWidget(body, 1)
 
@@ -3287,6 +3294,8 @@ class Viewer(QMainWindow):
         finally:
             self._restoring = False
 
+        if saved.get("blender"):
+            self.blender_path = str(saved["blender"])
         if saved.get("trix"):
             self.trix_path = str(saved["trix"])
             if not Path(self.trix_path).exists():
@@ -3337,6 +3346,7 @@ class Viewer(QMainWindow):
             "rebake_left": self.rebake_left_alpha.currentText(),
             "rebake_right": self.rebake_right_alpha.currentText(),
             "out_dir": str(self.out_dir),
+            "blender": self.blender_path,
             "out_name": self.out_name.text().strip(),
             # Whether that name is still one the sources are allowed to
             # replace, or one somebody chose.
@@ -5475,6 +5485,86 @@ class Viewer(QMainWindow):
         box.setValue(at)
         self._range_changed()
         self._say_range()
+
+    # -- the top screen out to Blender ---------------------------------------
+
+    def _to_blender(self, clip) -> None:
+        """A clip's frames as a Blender scene: the top screen on the motors,
+        a picture projected onto it, the screen's frame ready to render."""
+        show = self.show_open
+        if show is None or clip is None or self.mesh is None:
+            return
+        if self._blender_job is not None:
+            self.show_view.say(tr("Blender ещё собирает прошлую сцену"))
+            return
+        first = int(clip.first)
+        ends = clip.tx + 1 if clip.kind == "cue" else clip.last - clip.tail
+        length = max(1, int(ends) - first)
+        # The picture: the chosen clip's own when it is the top screen's,
+        # else whatever the top screen plays where the stretch begins.
+        source, offset = "", 0
+        tops = [clip] if (clip.row == "Top" and clip.kind == "video") else \
+            [one for one in show.on("Top") if one.kind == "video" and one.covers(first)]
+        if tops and tops[0].path:
+            source, offset = tops[0].path, max(0, first - tops[0].tx)
+        motors = self.show_motors
+        note = (tr("соты на моторах шоу") if motors is not None
+                else tr("моторов нет: соты стоят"))
+        orbit = self.mesh.free if self.inspecting() else None
+        request = blender_export.Request(
+            target=str(blender_export.default_target(self.out_dir, show.name, first, length)),
+            first=first, length=length, mode="viewer", source=source, source_offset=offset,
+            name=show.name)
+        dialog = self.ask_blender(request, blender_export.find_blender(self.blender_path), note)
+        if dialog is None:
+            return
+        request, blender = dialog
+        self.blender_path = blender
+        self._remember()
+        if Path(request.target).exists():
+            QMessageBox.warning(self, tr("Top в Blender"),
+                                tr("{0} уже есть, поверх не пишется", Path(request.target).name))
+            return
+        motors_at = (lambda frame, placed=motors: placed.at(frame)) if motors is not None \
+            else (lambda frame: None)
+        job = blender_dialog.BlenderJob(request, self.mesh, motors_at, blender, orbit, self)
+        job.progress.connect(lambda done, total: self.show_view.say(
+            tr("Blender: кадры {0} из {1}", done, total)))
+        job.done.connect(self._blender_done)
+        job.failed.connect(self._blender_failed)
+        job.finished.connect(lambda: setattr(self, "_blender_job", None))
+        self._blender_job = job
+        logfile.write(f"blender: {request.mode} {request.first}+{request.length} -> {request.target}")
+        self.show_view.say(tr("Blender собирает сцену…"))
+        job.start()
+
+    def _ask_blender(self, request, blender, note):
+        """(request, blender.exe) as the person left them, or None."""
+        dialog = blender_dialog.BlenderDialog(self, request, blender, note)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog.request(), dialog.blender.text().strip()
+
+    def _blender_done(self, made) -> None:
+        logfile.write(f"blender: made {made['blend']}")
+        self.show_view.say(tr("сцена Blender готова: {0}", Path(made["blend"]).name))
+        QMessageBox.information(
+            self, tr("Top в Blender"),
+            tr("Сцена собрана:\n{0}\n\nВ ней две сцены. «Top 3D» — посмотреть с камеры зрителя. "
+               "«Top развертка» — отрендерить анимацию: кадры 2560×1150 лягут в {1}. "
+               "Готовую развертку поставьте на дорожку Top с кадра {2}.",
+               str(made["blend"]), str(made["render"]), self._blender_first(made)))
+
+    def _blender_first(self, made) -> int:
+        try:
+            return int(json.loads(Path(made["description"]).read_text(encoding="utf-8"))["request"]["first"])
+        except Exception:  # noqa: BLE001 -- only a number in a message
+            return 0
+
+    def _blender_failed(self, why: str) -> None:
+        logfile.write(f"blender: failed: {why}")
+        self.show_view.say(tr("Blender не собрал сцену"))
+        QMessageBox.warning(self, tr("Top в Blender"), why)
 
     def _range_from_show(self, first: int, last: int) -> None:
         """A clip of the show, as the render's range: show frames in, frames

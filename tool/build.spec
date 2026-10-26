@@ -55,6 +55,10 @@ datas = [(os.path.join(baked, name), "baked")
 # The loading picture travels too: the bootloader's own splash is Windows and
 # Linux only, and on a mac the application puts the same picture up itself.
 datas += [(os.path.join(TOOL, "splash.png"), ".")]
+# What Blender runs to build the top screen's scene: a script for Blender's own
+# Python, not the viewer's, so it goes as a file beside the modules
+# (blender_export looks for it beside itself).
+datas += [(os.path.join(TOOL, "blender_top.py"), ".")]
 
 # And the button icons, which are Houdini's -- see the note in that folder.
 icons = os.path.join(TOOL, "icons")

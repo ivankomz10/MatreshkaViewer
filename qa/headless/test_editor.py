@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 import draft as drafts
 import timeline
@@ -511,3 +511,39 @@ def test_the_show_goes_out_as_its_next_version_and_its_file_stays(editor, tick,
     assert sorted(one.name for one in tmp_path.iterdir()) \
         == sorted([suggested.name, "edited.trix"])
     assert RUSDAY.read_bytes() == before
+
+
+# -- the top screen out to Blender ----------------------------------------------
+
+@needs_rusday
+def test_a_top_clip_offers_its_frames_and_its_picture_to_blender(editor, tick):
+    window = editor
+    window.open_show_file(str(RUSDAY))
+    tick(0.3)
+    clip = next(one for one in window.show_open.on("Top") if one.kind == "video" and one.frames)
+    window.show_view.pick(clip)
+    tick(0.1)
+    button = window.findChild(QWidget, "qa_show_clip_blender")
+    assert button is not None and button.isEnabled()
+    asked = []
+    window.ask_blender = lambda request, blender, note: (asked.append((request, blender, note)), None)[1]
+    button.click()
+    request, blender, note = asked[-1]
+    assert request.first == clip.first and request.length == clip.last - clip.tail - clip.first
+    assert request.source == clip.path and request.source_offset == 0
+    assert request.mode == "viewer" and request.target.endswith(".blend")
+    assert note and window._blender_job is None          # let go of: nothing started
+
+
+def test_the_blender_dialog_hands_back_what_was_chosen(window, tmp_path):
+    import blender_dialog
+    import blender_export
+    request = blender_export.Request(target=str(tmp_path / "a.blend"), first=1100, length=600,
+                                     source="D:/x.mov", source_offset=12, name="шоу")
+    dialog = blender_dialog.BlenderDialog(window, request, "C:/blender.exe", "соты на моторах шоу")
+    dialog.findChild(QWidget, "qa_blender_mode_decal").setChecked(True)
+    dialog.findChild(QWidget, "qa_blender_length").setValue(300)
+    got = dialog.request()
+    assert (got.first, got.length, got.mode, got.source, got.source_offset) == (1100, 300, "decal", "D:/x.mov", 12)
+    assert dialog.blender.text() == "C:/blender.exe"
+    dialog.deleteLater()

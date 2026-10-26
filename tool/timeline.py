@@ -225,6 +225,7 @@ class ShowView(QObject):
     dropped = Signal(list, str, int, int)   # files, row, level, frame
     said = Signal(str)              # a word for the line over the strips
     range_wanted = Signal(int, int)  # a clip's frames, for the render
+    blender_wanted = Signal(object)  # a clip, for the top screen's Blender scene
 
     def __init__(self) -> None:
         super().__init__()
@@ -1716,6 +1717,17 @@ class Inspector(QWidget):
         self.to_render.clicked.connect(self._to_render)
         self.to_render.setEnabled(False)
         top.addWidget(self.to_render)
+        # The chosen clip's frames out to Blender: the top screen moving as
+        # the motors move it, a projection on it, ready to render the
+        # screen's own frame and put it back here.
+        self.to_blender = _small_button(
+            tr("В Blender…"), "qa_show_clip_blender",
+            tr("Сцена Blender на кадры этого клипа: Top с кинетикой, проекция "
+               "картинки на соты и рендер развертки экрана, который встаёт "
+               "обратно на дорожку Top"))
+        self.to_blender.clicked.connect(self._to_blender)
+        self.to_blender.setEnabled(False)
+        top.addWidget(self.to_blender)
         whole.addLayout(top)
 
         self.title = QLabel(tr("клип не выбран"))
@@ -1779,6 +1791,10 @@ class Inspector(QWidget):
             self.view.range_wanted.emit(int(clip.first), int(max(clip.first + 1,
                                                                  ends)))
 
+    def _to_blender(self) -> None:
+        if self.view.chosen is not None:
+            self.view.blender_wanted.emit(self.view.chosen)
+
     def refresh(self) -> None:
         clip = self.view.chosen
         wanted = self.CUE if (clip is not None and clip.kind == "cue") \
@@ -1794,6 +1810,7 @@ class Inspector(QWidget):
     def _show(self, clip) -> None:
         editing = self.view.editing and clip is not None
         self.to_render.setEnabled(clip is not None)
+        self.to_blender.setEnabled(clip is not None and clip.kind != "cue")
         for field in self.body.values():
             if isinstance(field, QSpinBox):
                 _writable(field, editing)
