@@ -893,7 +893,10 @@ class Compositor:
             size=(self.width, self.height, 1), format=self.FORMAT,
             usage=wgpu.TextureUsage.RENDER_ATTACHMENT
                   | wgpu.TextureUsage.TEXTURE_BINDING
-                  | wgpu.TextureUsage.COPY_SRC)
+                  | wgpu.TextureUsage.COPY_SRC
+                  # the advanced mode's layers are laid over it elsewhere
+                  # and copied back in (layer_gpu)
+                  | wgpu.TextureUsage.COPY_DST)
         self.view = self.texture.create_view()
         shader = device.create_shader_module(code=COMPOSE_SHADER)
         self.layout = device.create_bind_group_layout(entries=[

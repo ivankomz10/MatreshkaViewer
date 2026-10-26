@@ -62,3 +62,4 @@ test_editor.py::test_a_top_clip_offers_its_frames_to_blender
 
 # the advanced mode
 test_advanced.py
+test_layers.py

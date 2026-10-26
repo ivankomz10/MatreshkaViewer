@@ -14,10 +14,14 @@ for the row a screen is fed by.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
-from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QSizePolicy, QSlider, QVBoxLayout, QWidget)
+from pathlib import Path
 
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QHBoxLayout, QLabel,
+                               QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout,
+                               QWidget)
+
+import layers as stacks
 import theme
 from lang import tr
 
@@ -216,9 +220,11 @@ class Drawer(QFrame):
         self.whole.addWidget(self.body, 1)
         self.hide()
 
-    def show_screen(self, key: str, row, in_show: bool = False) -> None:
+    def show_screen(self, key: str, row, in_show: bool = False, stack=None) -> None:
         """Fill the drawer for one screen and colour it. In the show the
-        screen is fed by its track's clips, and the card says so."""
+        screen is fed by its track's clips, and the card says so. `stack`, a
+        StackView, is the screen's layers; without one the drawer says why
+        there are none."""
         self.key = key
         colour = theme.SCREEN[key]
         ink = _dark(colour)
@@ -239,6 +245,10 @@ class Drawer(QFrame):
             self.card.let_go()
         self.card = SourceCard(row, colour, in_show=in_show)
         self.body_layout.addWidget(self.card)
+        self.stack = stack
+        if stack is not None:
+            self.body_layout.addWidget(stack, 1)
+            return
         self.stack_note = QLabel(self._empty_words(key))
         self.stack_note.setObjectName("qa_drawer_stack")
         self.stack_note.setWordWrap(True)
@@ -253,14 +263,306 @@ class Drawer(QFrame):
     def _empty_words(key: str) -> str:
         if key == "Sound":
             return tr("У звука нет слоёв: дорожки складываются, у каждой своя громкость.")
-        if key == "Kinetic":
-            return tr("Слои движения — в редакторе кинетики.")
-        return tr("Слоёв пока нет. Картинки, видео и кисти над источником экрана — "
-                  "следующими шагами.")
+        return tr("Слои движения — в редакторе кинетики.")
 
     def refresh(self) -> None:
         if self.card is not None:
             self.card.refresh()
+        if getattr(self, "stack", None) is not None:
+            self.stack.rebuild()
+
+
+# -- the stack ------------------------------------------------------------------------
+
+LAYER_MIME = "application/x-matreshka-layer"
+PICTURES = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp")
+
+
+class LayerRow(QFrame):
+    """One layer: shown or not, what it is, its name, how it lies and how much."""
+
+    def __init__(self, view, layer, depth: int) -> None:
+        super().__init__()
+        self.view, self.layer = view, layer
+        self.setObjectName(f"qa_layer_{layer.ident}")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAcceptDrops(True)
+        chosen = view.chosen is layer
+        self.setStyleSheet(
+            f"QFrame#qa_layer_{layer.ident} {{ background:{'#303438' if chosen else theme.RAISED};"
+            f" border:1px solid {theme.LINE if chosen else theme.SEAM}; }}")
+        line = QHBoxLayout(self)
+        line.setContentsMargins(4 + depth * 16, 4, 6, 4)
+        line.setSpacing(6)
+        self.eye = QPushButton("●" if layer.visible else "○")
+        self.eye.setObjectName("qa_layer_eye")
+        self.eye.setFixedSize(20, 20)
+        self.eye.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.eye.setToolTip(tr("Показать или скрыть слой"))
+        self.eye.setStyleSheet(f"QPushButton {{ border:0; background:transparent; font-size:14px;"
+                               f" color:{theme.SECOND if layer.visible else theme.FAINT}; }}")
+        self.eye.clicked.connect(self._eye)
+        line.addWidget(self.eye)
+        self.thumb = QLabel()
+        self.thumb.setFixedSize(34, 34)
+        self.thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if layer.kind == "folder":
+            self.thumb.setText("▾▭" if layer.open else "▸▭")
+            self.thumb.setStyleSheet(f"color:{theme.DIM}; font-size:13px;")
+            self.thumb.mousePressEvent = lambda _e: self._fold()
+        else:
+            picture = view.thumbnail(layer.path)
+            if picture is not None:
+                self.thumb.setPixmap(picture)
+            else:
+                self.thumb.setText("?")
+                self.thumb.setToolTip(tr("Картинка не открывается: {0}", layer.path))
+            self.thumb.setStyleSheet(f"background:{theme.DEEP};")
+        line.addWidget(self.thumb)
+        self.name = QLabel(layer.name)
+        self.name.setObjectName("qa_layer_name")
+        self.name.setProperty("fixed_words", True)       # a layer's own name
+        self.name.setToolTip(layer.path or tr("Двойной щелчок — переименовать"))
+        self.name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        line.addWidget(self.name, 1)
+        right = QVBoxLayout()
+        right.setSpacing(2)
+        self.blend = QComboBox()
+        self.blend.setObjectName("qa_layer_blend")
+        for key in stacks.BLENDS:
+            self.blend.addItem(stacks.SHORT[key], key)
+        self.blend.setCurrentIndex(stacks.BLENDS.index(layer.blend))
+        self.blend.setToolTip(tr("Как слой ложится на то, что под ним"))
+        self.blend.currentIndexChanged.connect(self._blend)
+        right.addWidget(self.blend)
+        self.opacity = QSpinBox()
+        self.opacity.setObjectName("qa_layer_opacity")
+        self.opacity.setRange(0, 100)
+        self.opacity.setValue(round(layer.opacity * 100))
+        self.opacity.setToolTip(tr("Непрозрачность слоя, %"))
+        self.opacity.valueChanged.connect(self._opacity)
+        right.addWidget(self.opacity)
+        line.addLayout(right)
+        self._pressed_at = None
+
+    def _eye(self) -> None:
+        self.layer.visible = not self.layer.visible
+        self.view.changed_rows()
+
+    def _fold(self) -> None:
+        self.layer.open = not self.layer.open
+        self.view.changed_rows(picture=False)
+
+    def _blend(self, index: int) -> None:
+        self.layer.blend = stacks.BLENDS[index]
+        self.view.changed_picture()
+
+    def _opacity(self, value: int) -> None:
+        self.layer.opacity = value / 100.0
+        self.view.changed_picture()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._pressed_at = event.position().toPoint()
+            self.view.choose(self.layer)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, tr("Имя слоя"), tr("Имя слоя"), text=self.layer.name)
+        if ok and name.strip():
+            self.layer.name = name.strip()
+            self.view.changed_rows(picture=False)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        if self._pressed_at is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        if (event.position().toPoint() - self._pressed_at).manhattanLength() < 8:
+            return
+        from PySide6.QtCore import QMimeData
+        from PySide6.QtGui import QDrag
+        drag = QDrag(self)
+        data = QMimeData()
+        data.setData(LAYER_MIME, str(self.layer.ident).encode())
+        drag.setMimeData(data)
+        self._pressed_at = None
+        drag.exec(Qt.DropAction.MoveAction)
+
+    def where(self, y: float) -> str:
+        """Above, below or into this row, by where in it the drop falls."""
+        part = y / max(1, self.height())
+        if self.layer.kind == "folder" and 0.3 < part < 0.7:
+            return "in"
+        return "above" if part < 0.5 else "below"
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        if event.mimeData().hasFormat(LAYER_MIME) or event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        where = self.where(event.position().y())
+        self.view.dropped(event.mimeData(), self.layer, where)
+        event.acceptProposedAction()
+
+
+class StackView(QWidget):
+    """A screen's stack in its drawer: a row a layer, the top one first.
+
+    The window is asked through `changed` to draw again and keep the stack
+    with the settings; nothing here touches a picture.
+    """
+
+    changed = Signal()
+
+    def __init__(self, stacks_, screen: str, thumbnail, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("qa_stack")
+        self.setAcceptDrops(True)
+        self.stacks, self.screen, self._thumbnail = stacks_, screen, thumbnail
+        self.chosen = None
+        self._thumbs: dict = {}
+        whole = QVBoxLayout(self)
+        whole.setContentsMargins(0, 0, 0, 0)
+        whole.setSpacing(0)
+        tools = QWidget()
+        tools.setObjectName("qa_stack_tools")
+        tools.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        tools.setStyleSheet(f"QWidget#qa_stack_tools {{ background:{theme.BAR};"
+                            f" border-bottom:1px solid {theme.SEAM}; }}"
+                            f"QWidget#qa_stack_tools QPushButton {{ padding:3px 8px; font-size:11px; }}")
+        row = QHBoxLayout(tools)
+        row.setContentsMargins(4, 4, 4, 4)
+        row.setSpacing(2)
+        for name, text, hint, act in (
+                ("picture", tr("+ Картинка…"), tr("Картинка с диска новым слоем"), self._pick),
+                ("folder", tr("+ Папка"), tr("Папка: её слои ложатся вместе, как один"), self._folder),
+                ("delete", "✕", tr("Удалить выбранный слой"), self._delete)):
+            button = QPushButton(text)
+            button.setObjectName(f"qa_stack_{name}")
+            button.setToolTip(hint)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.clicked.connect(act)
+            row.addWidget(button)
+        row.addStretch(1)
+        whole.addWidget(tools)
+        from PySide6.QtWidgets import QScrollArea
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        whole.addWidget(self.scroll, 1)
+        self.rebuild()
+
+    # -- what the rows say -------------------------------------------------------
+
+    def thumbnail(self, path: str):
+        if path not in self._thumbs:
+            self._thumbs[path] = self._thumbnail(path)
+        return self._thumbs[path]
+
+    def rows(self) -> list:
+        """The rows as they stand, top first: for the tests."""
+        holder = self.scroll.widget()
+        return holder.findChildren(LayerRow) if holder is not None else []
+
+    def rebuild(self) -> None:
+        holder = QWidget()
+        column = QVBoxLayout(holder)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(1)
+
+        def walk(items, depth):
+            for layer in reversed(items):
+                column.addWidget(LayerRow(self, layer, depth))
+                if layer.kind == "folder" and layer.open:
+                    walk(layer.children, depth + 1)
+
+        walk(self.stacks.stack(self.screen), 0)
+        hint = QLabel(tr("Перетащите картинку с диска сюда: будет новый слой"))
+        hint.setObjectName("qa_stack_hint")
+        hint.setWordWrap(True)
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet(f"QLabel {{ color:{theme.FAINT}; font-size:11px;"
+                           f" border:1px dashed {theme.EDGE}; margin:6px; padding:6px; }}")
+        column.addWidget(hint)
+        column.addStretch(1)
+        self.scroll.setWidget(holder)
+
+    # -- what changes ----------------------------------------------------------------
+
+    def choose(self, layer) -> None:
+        if self.chosen is not layer:
+            self.chosen = layer
+            self.rebuild()
+
+    def changed_rows(self, picture: bool = True) -> None:
+        self.rebuild()
+        if picture:
+            self.changed.emit()
+
+    def changed_picture(self) -> None:
+        self.changed.emit()
+
+    def add_pictures(self, paths, near=None) -> list:
+        made = []
+        for path in paths:
+            if Path(path).suffix.lower() not in PICTURES:
+                continue
+            layer = stacks.Layer("image", Path(path).stem, path=str(path))
+            self.stacks.add(self.screen, layer, near=near if near is not None else None)
+            near = layer
+            made.append(layer)
+        if made:
+            self.chosen = made[-1]
+            self.changed_rows()
+        return made
+
+    def _pick(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        chosen, _ = QFileDialog.getOpenFileNames(
+            self, tr("Картинка новым слоем"), "",
+            tr("Картинки (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);;Все файлы (*)"))
+        if chosen:
+            self.add_pictures(chosen, near=self.chosen)
+
+    def _folder(self) -> None:
+        folder = stacks.Layer("folder", tr("папка"))
+        self.stacks.add(self.screen, folder, near=self.chosen)
+        self.chosen = folder
+        self.changed_rows(picture=False)
+
+    def _delete(self) -> None:
+        if self.chosen is None:
+            return
+        self.stacks.remove(self.chosen)
+        self.chosen = None
+        self.changed_rows()
+
+    def dropped(self, data, target, where: str) -> None:
+        if data.hasUrls():
+            paths = [url.toLocalFile() for url in data.urls() if url.isLocalFile()]
+            made = self.add_pictures(paths, near=target if where != "in" else None)
+            if target is not None and where in ("below", "in"):
+                for layer in made:
+                    self.stacks.move(layer, target, where)
+                self.changed_rows()
+            return
+        if data.hasFormat(LAYER_MIME):
+            ident = int(bytes(data.data(LAYER_MIME)).decode() or 0)
+            moving = next((one for one, _ in self.stacks._walk(self.stacks.stack(self.screen))
+                           if one.ident == ident), None)
+            if moving is not None and target is not None and self.stacks.move(moving, target, where):
+                self.changed_rows()
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        if event.mimeData().hasUrls():
+            self.dropped(event.mimeData(), None, "above")
+            event.acceptProposedAction()
 
 
 class ClickAway(QObject):
@@ -273,7 +575,10 @@ class ClickAway(QObject):
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 -- Qt naming
         if (event.type() == QEvent.Type.MouseButtonPress and self.drawer.isVisible()
-                and not self.drawer.pinned):
+                and not self.drawer.pinned
+                # A press in a window of its own -- the file dialog the
+                # drawer opened -- is not a press beside the drawer.
+                and isinstance(watched, QWidget) and watched.window() is self.drawer.window()):
             spot = event.globalPosition().toPoint()
             for keep in (self.drawer, self.rail):
                 if keep.isVisible() and keep.rect().contains(keep.mapFromGlobal(spot)):

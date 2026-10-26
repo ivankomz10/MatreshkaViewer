@@ -51,6 +51,8 @@ import rebake
 import renderer3d
 import scene3d
 import kinetic
+import layer_gpu
+import layers
 import layers_ui
 import show as showfile
 import trix_export
@@ -1035,6 +1037,11 @@ class Viewer(QMainWindow):
         self.ask_blender = self._ask_blender
         self.blender_path = ""           # blender.exe, once found or chosen
         self.advanced = False              # the simple viewer, or with layers
+        # The advanced mode's layers: a stack a screen, the pictures they
+        # show as textures, and what lays them over each composed screen.
+        self.layer_stacks = layers.Stacks()
+        self.layer_pictures = None
+        self.layer_blenders: dict = {}
         self._blender_job = None
         self._show_source = ""         # trix | draft | rows
         self.layer_of: list = []       # which level each show track is
@@ -2368,7 +2375,7 @@ class Viewer(QMainWindow):
         if premultiplied is None:
             premultiplied = self.alpha_mode() == "premultiplied"
         frame = seconds * showfile.FPS
-        for composer, members in self.composers.values():
+        for name, (composer, members) in self.composers.items():
             layers = []
             for index in members:
                 if index >= len(self.streams) or not ready(index):
@@ -2381,6 +2388,7 @@ class Viewer(QMainWindow):
                     layers.append((self.screens[index], level))
             composer.compose(layers, premultiplied=premultiplied,
                              encoder=encoder)
+            self._lay_layers(encoder, name, composer)
 
     def _compose_quick_look(self) -> None:
         """In the advanced mode the quick look's screens are made the way a
@@ -3331,6 +3339,8 @@ class Viewer(QMainWindow):
 
         if saved.get("blender"):
             self.blender_path = str(saved["blender"])
+        if saved.get("layers"):
+            self.layer_stacks = layers.Stacks.from_dict(saved["layers"])
         if saved.get("advanced"):
             self.set_advanced(True, remember=False)
         if saved.get("trix"):
@@ -3385,6 +3395,7 @@ class Viewer(QMainWindow):
             "out_dir": str(self.out_dir),
             "blender": self.blender_path,
             "advanced": self.advanced,
+            "layers": self.layer_stacks.to_dict(),
             "out_name": self.out_name.text().strip(),
             # Whether that name is still one the sources are allowed to
             # replace, or one somebody chose.
@@ -4778,11 +4789,48 @@ class Viewer(QMainWindow):
         # that is not what is playing.
         row = None if self.level == "show" else next(
             (one for one in self.rows if one.title == key), None)
-        self.drawer.show_screen(key, row, self.level == "show")
+        stack = None
+        if key in layers.SCREENS:
+            stack = layers_ui.StackView(self.layer_stacks, key, self._layer_thumbnail)
+            stack.changed.connect(self._layers_changed)
+        self.drawer.show_screen(key, row, self.level == "show", stack=stack)
         self.rail.show_open(key)
         self._place_drawer()
         self.drawer.show()
         self.drawer.raise_()
+
+    def _pictures(self):
+        if self.layer_pictures is None:
+            self.layer_pictures = layer_gpu.Pictures(self.device)
+        return self.layer_pictures
+
+    def _layer_thumbnail(self, path: str):
+        """A layer's picture, small, for its row; None if it will not open."""
+        small = self._pictures().thumbnail(path)
+        if small is None:
+            return None
+        tall, wide = small.shape[:2]
+        image = QImage(small.tobytes(), wide, tall, wide * 4, QImage.Format.Format_RGBA8888)
+        return QPixmap.fromImage(image.copy())
+
+    def _layers_changed(self) -> None:
+        """A layer added, moved, hidden or turned: drawn again, and kept."""
+        self.touch()
+        self._remember()
+
+    def _lay_layers(self, encoder, name: str, composer) -> None:
+        """The screen's stack over its composed picture, in the advanced mode."""
+        if not self.advanced:
+            return
+        shown = self.layer_stacks.shown(theme.BAKED.get(name, ""))
+        if not shown:
+            return
+        key = (name, composer.width, composer.height)
+        blender = self.layer_blenders.get(key)
+        if blender is None:
+            blender = self.layer_blenders[key] = layer_gpu.LayerBlender(
+                self.device, composer.width, composer.height)
+        blender.apply(encoder, composer.texture, shown, self._pictures())
 
     def _close_drawer(self) -> None:
         if self.drawer.isVisible():
