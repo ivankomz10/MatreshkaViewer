@@ -5,6 +5,7 @@ viewer as it was: nothing of the advanced mode shows in it.
 """
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QMouseEvent
@@ -95,3 +96,43 @@ def test_back_to_simple_takes_it_all_away(advanced, tick):
     tick(0.1)
     assert not window.rail.isVisible() and not window.drawer.isVisible()
     assert window.advanced is False
+
+
+# -- step 2: the compositor in the quick look ---------------------------------------
+
+def _pictures(window, tick):
+    """The building as the file camera sees it, and every screen's strip."""
+    window.touch()
+    tick(0.4)
+    window.touch()
+    tick(0.2)
+    building = window.solid.to_array(270, 480).astype(np.float32)
+    strips = {name: window._screen_to_array(name, *window._pixels(name)).astype(np.float32)
+              for name in ("Screen_Top", "Screen_Bottom", "Lamel_screen")}
+    return building, strips
+
+
+def test_advanced_with_no_layers_shows_what_simple_shows(window, tick):
+    window.set_advanced(False)
+    tick(0.3)
+    assert not window.composers
+    building, strips = _pictures(window, tick)
+    window.set_advanced(True)
+    tick(0.3)
+    try:
+        # Every screen through a compositor of its own, and the scene on it.
+        assert set(window.composers) == {"Screen_Top", "Screen_Bottom", "Lamel_screen"}
+        building2, strips2 = _pictures(window, tick)
+        # The strips are the same to a hair. The building only nearly: the
+        # test clips are a tenth of the screens' size and the composite is
+        # the screen's full size, so the honeycomb's fine pattern, shrunk
+        # into a small picture with no mip levels, shimmers differently. A
+        # movie the size of its screen has no such difference.
+        assert np.abs(building2 - building).mean() < 4.0
+        for name, strip in strips.items():
+            assert strips2[name].shape == strip.shape
+            assert np.abs(strips2[name] - strip).mean() < 0.1, name
+    finally:
+        window.set_advanced(False)
+        tick(0.3)
+    assert not window.composers

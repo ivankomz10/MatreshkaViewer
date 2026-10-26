@@ -2382,6 +2382,25 @@ class Viewer(QMainWindow):
             composer.compose(layers, premultiplied=premultiplied,
                              encoder=encoder)
 
+    def _compose_quick_look(self) -> None:
+        """In the advanced mode the quick look's screens are made the way a
+        show's are: each through a compositor of its own, which is where its
+        layers go, and which the building, Flat, the render and the snapshot
+        all read already. In the simple mode the scene reads the video
+        straight, as it always has."""
+        if not self.advanced or self.level != "view":
+            return
+        for at, name in enumerate(self.feeding):
+            if not name or at >= len(self.screens):
+                continue
+            across, down = self._pixels(name)
+            composer = screen_gpu.Compositor(self.device, across, down)
+            self.composers[name] = (composer, [at])
+            if self.solid is not None and name in self.solid.calibration:
+                self.solid.set_video(name, composer.texture, composer.texture, False, 3, (1.0, 1.0))
+                self.solid.set_video_opacity(1.0)
+        logfile.write(f"ui: the quick look composed, {len(self.composers)} screens")
+
     def _render_compose(self):
         """What a render calls to make a show's screens, or None."""
         if not self.composers:
@@ -4743,6 +4762,11 @@ class Viewer(QMainWindow):
             self.rail.setVisible(on)
         logfile.write(f"ui: {'advanced' if on else 'simple'}")
         if remember:
+            # The quick look's screens, made again the other way: through a
+            # compositor each, or straight from the video. A show's go through
+            # compositors either way.
+            if self.level == "view" and self.job is None and self.solid is not None:
+                self._load()
             self._remember()
 
     def _open_drawer(self, key: str) -> None:
@@ -6210,6 +6234,7 @@ class Viewer(QMainWindow):
                           f"{movie.kind} {movie.frames} frames "
                           f"{stream.duration:.2f} s")
 
+        self._compose_quick_look()
         self._gains_changed()
         # And, if this mode is on, whatever the panel is asking of them. The
         # screens here have just been built and a fresh one carries no
