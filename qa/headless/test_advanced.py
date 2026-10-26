@@ -621,3 +621,47 @@ def test_in_a_show_the_drawer_is_the_clip_under_the_playhead(advanced, clips, ti
         put_back(window, clips, tick)
         window.layer_stacks = stacks.Stacks()
         tick(0.2)
+
+
+def test_a_show_with_layers_goes_out_with_its_clips_baked(advanced, clips, tick, tmp_path):
+    import json
+    from PIL import Image
+    import layers as stacks
+    from conftest import wait_for
+    from test_quiet import put_back
+    from test_show_mode import settled_at
+    window = advanced
+    red = np.zeros((40, 40, 4), np.uint8)
+    red[..., 0], red[..., 3] = 255, 255
+    Image.fromarray(red).save(tmp_path / "red.png")
+    put_back(window, clips, tick)
+    window._set_level("show")
+    settled_at(window, tick, 30)
+    asked = window.ask_export
+    try:
+        clip = next(one for one in window.show_open.clips if one.row == "Bottom")
+        stacks.Stacks.of_clip(clip).add("Bottom", stacks.Layer("image", "red", path=str(tmp_path / "red.png")))
+        target = tmp_path / "out" / "layered.trix"
+        target.parent.mkdir()
+        window.ask_export = lambda *asked: target
+        assert window._export_trix() is None              # baking first, written after
+        wait_for(tick, lambda: window.job is None and target.exists(), "the show never went out", 300)
+        baked = target.parent / "layered_layers"
+        files = list(baked.iterdir())
+        assert len(files) == 1 and files[0].suffix == ".mov"
+        raw = json.loads(target.read_text(encoding="utf-8"))
+        paths = [entry["path"] for held in raw["video"].values() for entry in held.values()]
+        assert any(path.endswith(files[0].name) for path in paths)
+        assert clip.layers and clip.path == str(clips["bottom"])    # the show in the window as it was
+        # Again into the same place: the folder is there, and not written over.
+        target.unlink()
+        window._export_trix()
+        tick(0.3)
+        assert window.job is None and not target.exists()
+    finally:
+        window.ask_export = asked
+        window.history.clear()
+        window._say_undo()
+        window._set_level("view")
+        put_back(window, clips, tick)
+        tick(0.2)

@@ -229,6 +229,8 @@ EN: dict = {
     'Трансформ · пиксели камеры вида': "Transform · pixels of the view camera's picture",
     '+ Файл…': '+ File…',
     'слои ролика': "the clip's layers",
+    'запекаю слои: роликов {0}': 'baking the layers: {0} clips',
+    'не выгрузилось: ролики со слоями запечь нечем, не найден ffmpeg': 'not exported: clips with layers cannot be baked, no ffmpeg found',
     'Под плейхедом на этой дорожке ролика нет: слои — у роликов.': 'No clip under the playhead on this track: layers belong to clips.',
     'Слои этого ролика': "This clip's layers",
     'Как кисть ложится: на развертку, на здание по нормали или кругом в кадре вида': 'How the brush lies: on the unwrap, on the building along its normal, or as a circle in the view',

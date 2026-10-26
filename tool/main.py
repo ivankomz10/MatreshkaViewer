@@ -52,6 +52,7 @@ import renderer3d
 import scene3d
 import kinetic
 import brush
+import layer_bake
 import layer_gpu
 import layer_rasters
 import layer_video
@@ -1053,6 +1054,7 @@ class Viewer(QMainWindow):
         self.brush_tool = False            # the hand paints the chosen layer's target
         self._drawer_clip: dict = {}       # in the show: a screen's chosen clip, by ident
         self._clip_composers: dict = {}    # a show clip with layers, made on its own
+        self._baking = None                # (show, target, source) while layers bake
         self._drawer_clips = None          # (key, idents) the drawer was made for
         self._layers_before = None         # the show before the next layer change
         self._stroke = None                # (raster, brush.Stroke, last pointer) while painting
@@ -1752,6 +1754,13 @@ class Viewer(QMainWindow):
         target = self.ask_export(suggested, notes, bool(source))
         if not target:
             return None
+        baking = layer_bake.to_bake(show)
+        if baking:
+            self._bake_then_export(baking, Path(target), source)
+            return None
+        return self._write_trix(show, Path(target), source)
+
+    def _write_trix(self, show, target: Path, source: str) -> Path | None:
         try:
             written = trix_export.export(show, target, source)
         except trix_export.ExportError as trouble:
@@ -1763,6 +1772,60 @@ class Viewer(QMainWindow):
                       + (f" from {source}" if source else ""))
         self.show_view.say(tr("выгружено: {0}", written.name))
         return written
+
+    def _bake_then_export(self, baking, target: Path, source: str) -> None:
+        """Clips with layers baked into files beside the new .trix, and the
+        show written out with those files in their place."""
+        # Said on the show's line, as the export says what it did: nothing
+        # is written, and nothing waits for a hand to close a box.
+        if not depends.ffmpeg_version():
+            logfile.write("show: export refused, layers to bake and no ffmpeg")
+            self.show_view.say(tr("не выгрузилось: ролики со слоями запечь нечем, не найден ffmpeg"))
+            return
+        folder = layer_bake.folder_for(target)
+        if folder.exists() and any(folder.iterdir()):
+            logfile.write(f"show: export refused, {folder} is there already")
+            self.show_view.say(tr("не выгрузилось: {0}", tr("{0} уже есть, поверх не пишется", folder.name)))
+            return
+        premultiplied = self.alpha_mode() == "premultiplied"
+        rasters = self._pictures().rasters
+        bakers, targets = [], []
+        for clip in baking:
+            name = {v: k for k, v in theme.BAKED.items()}.get(clip.row)
+            bakers.append(layer_bake.Baker(
+                self.device, clip, name, self._pixels(name), rasters, premultiplied,
+                lambda seconds, name=name: self._remap_for(name, self._cells_at(seconds))))
+            targets.append(layer_bake.file_for(target, clip))
+        for clip, where in zip(baking, targets):
+            logfile.write(f"show: {clip.name} (clip {clip.ident}) with {len(clip.layers)} "
+                          f"layers to be baked into {where}")
+        self._baking = (self.show_open, target, source)
+        self.canvas.set_update_mode("manual")
+        self._writing(True)
+        self.progress.setRange(0, sum(one.count for one in bakers))
+        self.progress.setValue(0)
+        self.show_view.say(tr("запекаю слои: роликов {0}", len(bakers)))
+        self.job = layer_bake.LayerBakeJob(bakers, targets, parent=self)
+        self.job.progress.connect(self._export_progress)
+        self.job.failed.connect(self._bake_failed)
+        self.job.finished_ok.connect(self._baked)
+        self.job.start()
+
+    def _baked(self, files: dict) -> None:
+        show, target, source = self._baking
+        self._baking = None
+        self._export_finished()
+        written = self._write_trix(layer_bake.baked_show(show, files), target, source)
+        if written is not None:
+            logfile.write(f"show: {len(files)} clips with layers baked into "
+                          f"{layer_bake.folder_for(target)}")
+
+    def _bake_failed(self, message: str) -> None:
+        self._baking = None
+        logfile.write(f"show: baking the layers failed: {message}")
+        self.show_view.say(tr("остановлено") if message == "cancelled"
+                           else tr("не выгрузилось: {0}", message.splitlines()[0][:80]))
+        self._export_finished()
 
     def _ask_export(self, suggested: Path, notes: list, beside: bool):
         """Where to write it: the next version as offered, somewhere else, or
@@ -5394,11 +5457,29 @@ class Viewer(QMainWindow):
                 self.device, composer.width, composer.height)
         blender.apply(encoder, composer.texture, shown, self._pictures(), self._remap_for(name))
 
-    def _top_surface(self, name: str) -> str:
+    _NOW = object()
+
+    def _top_surface(self, name: str, cells=_NOW) -> str:
         """The mesh a screen's frame is on: the top screen's cells when they move."""
-        if name == scene3d.DEFAULT_TOP and self._cells_now is not None:
+        cells = self._cells_now if cells is self._NOW else cells
+        if name == scene3d.DEFAULT_TOP and cells is not None:
             return scene3d.KINETIC_SCREEN
         return name
+
+    def _cells_at(self, seconds: float):
+        """The top screen's cells at any instant, or None at rest: what the
+        motors say, worked out afresh -- for a bake, which goes through the
+        show by itself."""
+        if self.cell_at is None:
+            return None
+        if self.show_motors is not None:
+            got = self.show_motors.at(seconds * showfile.FPS)
+            return None if got is None else kinetic.transforms(
+                self.cell_at, self.cell_is, got[0], got[1])
+        if self.motors is not None:
+            return kinetic.transforms(self.cell_at, self.cell_is, self.motors,
+                                      self.motors.index_at(seconds))
+        return None
 
     def file_camera(self):
         """(view_projection, eye) of the file's camera, for its 9:16 picture."""
@@ -5408,16 +5489,18 @@ class Viewer(QMainWindow):
                                         mesh.near, mesh.far)
         return projection @ scene3d.look_through(matrix), matrix[:3, 3]
 
-    def _remap_for(self, name: str):
-        """What the remap pass needs for a screen, or None without a building."""
+    def _remap_for(self, name: str, cells=_NOW):
+        """What the remap pass needs for a screen, or None without a building;
+        the cells as they stand now, or as `cells` says."""
         if self.mesh is None or f"{name}__uv" not in self.mesh.raw.files:
             return None
-        surface_name = self._top_surface(name)
+        cells = self._cells_now if cells is self._NOW else cells
+        surface_name = self._top_surface(name, cells)
         surface = self._surfaces.get(surface_name)
         if surface is None:
             surface = self._surfaces[surface_name] = layer_gpu.Surface(
                 self.device, self.mesh.raw, surface_name, surface_name == scene3d.KINETIC_SCREEN)
-        surface.pose(self._cells_now if surface.kinetic else None)
+        surface.pose(cells if surface.kinetic else None)
         return surface, self.file_camera()
 
     def _close_drawer(self) -> None:
