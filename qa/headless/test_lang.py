@@ -15,7 +15,7 @@ from conftest import TOOL
 
 MODULES = ("main.py", "timeline.py", "show.py", "kinetic.py", "sound.py",
            "depends.py", "scene3d.py", "trix_export.py",
-           "blender_export.py", "blender_dialog.py",
+           "blender_export.py", "blender_dialog.py", "layers_ui.py",
            # The kinetic editor.
            "kinedit.py", "kin_model.py", "kin_tools.py", "kin_timeline.py",
            "kin_unwrap.py", "kin_sim.py", "kin_gizmo.py", "kin_overlay.py",

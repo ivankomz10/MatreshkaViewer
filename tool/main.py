@@ -51,6 +51,7 @@ import rebake
 import renderer3d
 import scene3d
 import kinetic
+import layers_ui
 import show as showfile
 import trix_export
 import blender_export
@@ -1033,6 +1034,7 @@ class Viewer(QMainWindow):
         # And what asks how the top screen goes to Blender: (request, exe) or None.
         self.ask_blender = self._ask_blender
         self.blender_path = ""           # blender.exe, once found or chosen
+        self.advanced = False              # the simple viewer, or with layers
         self._blender_job = None
         self._show_source = ""         # trix | draft | rows
         self.layer_of: list = []       # which level each show track is
@@ -1204,6 +1206,16 @@ class Viewer(QMainWindow):
         beside.addWidget(self.canvas, 1)
         self.show_side = timeline.SidePane(self.show_view)
         beside.addWidget(self.show_side)
+        # The advanced mode's column of screens, at the far right, and the
+        # drawer each of them slides out over the picture's right edge.
+        self.rail = layers_ui.ScreenRail()
+        self.rail.setVisible(False)
+        beside.addWidget(self.rail)
+        self.drawer = layers_ui.Drawer(upper)
+        self.drawer_host = upper
+        self.rail.chosen.connect(self._open_drawer)
+        self.drawer.closed.connect(self._close_drawer)
+        self._click_away = layers_ui.ClickAway(self.drawer, self.rail, self._close_drawer)
         self.split.addWidget(upper)
         self.show_pane = timeline.TimelinePane(self.show_view)
         self.split.addWidget(self.show_pane)
@@ -1859,6 +1871,8 @@ class Viewer(QMainWindow):
         else:
             self._load()
         self._lay_overlays()
+        if self.drawer.isVisible():
+            self._open_drawer(self.rail.open)
         self._remember()
 
     def _move_controls(self, showing: bool) -> None:
@@ -2781,6 +2795,8 @@ class Viewer(QMainWindow):
             for row in self.rows:
                 if row.retell is not None:
                     row.retell()
+        # The drawer's card says what its row says, now in the new language.
+        self.drawer.refresh()
         self._say_undo()
         if self.show_open is not None:
             self._say_project(self.show_open)
@@ -3296,6 +3312,8 @@ class Viewer(QMainWindow):
 
         if saved.get("blender"):
             self.blender_path = str(saved["blender"])
+        if saved.get("advanced"):
+            self.set_advanced(True, remember=False)
         if saved.get("trix"):
             self.trix_path = str(saved["trix"])
             if not Path(self.trix_path).exists():
@@ -3347,6 +3365,7 @@ class Viewer(QMainWindow):
             "rebake_right": self.rebake_right_alpha.currentText(),
             "out_dir": str(self.out_dir),
             "blender": self.blender_path,
+            "advanced": self.advanced,
             "out_name": self.out_name.text().strip(),
             # Whether that name is still one the sources are allowed to
             # replace, or one somebody chose.
@@ -4709,6 +4728,53 @@ class Viewer(QMainWindow):
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.frame_hint.setVisible(False)
 
+    # -- the advanced mode ------------------------------------------------------
+
+    def set_advanced(self, on: bool, remember: bool = True) -> None:
+        """Simple or advanced. Simple is the viewer as it was in 0.4.2; the
+        advanced mode adds the column of screens and their drawers."""
+        on = bool(on)
+        self.advanced = on
+        for name, button in self.ui_buttons.items():
+            button.setChecked((name == "advanced") == on)
+        if not on:
+            self._close_drawer()
+        if not getattr(self, "_full", False):
+            self.rail.setVisible(on)
+        logfile.write(f"ui: {'advanced' if on else 'simple'}")
+        if remember:
+            self._remember()
+
+    def _open_drawer(self, key: str) -> None:
+        if not key:
+            self._close_drawer()
+            return
+        # In the show the screens are fed by the clips on their tracks, not
+        # by the rows on the left: the drawer says so rather than show a row
+        # that is not what is playing.
+        row = None if self.level == "show" else next(
+            (one for one in self.rows if one.title == key), None)
+        self.drawer.show_screen(key, row, self.level == "show")
+        self.rail.show_open(key)
+        self._place_drawer()
+        self.drawer.show()
+        self.drawer.raise_()
+
+    def _close_drawer(self) -> None:
+        if self.drawer.isVisible():
+            self.drawer.hide()
+        self.rail.show_open("")
+
+    def _place_drawer(self) -> None:
+        """Against the rail, the height of the picture."""
+        if not self.drawer.isVisible() and not self.rail.open:
+            return
+        host = self.drawer_host
+        right = self.rail.geometry().left() if self.rail.isVisible() else host.width()
+        wide = min(layers_ui.DRAWER_WIDE, max(160, right - 40))
+        self.drawer.setFixedWidth(wide)
+        self.drawer.setGeometry(right - wide, 0, wide, host.height())
+
     def _beside_canvas(self):
         """Every widget the window lays out, except the picture itself.
 
@@ -4758,6 +4824,7 @@ class Viewer(QMainWindow):
             self._margins = board.contentsMargins()
             for widget, _ in self._was_showing:
                 widget.setVisible(False)
+            self._close_drawer()
             board.setContentsMargins(0, 0, 0, 0)
             self.showFullScreen()
         else:
@@ -4789,6 +4856,7 @@ class Viewer(QMainWindow):
     def eventFilter(self, watched, event):  # noqa: N802 -- Qt naming
         if watched is self.canvas and event.type() == QEvent.Type.Resize:
             self._lay_overlays()
+            self._place_drawer()
         if watched in HINTS:
             if event.type() == QEvent.Type.Enter:
                 self._hint(watched)
@@ -6041,6 +6109,8 @@ class Viewer(QMainWindow):
 
     def _say_sources(self) -> None:
         """How many cards have a file, and the marks of the folded column."""
+        if getattr(self, "drawer", None) is not None:
+            self.drawer.refresh()
         loaded = [row for row in self.rows if row.field.text().strip()]
         self.sources_count.setText(tr("{0} из {1} загружено",
                                       len(loaded), len(self.rows)))
@@ -7153,6 +7223,27 @@ class Viewer(QMainWindow):
             row.addWidget(button)
             self.page_buttons[name] = button
         row.addStretch(1)
+        # Simple is the viewer as it was; advanced adds the layers on the
+        # screens. One window, the same files, a switch remembered.
+        self.ui_buttons = {}
+        ui_group = QButtonGroup(bar)
+        ui_group.setExclusive(True)
+        for name, text, hint in (
+                ("simple", tr("Простой"), tr("Вьюер как в 0.4.2: источники, экраны, рендер")),
+                ("advanced", tr("Расширенный"),
+                 tr("Плюс слои на экранах: справа кнопки экранов, у каждого шторка со слоями"))):
+            button = QPushButton(text)
+            button.setObjectName(f"qa_ui_{name}")
+            button.setCheckable(True)
+            button.setChecked(name == "simple")
+            button.setProperty("segment", True)
+            button.setStyleSheet("padding:3px 12px;")
+            button.setToolTip(hint)
+            button.clicked.connect(lambda _=False, name=name: self.set_advanced(name == "advanced"))
+            ui_group.addButton(button)
+            row.addWidget(button)
+            self.ui_buttons[name] = button
+        row.addSpacing(12)
         # The remap is a window of its own over this one, called up here.
         remap = QPushButton(tr("Ремап…"))
         remap.setObjectName("qa_open_remap")

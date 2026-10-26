@@ -59,3 +59,6 @@ test_editor.py::test_the_show_goes_out_as_its_next_version_and_its_file_stays
 test_blender_export.py::test_the_projection_is_the_viewers_own_camera
 test_blender_export.py::test_the_cells_move_whole_and_stand_still_at_rest
 test_editor.py::test_a_top_clip_offers_its_frames_to_blender
+
+# the advanced mode
+test_advanced.py
