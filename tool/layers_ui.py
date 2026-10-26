@@ -639,6 +639,18 @@ class BrushPanel(QFrame):
         self._say()
         self.hide()
 
+    def take(self, other) -> None:
+        """How another drawer's brush was set: the brush is the window's, and
+        a drawer opened again is built anew."""
+        self.sizes = dict(other.sizes)
+        self.mode, self.hardness, self.flow = other.mode, other.hardness, other.flow
+        self.colour, self.erase = other.colour, other.erase
+        self.modes.setCurrentIndex(self.modes.findData(self.mode))
+        self.hard.setValue(self.hardness * 100)
+        self.flow_field.setValue(self.flow * 100)
+        self.erase_box.setChecked(self.erase)
+        self._say()
+
     @property
     def radius(self) -> float:
         """The size in the mode's own units, as a radius."""

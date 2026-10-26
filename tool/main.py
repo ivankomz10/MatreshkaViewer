@@ -4828,7 +4828,11 @@ class Viewer(QMainWindow):
             stack.painting.connect(self._set_brush_tool)
             stack.undo_wanted.connect(self._undo_stroke)
             stack.mask_thumbnail = self._mask_thumbnail
+            before = getattr(self.drawer, "stack", None)
+            if before is not None:
+                stack.brush.take(before.brush)
             stack.move_button.setChecked(self.layer_tool)
+            stack.brush_button.setChecked(self.brush_tool)
         self.drawer.show_screen(key, row, self.level == "show", stack=stack)
         self.rail.show_open(key)
         self._place_drawer()

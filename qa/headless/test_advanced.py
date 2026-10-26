@@ -34,6 +34,14 @@ def press_at(window, where: QPoint) -> None:
     QApplication.sendEvent(target, event)
 
 
+def _open_screen(window, key):
+    """The screen's drawer open: a click on its button when it is not, since
+    a click when it is puts it away."""
+    if not (window.drawer.isVisible() and getattr(window.drawer.stack, "screen", None) == key):
+        window.rail.buttons[key].click()
+    assert window.drawer.isVisible() and window.drawer.stack.screen == key
+
+
 def test_simple_is_the_viewer_as_it_was(window, tick):
     window.set_advanced(False)
     tick(0.1)
@@ -149,7 +157,7 @@ def test_a_picture_layer_lies_on_its_screen_and_is_kept(advanced, tick, tmp_path
     red[..., 0], red[..., 3] = 255, 255
     path = tmp_path / "red.png"
     Image.fromarray(red).save(path)
-    window.rail.buttons["Bottom"].click()
+    _open_screen(window, "Bottom")
     tick(0.1)
     stack = window.drawer.stack
     assert stack is not None and not stack.rows()
@@ -199,7 +207,7 @@ def test_a_picture_is_dragged_scaled_and_turned_where_it_is_seen(advanced, tick,
     Image.fromarray(np.full((40, 40, 4), 255, np.uint8)).save(tmp_path / "white.png")
     window.mode.setCurrentText("Flat")
     tick(0.3)
-    window.rail.buttons["Bottom"].click()
+    _open_screen(window, "Bottom")
     tick(0.1)
     stack = window.drawer.stack
     try:
@@ -247,7 +255,7 @@ def test_a_remapped_picture_lies_as_the_camera_sees_it_and_drags_there(advanced,
     red = np.zeros((90, 160, 4), np.uint8)
     red[..., 0], red[..., 3] = 255, 255
     Image.fromarray(red).save(tmp_path / "red.png")
-    window.rail.buttons["Bottom"].click()
+    _open_screen(window, "Bottom")
     tick(0.1)
     stack = window.drawer.stack
     try:
@@ -302,7 +310,7 @@ def test_a_decal_is_put_where_pointed_and_a_projector_thrown_from_the_view(advan
     red = np.zeros((90, 160, 4), np.uint8)
     red[..., 0], red[..., 3] = 255, 255
     Image.fromarray(red).save(tmp_path / "red.png")
-    window.rail.buttons["Bottom"].click()
+    _open_screen(window, "Bottom")
     tick(0.1)
     stack = window.drawer.stack
     try:
@@ -354,7 +362,7 @@ def test_a_decal_is_put_where_pointed_and_a_projector_thrown_from_the_view(advan
 def test_a_movie_dropped_in_a_drawer_plays_on_its_screen(advanced, clips, tick):
     import layers as stacks
     window = advanced
-    window.rail.buttons["Bottom"].click()
+    _open_screen(window, "Bottom")
     tick(0.1)
     stack = window.drawer.stack
     across, down = window._pixels("Screen_Bottom")
@@ -410,7 +418,7 @@ def test_a_mask_and_effects_from_the_drawer(advanced, tick, tmp_path):
     red = np.zeros((90, 160, 4), np.uint8)
     red[..., 0], red[..., 3] = 255, 255
     Image.fromarray(red).save(tmp_path / "red.png")
-    window.rail.buttons["Bottom"].click()
+    _open_screen(window, "Bottom")
     tick(0.1)
     stack = window.drawer.stack
     across, down = window._pixels("Screen_Bottom")
@@ -486,7 +494,7 @@ def test_a_brush_paints_the_mask_three_ways_and_is_undone(advanced, tick, tmp_pa
     red = np.zeros((90, 160, 4), np.uint8)
     red[..., 0], red[..., 3] = 255, 255
     Image.fromarray(red).save(tmp_path / "red.png")
-    window.rail.buttons["Bottom"].click()
+    _open_screen(window, "Bottom")
     tick(0.1)
     stack = window.drawer.stack
     across, down = window._pixels("Screen_Bottom")
@@ -545,7 +553,12 @@ def test_a_brush_paints_the_mask_three_ways_and_is_undone(advanced, tick, tmp_pa
         paint = window._pictures().rasters.paint(layer.effects[0], (across, down))
         green = (paint.array[..., 1] == 255) & (paint.array[..., 3] > 0)
         assert green.any() and layer.target == f"paint:{layer.effects[0].key}"
-        stack.brush_button.setChecked(False)
+        # Opened again, the drawer keeps the brush as it was.
+        stack.brush.modes.setCurrentIndex(stack.brush.modes.findData("camera"))
+        window._open_drawer("Bottom")
+        again = window.drawer.stack
+        assert again is not stack and again.brush_button.isChecked() and again.brush.mode == "camera"
+        again.brush_button.setChecked(False)
         assert not window.brush_tool
     finally:
         window.layer_stacks = stacks.Stacks()
