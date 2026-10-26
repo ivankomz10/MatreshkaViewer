@@ -52,6 +52,7 @@ import renderer3d
 import scene3d
 import kinetic
 import layer_gpu
+import layer_rasters
 import layer_video
 import layers
 import layers_ui
@@ -3457,6 +3458,9 @@ class Viewer(QMainWindow):
         settings = logfile.load_settings()      # keeps checked_machine
         settings.update(self._settings_now())
         logfile.save_settings(settings)
+        if self.layer_pictures is not None:
+            for name in self.layer_pictures.rasters.save():
+                logfile.write(f"layers: {name} written")
 
     def _keep_chains(self, aside: dict) -> None:
         """Put 0.3's chains where the show mode will find them, untouched.
@@ -4813,6 +4817,7 @@ class Viewer(QMainWindow):
             stack.changed.connect(self._layers_changed)
             stack.moving.connect(self._set_layer_tool)
             stack.bound.connect(self._place_bound)
+            stack.mask_thumbnail = self._mask_thumbnail
             stack.move_button.setChecked(self.layer_tool)
         self.drawer.show_screen(key, row, self.level == "show", stack=stack)
         self.rail.show_open(key)
@@ -4824,6 +4829,9 @@ class Viewer(QMainWindow):
         if self.layer_pictures is None:
             self.layer_pictures = layer_gpu.Pictures(self.device)
             self.layer_pictures.movies = layer_video.Movies(self.device)
+            # Masks and paint, as pictures of the frames, beside the settings.
+            self.layer_pictures.rasters = layer_rasters.Rasters(
+                self.device, logfile.app_dir() / "layers")
         self.layer_pictures.premultiplied = self.alpha_mode() == "premultiplied"
         return self.layer_pictures
 
@@ -4836,6 +4844,27 @@ class Viewer(QMainWindow):
         if not playing and self.layer_pictures is None:
             return False
         return self._pictures().movies.feed(seconds, playing)
+
+    def _mask_thumbnail(self, layer):
+        """A layer's mask, small, for its row: as painted, or white."""
+        held = self._pictures().rasters.held(layer.mask_raster)
+        if held is not None:
+            from PIL import Image
+            small = Image.fromarray(held.array)
+        else:
+            from PIL import Image
+            where = self._pictures().rasters.folder / layer.mask_raster
+            try:
+                small = Image.open(where).convert("RGBA") if where.exists() else None
+            except Exception:  # noqa: BLE001
+                small = None
+            if small is None:
+                small = Image.new("RGBA", (34, 34), (255, 255, 255, 255))
+        small.thumbnail((34, 34))
+        pixels = np.ascontiguousarray(np.asarray(small.convert("RGBA"), np.uint8))
+        tall, wide = pixels.shape[:2]
+        image = QImage(pixels.tobytes(), wide, tall, wide * 4, QImage.Format.Format_RGBA8888)
+        return QPixmap.fromImage(image.copy())
 
     def _layer_thumbnail(self, path: str):
         """A layer's picture, small, for its row; None if it will not open."""

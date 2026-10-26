@@ -317,8 +317,23 @@ class LayerRow(QFrame):
             else:
                 self.thumb.setText("?")
                 self.thumb.setToolTip(tr("Картинка не открывается: {0}", layer.path))
-            self.thumb.setStyleSheet(f"background:{theme.DEEP};")
+            self.thumb.setStyleSheet(self._aimed(layer.target == "content"))
+            self.thumb.mousePressEvent = lambda event: self._aim("content", event)
         line.addWidget(self.thumb)
+        self.mask_thumb = None
+        if layer.mask:
+            self.mask_thumb = QLabel()
+            self.mask_thumb.setObjectName("qa_layer_mask")
+            self.mask_thumb.setFixedSize(34, 34)
+            self.mask_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            small = view.mask_thumbnail(layer)
+            if small is not None:
+                self.mask_thumb.setPixmap(small)
+            self.mask_thumb.setToolTip(tr("Маска: белое видно, чёрное нет. Щелчок — рисовать по маске, "
+                                          "Shift+щелчок — выключить маску"))
+            self.mask_thumb.setStyleSheet(self._aimed(layer.target == "mask", layer.mask_visible))
+            self.mask_thumb.mousePressEvent = lambda event: self._aim("mask", event)
+            line.addWidget(self.mask_thumb)
         self.name = QLabel(layer.name)
         self.name.setObjectName("qa_layer_name")
         self.name.setProperty("fixed_words", True)       # a layer's own name
@@ -345,6 +360,23 @@ class LayerRow(QFrame):
         right.addWidget(self.opacity)
         line.addLayout(right)
         self._pressed_at = None
+
+    @staticmethod
+    def _aimed(on: bool, lit: bool = True) -> str:
+        """A thumbnail's look: the orange line under the one a brush paints."""
+        line = theme.TARGET if on else "transparent"
+        return (f"background:{theme.DEEP if lit else theme.SUNKEN};"
+                f" border-bottom:2px solid {line};")
+
+    def _aim(self, what: str, event) -> None:
+        self.view.choose(self.layer)
+        if what == "mask" and event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            self.layer.mask_visible = not self.layer.mask_visible
+            self.view.changed_rows()
+            return
+        if self.layer.target != what:
+            self.layer.target = what
+            self.view.changed_rows(picture=False)
 
     def _eye(self) -> None:
         self.layer.visible = not self.layer.visible
@@ -406,6 +438,123 @@ class LayerRow(QFrame):
         where = self.where(event.position().y())
         self.view.dropped(event.mimeData(), self.layer, where)
         event.acceptProposedAction()
+
+
+class EffectRow(QFrame):
+    """One effect of a layer, under it: shown or not, what it is, away."""
+
+    def __init__(self, view, layer, effect, depth: int) -> None:
+        super().__init__()
+        self.view, self.layer, self.effect = view, layer, effect
+        self.setObjectName(f"qa_effect_{effect.key}")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        aimed = effect.kind == "paint" and layer.target == f"paint:{effect.key}"
+        chosen = view.chosen_effect is effect
+        self.setStyleSheet(
+            f"QFrame#qa_effect_{effect.key} {{ background:{'#303438' if chosen else theme.PANEL};"
+            f" border-left:2px solid {theme.TARGET if aimed else theme.SEAM}; }}")
+        line = QHBoxLayout(self)
+        line.setContentsMargins(28 + depth * 16, 2, 6, 2)
+        line.setSpacing(6)
+        eye = QPushButton("●" if effect.visible else "○")
+        eye.setObjectName("qa_effect_eye")
+        eye.setFixedSize(18, 18)
+        eye.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        eye.setToolTip(tr("Показать или скрыть эффект"))
+        eye.setStyleSheet(f"QPushButton {{ border:0; background:transparent; font-size:12px;"
+                          f" color:{theme.SECOND if effect.visible else theme.FAINT}; }}")
+        eye.clicked.connect(self._eye)
+        line.addWidget(eye)
+        mark = QLabel("fx")
+        mark.setStyleSheet(f"color:{theme.FAINT}; font-size:10px;")
+        line.addWidget(mark)
+        name = QLabel(tr("Кисть") if effect.kind == "paint" else "HSL")
+        name.setObjectName("qa_effect_name")
+        name.setStyleSheet(f"color:{theme.SECOND if effect.visible else theme.FAINT}; font-size:11px;")
+        line.addWidget(name, 1)
+        drop = QPushButton("✕")
+        drop.setObjectName("qa_effect_drop")
+        drop.setFixedSize(18, 18)
+        drop.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        drop.setToolTip(tr("Убрать эффект"))
+        drop.setStyleSheet(f"QPushButton {{ border:0; background:transparent; color:{theme.QUIET}; }}")
+        drop.clicked.connect(self._drop)
+        line.addWidget(drop)
+
+    def _eye(self) -> None:
+        self.effect.visible = not self.effect.visible
+        self.view.changed_rows()
+
+    def _drop(self) -> None:
+        self.layer.drop_effect(self.effect)
+        if self.view.chosen_effect is self.effect:
+            self.view.chosen_effect = None
+        self.view.changed_rows()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 -- Qt naming
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        self.view.chosen = self.layer
+        self.view.chosen_effect = self.effect
+        if self.effect.kind == "paint":
+            self.layer.target = f"paint:{self.effect.key}"
+        self.view.changed_rows(picture=False)
+
+
+class EffectPanel(QFrame):
+    """The chosen HSL effect's three numbers."""
+
+    def __init__(self, view) -> None:
+        super().__init__()
+        self.view = view
+        self.effect = None
+        self.setObjectName("qa_effect_panel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"QFrame#qa_effect_panel {{ background:{theme.DEEP};"
+                           f" border-top:1px solid {theme.SEAM}; }}")
+        from PySide6.QtWidgets import QDoubleSpinBox, QGridLayout
+        grid = QGridLayout(self)
+        grid.setContentsMargins(10, 6, 10, 8)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        head = QLabel(tr("Эффект HSL"))
+        head.setStyleSheet(f"color:{theme.DIM}; font-size:11px;")
+        grid.addWidget(head, 0, 0, 1, 4)
+        self.fields = {}
+        for at, (key, label, low, high) in enumerate((
+                ("hue", tr("Тон, °"), -180, 180), ("saturation", tr("Насыщенность, %"), -100, 100),
+                ("lightness", tr("Светлота, %"), -100, 100))):
+            name = QLabel(label)
+            name.setStyleSheet(f"color:{theme.QUIET}; font-size:11px;")
+            field = QDoubleSpinBox()
+            field.setObjectName(f"qa_effect_{key}")
+            field.setRange(low, high)
+            field.setDecimals(1)
+            field.valueChanged.connect(lambda value, key=key: self._typed(key, value))
+            grid.addWidget(name, 1 + at, 0)
+            grid.addWidget(field, 1 + at, 1)
+            self.fields[key] = field
+        self._saying = False
+        self.show_effect(None)
+
+    def show_effect(self, effect) -> None:
+        self.effect = effect if effect is not None and effect.kind == "hsl" else None
+        self.setVisible(self.effect is not None)
+        if self.effect is None:
+            return
+        self._saying = True
+        try:
+            self.fields["hue"].setValue(self.effect.hue)
+            self.fields["saturation"].setValue(self.effect.saturation * 100.0)
+            self.fields["lightness"].setValue(self.effect.lightness * 100.0)
+        finally:
+            self._saying = False
+
+    def _typed(self, key: str, value: float) -> None:
+        if self._saying or self.effect is None:
+            return
+        setattr(self.effect, key, value if key == "hue" else value / 100.0)
+        self.view.changed_picture()
 
 
 class TransformPanel(QFrame):
@@ -573,6 +722,8 @@ class StackView(QWidget):
         self.setAcceptDrops(True)
         self.stacks, self.screen, self._thumbnail = stacks_, screen, thumbnail
         self.chosen = None
+        self.chosen_effect = None
+        self.mask_thumbnail = lambda layer: None     # the window knows the masks
         self._thumbs: dict = {}
         whole = QVBoxLayout(self)
         whole.setContentsMargins(0, 0, 0, 0)
@@ -589,6 +740,8 @@ class StackView(QWidget):
         for name, text, hint, act in (
                 ("picture", tr("+ Файл…"), tr("Картинка или видео с диска новым слоем"), self._pick),
                 ("folder", tr("+ Папка"), tr("Папка: её слои ложатся вместе, как один"), self._folder),
+                ("mask", tr("Маска"), tr("Белая маска выбранному слою, или убрать её"), self._mask),
+                ("effect", tr("Эффект"), tr("Эффект выбранному слою: HSL или Кисть"), self._effect),
                 ("delete", "✕", tr("Удалить выбранный слой"), self._delete)):
             button = QPushButton(text)
             button.setObjectName(f"qa_stack_{name}")
@@ -611,6 +764,8 @@ class StackView(QWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         whole.addWidget(self.scroll, 1)
+        self.effect_panel = EffectPanel(self)
+        whole.addWidget(self.effect_panel)
         self.transform = TransformPanel(self)
         whole.addWidget(self.transform)
         self.rebuild()
@@ -636,6 +791,8 @@ class StackView(QWidget):
         def walk(items, depth):
             for layer in reversed(items):
                 column.addWidget(LayerRow(self, layer, depth))
+                for effect in reversed(layer.effects):
+                    column.addWidget(EffectRow(self, layer, effect, depth))
                 if layer.kind == "folder" and layer.open:
                     walk(layer.children, depth + 1)
 
@@ -650,13 +807,18 @@ class StackView(QWidget):
         column.addStretch(1)
         self.scroll.setWidget(holder)
         if hasattr(self, "transform"):
+            if self.chosen_effect is not None and (self.chosen is None
+                                                   or self.chosen_effect not in self.chosen.effects):
+                self.chosen_effect = None
             self.transform.show_layer(self.chosen)
+            self.effect_panel.show_effect(self.chosen_effect)
 
     # -- what changes ----------------------------------------------------------------
 
     def choose(self, layer) -> None:
-        if self.chosen is not layer:
+        if self.chosen is not layer or self.chosen_effect is not None:
             self.chosen = layer
+            self.chosen_effect = None
             self.rebuild()
 
     def changed_rows(self, picture: bool = True) -> None:
@@ -691,6 +853,36 @@ class StackView(QWidget):
                "*.mov *.mp4 *.m4v *.mkv *.avi *.mxf);;Все файлы (*)"))
         if chosen:
             self.add_pictures(chosen, near=self.chosen)
+
+    def _mask(self) -> None:
+        if self.chosen is None:
+            return
+        if self.chosen.mask:
+            self.chosen.drop_mask()
+        else:
+            self.chosen.add_mask()
+        self.changed_rows()
+
+    def _effect(self) -> None:
+        if self.chosen is None:
+            return
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        menu.setObjectName("qa_stack_effect_menu")
+        for kind, text in (("hsl", "HSL"), ("paint", tr("Кисть"))):
+            action = menu.addAction(text)
+            action.triggered.connect(lambda _=False, kind=kind: self.add_effect(kind))
+        button = self.findChild(QPushButton, "qa_stack_effect")
+        menu.popup(button.mapToGlobal(button.rect().bottomLeft()))
+
+    def add_effect(self, kind: str):
+        """An effect on top of the chosen layer's, chosen in its turn."""
+        if self.chosen is None:
+            return None
+        made = self.chosen.add_effect(kind)
+        self.chosen_effect = made
+        self.changed_rows()
+        return made
 
     def _folder(self) -> None:
         folder = stacks.Layer("folder", tr("папка"))

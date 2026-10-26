@@ -64,6 +64,7 @@ DRAFT_BG = "#3a3220"
 LINK_BG = "#1f3347"
 LINK_FG = "#bcd6ef"
 WARN = "#f0a04a"
+TARGET = "#f0883e"          # the orange line under what a brush paints
 ERROR = "#e25c5c"
 LANE_A = "#16171a"
 LANE_B = "#191a1d"

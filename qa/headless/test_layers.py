@@ -121,3 +121,121 @@ def test_where_a_moved_turned_picture_lies():
     assert np.allclose(uv(layer_gpu.placed(frame, picture, layer), 150, 50), (1.0, 0.5))
     back = layers.Layer.from_dict(layer.to_dict())
     assert (back.flip, back.scale, back.x) == (True, 1.0, 0.0)
+
+
+# -- step 8: masks and effects ---------------------------------------------------------
+
+def _touched_case(device, tmp_path, layer, base, picture, screen="Bottom"):
+    import layer_rasters
+    height, width = base.shape[:2]
+    composer = screen_gpu.Compositor(device, width, height)
+    _put(composer, base)
+    stacks = layers.Stacks()
+    stacks.add(screen, layer)
+    pictures = layer_gpu.Pictures(device)
+    pictures.rasters = layer_rasters.Rasters(device, tmp_path / "rasters")
+    return composer, stacks, pictures
+
+
+def _straight_to_top(picture):
+    straight = picture.astype(np.float64) / 255.0
+    return straight
+
+
+def test_an_hsl_effect_turns_the_layers_colour(device, tmp_path):
+    rng = np.random.default_rng(11)
+    width, height = 48, 24
+    base = np.zeros((height, width, 4))
+    base[...] = (0.1, 0.2, 0.3, 1.0)
+    picture = rng.integers(0, 256, (height, width, 4), dtype=np.uint8)
+    picture[..., 3] = rng.integers(40, 256, (height, width))
+    Image.fromarray(picture).save(tmp_path / "p.png")
+    layer = layers.Layer("image", "p", path=str(tmp_path / "p.png"), opacity=0.8)
+    effect = layer.add_effect("hsl")
+    effect.hue, effect.saturation, effect.lightness = 70.0, -0.4, 0.2
+    composer, stacks, pictures = _touched_case(device, tmp_path, layer, base, picture)
+    layer_gpu.LayerBlender(device, width, height).apply(None, composer.texture, stacks.shown("Bottom"), pictures)
+    straight = _straight_to_top(picture)
+    turned = layers.hsl(straight[..., :3], 70.0, -0.4, 0.2)
+    top = np.concatenate([turned * straight[..., 3:], straight[..., 3:]], -1)
+    want = layers.blend(base, top, "normal", 0.8)
+    assert np.abs(composer.to_array() - want).max() < 6e-3
+
+
+def test_a_mask_cuts_the_layer_and_paint_lies_under_it(device, tmp_path):
+    width, height = 40, 20
+    base = np.zeros((height, width, 4))
+    base[...] = (0.0, 0.0, 0.5, 1.0)
+    picture = np.zeros((height, width, 4), np.uint8)
+    picture[..., 1], picture[..., 3] = 255, 255                  # green, whole
+    Image.fromarray(picture).save(tmp_path / "g.png")
+    layer = layers.Layer("image", "g", path=str(tmp_path / "g.png"), blend="screen")
+    paint = layer.add_effect("paint")
+    layer.add_mask()
+    assert layer.target == "mask" and layer.touched
+    composer, stacks, pictures = _touched_case(device, tmp_path, layer, base, picture)
+    mask = pictures.rasters.mask(layer, (width, height))
+    ramp = np.linspace(0, 255, width).round().astype(np.uint8)
+    mask.array[..., :3] = ramp[None, :, None]                     # black at the left, white at the right
+    mask.touch()
+    strokes = pictures.rasters.paint(paint, (width, height))
+    strokes.array[:, : width // 2] = (255, 0, 0, 128)            # half red over the left half
+    strokes.touch()
+    layer_gpu.LayerBlender(device, width, height).apply(None, composer.texture, stacks.shown("Bottom"), pictures)
+    own = np.zeros((height, width, 4))
+    own[...] = (0.0, 1.0, 0.0, 1.0)
+    red = np.zeros((height, width, 4))
+    red[:, : width // 2] = (128 / 255, 0, 0, 128 / 255)
+    own = layers.blend(own, red, "normal")
+    own = own * (ramp / 255.0)[None, :, None]
+    want = layers.blend(base, own, "screen")
+    assert np.abs(composer.to_array() - want).max() < 6e-3
+    # Saved, and read back for a stack opened again.
+    assert sorted(pictures.rasters.save()) == sorted([layer.mask_raster, paint.raster])
+    import layer_rasters
+    again = layer_rasters.Rasters(device, tmp_path / "rasters").mask(layer, (width, height))
+    assert np.array_equal(again.array, mask.array)
+    back = layers.Layer.from_dict(layer.to_dict())
+    assert back.mask and back.effects[0].key == paint.key and back.target == "mask"
+
+
+def test_effects_are_worked_bottom_up_and_a_hidden_one_is_not(device, tmp_path):
+    width, height = 16, 8
+    base = np.zeros((height, width, 4))
+    picture = np.full((height, width, 4), 255, np.uint8)
+    picture[..., :3] = (200, 50, 50)
+    Image.fromarray(picture).save(tmp_path / "r.png")
+    layer = layers.Layer("image", "r", path=str(tmp_path / "r.png"))
+    paint = layer.add_effect("paint")
+    grey = layer.add_effect("hsl")
+    grey.saturation = -1.0                                        # over the paint: greys it too
+    composer, stacks, pictures = _touched_case(device, tmp_path, layer, base, picture)
+    strokes = pictures.rasters.paint(paint, (width, height))
+    strokes.array[...] = (0, 0, 255, 255)
+    strokes.touch()
+    layer_gpu.LayerBlender(device, width, height).apply(None, composer.texture, stacks.shown("Bottom"), pictures)
+    got = composer.to_array()[4, 8]
+    assert abs(got[0] - got[2]) < 4e-3 and got[3] > 0.99         # blue painted, then greyed
+    grey.visible = False
+    composer2, stacks2, _ = _touched_case(device, tmp_path, layer, base, picture)
+    layer_gpu.LayerBlender(device, width, height).apply(None, composer2.texture, stacks2.shown("Bottom"), pictures)
+    assert composer2.to_array()[4, 8][2] > 0.99                    # blue as painted
+
+
+def test_a_folder_is_masked_as_one(device, tmp_path):
+    width, height = 16, 8
+    base = np.zeros((height, width, 4))
+    base[...] = (0.2, 0.2, 0.2, 1.0)
+    white = np.full((height, width, 4), 255, np.uint8)
+    Image.fromarray(white).save(tmp_path / "w.png")
+    folder = layers.Layer("folder", "f")
+    folder.children = [layers.Layer("image", "w", path=str(tmp_path / "w.png"))]
+    folder.add_mask()
+    composer, stacks, pictures = _touched_case(device, tmp_path, folder, base, white)
+    mask = pictures.rasters.mask(folder, (width, height))
+    mask.array[:, : width // 2, :3] = 0
+    mask.touch()
+    layer_gpu.LayerBlender(device, width, height).apply(None, composer.texture, stacks.shown("Bottom"), pictures)
+    got = composer.to_array()
+    assert np.allclose(got[:, : width // 2, :3], 0.2, atol=4e-3)   # masked out: what is under
+    assert np.allclose(got[:, width // 2:, :3], 1.0, atol=4e-3)

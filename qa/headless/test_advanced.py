@@ -398,3 +398,61 @@ def test_a_movie_dropped_in_a_drawer_plays_on_its_screen(advanced, clips, tick):
         window.layer_stacks = stacks.Stacks()
         window._move(0.0)
         tick(0.2)
+
+
+# -- step 8: masks and effects ---------------------------------------------------------
+
+def test_a_mask_and_effects_from_the_drawer(advanced, tick, tmp_path):
+    from PIL import Image
+    import layers as stacks
+    import logfile
+    window = advanced
+    red = np.zeros((90, 160, 4), np.uint8)
+    red[..., 0], red[..., 3] = 255, 255
+    Image.fromarray(red).save(tmp_path / "red.png")
+    window.rail.buttons["Bottom"].click()
+    tick(0.1)
+    stack = window.drawer.stack
+    across, down = window._pixels("Screen_Bottom")
+    try:
+        layer = stack.add_pictures([str(tmp_path / "red.png")])[0]
+        layer.scale = 4.0                                   # over the whole frame
+        stack.changed_picture()
+        tick(0.3)
+        middle = window._screen_to_array("Screen_Bottom", across, down)[down // 2, across // 2]
+        assert middle[0] > 0.9 and middle[1] < 0.05
+        # An HSL effect, chosen as it is made: its numbers below the stack.
+        effect = stack.add_effect("hsl")
+        assert stack.effect_panel.isVisible() and stack.effect_panel.effect is effect
+        assert stack.findChild(QWidget, f"qa_effect_{effect.key}") is not None
+        stack.effect_panel.fields["saturation"].setValue(-100)
+        assert effect.saturation == -1.0
+        tick(0.3)
+        grey = window._screen_to_array("Screen_Bottom", across, down)[down // 2, across // 2]
+        assert abs(grey[0] - grey[1]) < 0.02 and abs(grey[1] - grey[2]) < 0.02
+        # A mask: the brush's target goes to it, the orange line with it.
+        stack.choose(layer)
+        stack.findChild(QWidget, "qa_stack_mask").click()
+        assert layer.mask and layer.target == "mask"
+        row = stack.findChild(QWidget, f"qa_layer_{layer.ident}")
+        assert "f0883e" in row.mask_thumb.styleSheet() and "f0883e" not in row.thumb.styleSheet()
+        mask = window._pictures().rasters.mask(layer, (across, down))
+        mask.array[:, : across // 2, :3] = 0                # the left half hidden
+        mask.touch()
+        tick(0.3)
+        got = window._screen_to_array("Screen_Bottom", across, down)
+        assert np.abs(got[down // 2, across // 4] - middle).max() > 0.2      # what is under, at the left
+        assert abs(got[down // 2, 3 * across // 4][0] - grey[0]) < 0.02    # grey at the right
+        # Kept: the stack in the settings, the mask beside them.
+        window._remember(now=True)
+        saved = window._settings_now()["layers"]["Bottom"][0]
+        assert saved["mask"] and saved["effects"][0]["kind"] == "hsl"
+        assert (logfile.app_dir() / "layers" / layer.mask_raster).exists()
+        # Paint as the target: chosen from its row.
+        paint = stack.add_effect("paint")
+        assert layer.target == f"paint:{paint.key}"
+        stack.findChild(QWidget, f"qa_effect_{paint.key}").findChild(QWidget, "qa_effect_drop").click()
+        assert paint not in layer.effects and layer.target == "content"
+    finally:
+        window.layer_stacks = stacks.Stacks()
+        tick(0.2)

@@ -182,6 +182,70 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
 CAMERA_PICTURE = (2160, 3840)      # the file camera's 9:16 picture, in pixels
 
+TOUCH_SHADER = SHADER_HEAD.split("struct Blend")[0] + """
+// What is done to a layer's own picture before it lies down: its colour
+// turned (HSL, the sums of layers.hsl on straight colour) and then cut by
+// its mask, white showing, black not -- both premultiplied in and out.
+struct Touch {
+    // x hue in degrees, y saturation, z lightness, w 1 when turned at all
+    hsl: vec4<f32>,
+    // x 1 when masked, yz the frame in pixels
+    info: vec4<f32>,
+};
+
+@group(0) @binding(0) var source: texture_2d<f32>;
+@group(0) @binding(1) var mask: texture_2d<f32>;
+@group(0) @binding(2) var mask_sampler: sampler;
+@group(0) @binding(3) var<uniform> how: Touch;
+
+fn turned(rgb_in: vec3<f32>) -> vec3<f32> {
+    let rgb = clamp(rgb_in, vec3<f32>(0.0), vec3<f32>(1.0));
+    let high = max(rgb.r, max(rgb.g, rgb.b));
+    let low = min(rgb.r, min(rgb.g, rgb.b));
+    var light = (high + low) * 0.5;
+    let chroma = high - low;
+    var sat = 0.0;
+    var h = 0.0;
+    if (chroma > 1e-6) {
+        sat = chroma / max(1.0 - abs(2.0 * light - 1.0), 1e-6);
+        if (high == rgb.r) {
+            h = (rgb.g - rgb.b) / chroma;
+            h = h - 6.0 * floor(h / 6.0);
+        } else if (high == rgb.g) {
+            h = (rgb.b - rgb.r) / chroma + 2.0;
+        } else {
+            h = (rgb.r - rgb.g) / chroma + 4.0;
+        }
+        h = h / 6.0;
+    }
+    h = fract(h + how.hsl.x / 360.0);
+    sat = clamp(sat * (1.0 + how.hsl.y), 0.0, 1.0);
+    if (how.hsl.z >= 0.0) {
+        light = light + (1.0 - light) * how.hsl.z;
+    } else {
+        light = light * (1.0 + how.hsl.z);
+    }
+    let c = (1.0 - abs(2.0 * light - 1.0)) * sat;
+    let a = c * 0.5;
+    let n = vec3<f32>(0.0, 8.0, 4.0);
+    let k = (n + vec3<f32>(h * 12.0)) - 12.0 * floor((n + vec3<f32>(h * 12.0)) / 12.0);
+    return vec3<f32>(light) - a * clamp(min(k - 3.0, 9.0 - k), vec3<f32>(-1.0), vec3<f32>(1.0));
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    var c = textureLoad(source, vec2<i32>(in.pos.xy), 0);
+    if (how.hsl.w > 0.5 && c.a > 0.0) {
+        c = vec4<f32>(turned(c.rgb / c.a) * c.a, c.a);
+    }
+    if (how.info.x > 0.5) {
+        let m = textureSampleLevel(mask, mask_sampler, in.pos.xy / how.info.yz, 0.0).r;
+        c = c * m;
+    }
+    return c;
+}
+"""
+
 
 class Surface:
     """A screen's mesh on the card, for the remap pass: its points, normals
@@ -447,6 +511,30 @@ class LayerBlender:
                       "targets": [{"format": FORMAT}]},
             primitive={"topology": "triangle-list", "cull_mode": "none"})
         self._remap_uniforms: list = []
+        touch = device.create_shader_module(code=TOUCH_SHADER)
+        self.touch_layout = device.create_bind_group_layout(entries=[
+            {"binding": 0, "visibility": wgpu.ShaderStage.FRAGMENT,
+             "texture": {"sample_type": wgpu.TextureSampleType.unfilterable_float}},
+            {"binding": 1, "visibility": wgpu.ShaderStage.FRAGMENT,
+             "texture": {"sample_type": wgpu.TextureSampleType.float}},
+            {"binding": 2, "visibility": wgpu.ShaderStage.FRAGMENT,
+             "sampler": {"type": wgpu.SamplerBindingType.filtering}},
+            {"binding": 3, "visibility": wgpu.ShaderStage.FRAGMENT,
+             "buffer": {"type": wgpu.BufferBindingType.uniform}},
+        ])
+        self.touch_pipeline = device.create_render_pipeline(
+            layout=device.create_pipeline_layout(bind_group_layouts=[self.touch_layout]),
+            vertex={"module": touch, "entry_point": "vs_main"},
+            fragment={"module": touch, "entry_point": "fs_main", "targets": [{"format": FORMAT}]},
+            primitive={"topology": "triangle-list"})
+        self._touch_uniforms: list = []
+        self._scratches: list = []    # a layer's own picture, a pair a depth
+        self._zero = None             # nothing, to lay a layer's own picture on
+        self._white = device.create_texture(
+            size=(1, 1, 1), format="rgba8unorm",
+            usage=wgpu.TextureUsage.TEXTURE_BINDING | wgpu.TextureUsage.COPY_DST)
+        device.queue.write_texture({"texture": self._white}, bytes([255, 255, 255, 255]),
+                                   {"bytes_per_row": 4, "rows_per_image": 1}, (1, 1, 1))
         self._pairs: list = []        # work textures, a pair a depth of folder
         self._uniforms: list = []
         self._groups: dict = {}
@@ -504,7 +592,7 @@ class LayerBlender:
         return self._remap_uniforms[index]
 
     def _lay_remapped(self, encoder, under, layer_texture, layer, mode: int, into,
-                      surface, seen, premultiplied: bool = False) -> None:
+                      surface, seen, premultiplied: bool = False, opacity=None) -> None:
         """A picture as a camera sees it on the building: what is under
         copied across first, then the screen's mesh drawn over it in its UV."""
         index = self._pass
@@ -513,7 +601,8 @@ class LayerBlender:
         values = np.concatenate([
             np.asarray(view_projection, np.float32).T.reshape(-1),
             [eye[0], eye[1], eye[2], 1.0],
-            [mode, layer.opacity, 1.0 if surface.moving else 0.0, 1.0 if at_rest else 0.0],
+            [mode, layer.opacity if opacity is None else opacity,
+             1.0 if surface.moving else 0.0, 1.0 if at_rest else 0.0],
             [*rows[0], 0.0], [*rows[1], 0.0],
             [frame[0], frame[1], 1.0 if premultiplied else 0.0, 0.0]]).astype(np.float32)
         buffer = self._remap_uniform(index)
@@ -541,6 +630,72 @@ class LayerBlender:
         pass_.draw_indexed(surface.count)
         pass_.end()
 
+    def _scratch(self, depth: int):
+        while len(self._scratches) <= depth:
+            self._scratches.append([self._texture(), self._texture()])
+        return self._scratches[depth]
+
+    def _nothing(self, encoder):
+        if self._zero is None:
+            self._zero = self._texture()
+            self._clear(encoder, self._zero)
+        return self._zero
+
+    def _touch(self, encoder, source, into, hsl=None, mask=None) -> None:
+        index = self._touches
+        self._touches += 1
+        while len(self._touch_uniforms) <= index:
+            self._touch_uniforms.append(self.device.create_buffer(
+                size=32, usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST))
+        buffer = self._touch_uniforms[index]
+        turn = (0.0, 0.0, 0.0, 0.0) if hsl is None else (*hsl, 1.0)
+        values = np.array([*turn, 1.0 if mask is not None else 0.0, self.width, self.height, 0.0],
+                          np.float32)
+        self.device.queue.write_buffer(buffer, 0, values.tobytes())
+        mask_texture = mask if mask is not None else self._white
+        key = ("touch", id(source), id(mask_texture), index)
+        group = self._groups.get(key)
+        if group is None:
+            group = self.device.create_bind_group(layout=self.touch_layout, entries=[
+                {"binding": 0, "resource": source.create_view()},
+                {"binding": 1, "resource": mask_texture.create_view()},
+                {"binding": 2, "resource": self.sampler},
+                {"binding": 3, "resource": {"buffer": buffer, "offset": 0, "size": 32}},
+            ])
+            self._groups[key] = group
+        pass_ = encoder.begin_render_pass(color_attachments=[{
+            "view": into.create_view(), "load_op": "clear", "store_op": "store",
+            "clear_value": (0.0, 0.0, 0.0, 0.0)}])
+        pass_.set_pipeline(self.touch_pipeline)
+        pass_.set_bind_group(0, group)
+        pass_.draw(3)
+        pass_.end()
+
+    def _touched(self, encoder, own, layer, depth: int, pictures):
+        """A layer's own picture (`own`, premultiplied, on nothing) with its
+        effects worked on it bottom up and its mask cut; the texture it ends in."""
+        rasters = getattr(pictures, "rasters", None)
+        scratch = self._scratch(depth)
+        now = own
+        frame = (self.width, self.height)
+        for effect in layer.effects:
+            if not effect.visible:
+                continue
+            into = scratch[0] if now is not scratch[0] else scratch[1]
+            if effect.kind == "hsl":
+                self._touch(encoder, now, into, hsl=(effect.hue, effect.saturation, effect.lightness))
+            elif effect.kind == "paint" and rasters is not None:
+                paint = rasters.paint(effect, frame)
+                self._lay(encoder, now, paint.texture, whole(frame), 0, 1.0, False, into)
+            else:
+                continue
+            now = into
+        if layer.mask and layer.mask_visible and rasters is not None:
+            into = scratch[0] if now is not scratch[0] else scratch[1]
+            self._touch(encoder, now, into, mask=rasters.mask(layer, frame).texture)
+            now = into
+        return now
+
     def _clear(self, encoder, texture) -> None:
         pass_ = encoder.begin_render_pass(color_attachments=[{
             "view": texture.create_view(), "load_op": "clear", "store_op": "store",
@@ -559,6 +714,8 @@ class LayerBlender:
                 below = self._pair(depth + 1)[0]
                 self._clear(encoder, below)
                 made = self._stack(encoder, inner, below, depth + 1, pictures, remap)
+                if layer.touched:
+                    made = self._touched(encoder, made, layer, depth, pictures)
                 target = pair[0] if now is not pair[0] else pair[1]
                 self._lay(encoder, now, made, whole((self.width, self.height)), mode,
                           layer.opacity, True, target)
@@ -569,7 +726,23 @@ class LayerBlender:
                 continue
             texture, size, premultiplied = got
             target = pair[0] if now is not pair[0] else pair[1]
-            if layer.remap:
+            if layer.touched:
+                own = self._scratch(depth)[0]
+                nothing = self._nothing(encoder)
+                if layer.remap:
+                    seen = None if remap is None else seen_by(layer, size, remap[1])
+                    if seen is None:
+                        continue
+                    self._lay_remapped(encoder, nothing, texture, layer, 0, own, remap[0], seen,
+                                       premultiplied, opacity=1.0)
+                else:
+                    self._lay(encoder, nothing, texture,
+                              placed((self.width, self.height), size, layer), 0, 1.0,
+                              premultiplied, own)
+                made = self._touched(encoder, own, layer, depth, pictures)
+                self._lay(encoder, now, made, whole((self.width, self.height)), mode,
+                          layer.opacity, True, target)
+            elif layer.remap:
                 seen = None if remap is None else seen_by(layer, size, remap[1])
                 if seen is None:
                     continue
@@ -591,6 +764,7 @@ class LayerBlender:
         if own:
             encoder = self.device.create_command_encoder()
         self._pass = 0
+        self._touches = 0
         first = self._pair(0)[1]
         encoder.copy_texture_to_texture({"texture": composed_texture}, {"texture": first},
                                         (self.width, self.height, 1))

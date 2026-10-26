@@ -17,6 +17,15 @@ Photoshop, Substance and the browsers: `blend` below is the reference the
 graphics card's pass (layer_gpu) is held to. A folder's layers are laid
 together first, on nothing, and the folder then lies as one layer.
 
+A layer, or a folder, can have a mask and effects, as in Substance Painter.
+The mask is white where the layer shows and black where it does not; the
+effects are worked on the layer's own picture from the bottom of the list up
+-- HSL turns its colour, a paint effect ("Кисть") is painted over it -- and
+the mask then cuts it, before it lies on what is under. The mask and the
+paint are pictures of the screen's frame, kept as files beside the settings
+(`raster` names them). Which of the three a brush paints is the layer's
+`target`: its content, its mask, or one of its paint effects.
+
 A picture lies on the screen's frame, or is bound to the building (`bind`):
 
   frame    on the frame, in its pixels
@@ -42,6 +51,41 @@ BINDS = ("frame", "camera", "decal", "view")
 PICTURED = ("image", "video")       # the kinds that show something of their own
 MOVIES = (".mov", ".mp4", ".m4v", ".mkv", ".avi", ".mxf")
 _ids = itertools.count(1)
+EFFECTS = ("hsl", "paint")
+
+
+def _key() -> str:
+    import uuid
+    return uuid.uuid4().hex[:12]
+
+
+@dataclass
+class Effect:
+    kind: str                       # hsl | paint
+    visible: bool = True
+    hue: float = 0.0                # hsl: degrees round the wheel
+    saturation: float = 0.0         # hsl: -1 grey .. 0 as it is .. 1 twice
+    lightness: float = 0.0          # hsl: -1 black .. 1 white
+    key: str = field(default_factory=_key)
+
+    @property
+    def raster(self) -> str:
+        """The file a paint effect's strokes are kept in."""
+        return f"paint_{self.key}.png"
+
+    def to_dict(self) -> dict:
+        out = {"kind": self.kind, "visible": self.visible, "key": self.key}
+        if self.kind == "hsl":
+            out.update(hue=round(self.hue, 3), saturation=round(self.saturation, 4),
+                       lightness=round(self.lightness, 4))
+        return out
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "Effect":
+        return cls(kind=raw.get("kind") if raw.get("kind") in EFFECTS else "hsl",
+                   visible=bool(raw.get("visible", True)),
+                   hue=float(raw.get("hue", 0.0)), saturation=float(raw.get("saturation", 0.0)),
+                   lightness=float(raw.get("lightness", 0.0)), key=str(raw.get("key") or _key()))
 
 
 @dataclass
@@ -74,12 +118,48 @@ class Layer:
     # video: when it starts on the clock, in seconds, and whether it goes round
     offset: float = 0.0
     loop: bool = False
+    # the mask and the effects (above), and what a brush paints:
+    # "content", "mask" or "paint:<key of the effect>"
+    mask: bool = False
+    mask_visible: bool = True
+    effects: list = field(default_factory=list)
+    target: str = "content"
+    key: str = field(default_factory=_key)
     ident: int = field(default_factory=lambda: next(_ids))
 
     @property
     def remap(self) -> bool:
         """Bound to the building, laid by the remap pass."""
         return self.bind != "frame"
+
+    @property
+    def mask_raster(self) -> str:
+        return f"mask_{self.key}.png"
+
+    @property
+    def touched(self) -> bool:
+        """Whether anything is done to its picture before it lies down."""
+        return (self.mask and self.mask_visible) or any(one.visible for one in self.effects)
+
+    def add_mask(self) -> None:
+        self.mask, self.mask_visible, self.target = True, True, "mask"
+
+    def drop_mask(self) -> None:
+        self.mask = False
+        if self.target == "mask":
+            self.target = "content"
+
+    def add_effect(self, kind: str) -> Effect:
+        made = Effect(kind)
+        self.effects.append(made)
+        if kind == "paint":
+            self.target = f"paint:{made.key}"
+        return made
+
+    def drop_effect(self, effect) -> None:
+        self.effects = [one for one in self.effects if one is not effect]
+        if self.target == f"paint:{effect.key}":
+            self.target = "content"
 
     def fit(self) -> None:
         """Back to fitted whole and centred."""
@@ -90,7 +170,9 @@ class Layer:
     def to_dict(self) -> dict:
         out = {"kind": self.kind, "name": self.name, "path": self.path,
                "visible": self.visible, "opacity": round(float(self.opacity), 4),
-               "blend": self.blend, "open": self.open}
+               "blend": self.blend, "open": self.open, "key": self.key,
+               "mask": self.mask, "mask_visible": self.mask_visible, "target": self.target,
+               "effects": [one.to_dict() for one in self.effects]}
         if self.kind == "video":
             out.update(offset=round(self.offset, 4), loop=self.loop)
         if self.kind in PICTURED:
@@ -120,6 +202,12 @@ class Layer:
                    rotation=float(raw.get("rotation", 0.0)), flip=bool(raw.get("flip", False)),
                    bind=raw.get("bind") if raw.get("bind") in BINDS
                    else ("camera" if raw.get("remap") else "frame"))
+        made.key = str(raw.get("key") or made.key)
+        made.mask = bool(raw.get("mask", False))
+        made.mask_visible = bool(raw.get("mask_visible", True))
+        made.effects = [Effect.from_dict(one) for one in raw.get("effects") or []
+                        if isinstance(one, dict)]
+        made.target = str(raw.get("target") or "content")
         made.offset = float(raw.get("offset", 0.0))
         made.loop = bool(raw.get("loop", False))
         for key, length in (("anchor", 3), ("normal", 3), ("projector", 16), ("projector_size", 2)):
@@ -233,6 +321,29 @@ class Stacks:
 
 
 # -- the sums, for holding the graphics card to -------------------------------------
+
+def hsl(rgb, hue: float, saturation: float, lightness: float):
+    """Straight colour turned round the wheel by `hue` degrees, its
+    saturation scaled by 1 + `saturation`, and `lightness` taken towards
+    white (plus) or black (minus) -- what an HSL effect does."""
+    rgb = np.clip(np.asarray(rgb, np.float64), 0.0, 1.0)
+    high, low = rgb.max(-1), rgb.min(-1)
+    light = (high + low) / 2
+    chroma = high - low
+    sat = np.where(chroma > 1e-9, chroma / np.maximum(1 - np.abs(2 * light - 1), 1e-9), 0.0)
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    safe = np.maximum(chroma, 1e-9)
+    h = np.where(high == r, ((g - b) / safe) % 6, np.where(high == g, (b - r) / safe + 2, (r - g) / safe + 4))
+    h = np.where(chroma > 1e-9, h / 6.0, 0.0)
+    h = (h + hue / 360.0) % 1.0
+    sat = np.clip(sat * (1 + saturation), 0.0, 1.0)
+    light = np.where(lightness >= 0, light + (1 - light) * lightness, light * (1 + lightness))
+    c = (1 - np.abs(2 * light - 1)) * sat
+    k = lambda n: (n + h * 12) % 12      # noqa: E731
+    a = c / 2
+    f = lambda n: light - a * np.clip(np.minimum(k(n) - 3, 9 - k(n)), -1, 1)   # noqa: E731
+    return np.stack([f(0), f(8), f(4)], -1)
+
 
 def _mix(cb, cs, mode):
     """The blend function B(Cb, Cs) on straight colour."""
