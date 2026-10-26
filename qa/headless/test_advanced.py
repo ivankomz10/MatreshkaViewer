@@ -11,6 +11,8 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication, QWidget
 
+from conftest import PREVIEW
+
 
 @pytest.fixture
 def advanced(window, tick):
@@ -186,3 +188,51 @@ def test_a_picture_layer_lies_on_its_screen_and_is_kept(advanced, tick, tmp_path
         window.layer_stacks = __import__("layers").Stacks()
         window.set_advanced(False)
         tick(0.2)
+
+
+# -- step 4: the transform -------------------------------------------------------------
+
+def test_a_picture_is_dragged_scaled_and_turned_where_it_is_seen(advanced, tick, tmp_path):
+    from PIL import Image
+    import layers as stacks
+    window = advanced
+    Image.fromarray(np.full((40, 40, 4), 255, np.uint8)).save(tmp_path / "white.png")
+    window.mode.setCurrentText("Flat")
+    tick(0.3)
+    window.rail.buttons["Bottom"].click()
+    tick(0.1)
+    stack = window.drawer.stack
+    try:
+        layer = stack.add_pictures([str(tmp_path / "white.png")])[0]
+        tick(0.2)
+        assert stack.transform.isVisible() and stack.transform.layer is layer
+        stack.move_button.setChecked(True)
+        assert window.layer_tool
+        wide, tall = window.canvas.get_logical_size()
+        boxes = dict(window._strips(window._flat_showing(), int(wide), int(tall)))
+        left, top, across, down = boxes["Screen_Bottom"]
+        frame = window._pixels("Screen_Bottom")
+        at = (left + across * 0.5, top + down * 0.5)
+        window._canvas_event({"event_type": "pointer_down", "x": at[0], "y": at[1], "button": 1})
+        window._canvas_event({"event_type": "pointer_move", "x": at[0] + across * 0.1, "y": at[1], "buttons": (1,)})
+        window._canvas_event({"event_type": "pointer_up", "x": at[0] + across * 0.1, "y": at[1], "button": 1})
+        assert abs(layer.x - frame[0] * 0.1) < 2 and abs(layer.y) < 2
+        assert abs(stack.transform.fields["x"].value() - layer.x) < 0.11
+        window._canvas_event({"event_type": "wheel", "x": at[0], "y": at[1], "dy": -120})
+        assert abs(layer.scale - 1.06) < 1e-6
+        window._canvas_event({"event_type": "pointer_down", "x": at[0], "y": at[1], "button": 1,
+                              "modifiers": ("Shift",)})
+        window._canvas_event({"event_type": "pointer_move", "x": at[0] + 50, "y": at[1], "buttons": (1,)})
+        window._canvas_event({"event_type": "pointer_up", "x": at[0] + 50, "y": at[1], "button": 1})
+        assert abs(layer.rotation - 20.0) < 1e-6
+        # Typed in the panel, and back to fitted.
+        stack.transform.fields["y"].setValue(-30)
+        assert layer.y == -30
+        stack.transform.findChild(QWidget, "qa_transform_fit").click()
+        assert (layer.x, layer.y, layer.scale, layer.rotation) == (0, 0, 1.0, 0)
+        # The tool off, and the hand moves the view again.
+        stack.move_button.setChecked(False)
+        assert not window.layer_tool
+    finally:
+        window.layer_stacks = stacks.Stacks()
+        window.mode.setCurrentText(PREVIEW)

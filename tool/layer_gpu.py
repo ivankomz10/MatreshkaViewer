@@ -115,6 +115,27 @@ def fitted(frame: tuple, picture: tuple) -> tuple:
     return (across, 0.0, -left * across), (0.0, down, -top * down)
 
 
+def placed(frame: tuple, picture: tuple, layer) -> tuple:
+    """The two rows for a picture where its layer puts it: fitted whole and
+    centred, then scaled about its middle, turned clockwise, mirrored, moved.
+
+    A pixel f of the frame is p = (w, h) / 2 + k * M * R(-angle) * (f - c) of
+    the picture, k the picture's pixels to a frame pixel, M the mirror, c the
+    picture's middle on the frame; divided by (w, h) it is 0..1."""
+    import math
+    width, height = frame
+    wide, tall = picture
+    k = 1.0 / (min(width / wide, height / tall) * max(layer.scale, 1e-6))
+    angle = math.radians(layer.rotation)
+    c, s = math.cos(angle), math.sin(angle)
+    mirror = -1.0 if layer.flip else 1.0
+    cx, cy = width / 2.0 + layer.x, height / 2.0 + layer.y
+    # q = k * (c*dx + s*dy, -s*dx + c*dy), mirrored across; u = q.x / w + 1/2
+    a0, b0 = mirror * k * c / wide, mirror * k * s / wide
+    a1, b1 = -k * s / tall, k * c / tall
+    return ((a0, b0, 0.5 - a0 * cx - b0 * cy), (a1, b1, 0.5 - a1 * cx - b1 * cy))
+
+
 def whole(frame: tuple) -> tuple:
     """The rows of a layer as large as the frame itself: a folder's result."""
     width, height = frame
@@ -270,7 +291,7 @@ class LayerBlender:
                 continue
             texture, size = got
             target = pair[0] if now is not pair[0] else pair[1]
-            self._lay(encoder, now, texture, fitted((self.width, self.height), size), mode,
+            self._lay(encoder, now, texture, placed((self.width, self.height), size, layer), mode,
                       layer.opacity, False, target)
             now = target
         return now

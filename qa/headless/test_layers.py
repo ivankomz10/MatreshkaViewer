@@ -99,3 +99,25 @@ def test_a_picture_is_fitted_whole_and_centred():
     v = lambda x, y: rows[1][0] * x + rows[1][1] * y + rows[1][2]
     assert abs(u(150, 0)) < 1e-9 and abs(u(250, 0) - 1) < 1e-9     # 100 px wide, centred
     assert abs(v(0, 0)) < 1e-9 and abs(v(0, 100) - 1) < 1e-9
+
+
+def test_where_a_moved_turned_picture_lies():
+    frame, picture = (400, 100), (200, 200)
+    layer = layers.Layer("image", "p")
+    assert np.allclose(layer_gpu.placed(frame, picture, layer), layer_gpu.fitted(frame, picture))
+
+    def uv(rows, x, y):
+        return (rows[0][0] * x + rows[0][1] * y + rows[0][2], rows[1][0] * x + rows[1][1] * y + rows[1][2])
+
+    layer.x, layer.y = 30, -10                         # moved: its middle follows
+    assert np.allclose(uv(layer_gpu.placed(frame, picture, layer), 230, 40), (0.5, 0.5))
+    layer.x = layer.y = 0
+    layer.scale = 2.0                                  # twice: the frame's height is half of it
+    assert np.allclose(uv(layer_gpu.placed(frame, picture, layer), 200, 0), (0.5, 0.25))
+    layer.scale, layer.rotation = 1.0, 90.0            # a quarter turn clockwise
+    # the picture's top middle (0.5, 0) now stands right of the frame's middle
+    assert np.allclose(uv(layer_gpu.placed(frame, picture, layer), 250, 50), (0.5, 0.0))
+    layer.rotation, layer.flip = 0.0, True             # mirrored: its left is on the right
+    assert np.allclose(uv(layer_gpu.placed(frame, picture, layer), 150, 50), (1.0, 0.5))
+    back = layers.Layer.from_dict(layer.to_dict())
+    assert (back.flip, back.scale, back.x) == (True, 1.0, 0.0)

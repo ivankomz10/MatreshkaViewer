@@ -206,6 +206,13 @@ EN: dict = {
     'Рендер с камеры зрителя': "Render from the viewer's camera",
     'Сцена Blender на кадры этого клипа: Top на моторах, чтобы вписать в него 3D-модели, и рендер развертки экрана, который встаёт обратно на дорожку Top': "A Blender scene for this clip's frames: Top on its motors, to fit 3D models inside it, and a render of the screen's layout that goes back onto the Top track",
     # -- the advanced mode -----------------------------------------------------
+    'Двигать': 'Move',
+    'Картинка целиком по центру кадра, без поворота': 'The whole picture in the middle of the frame, unturned',
+    'Масштаб, %': 'Scale, %',
+    'Отразить': 'Mirror',
+    'Поворот, °': 'Rotation, °',
+    'Тащить выбранную картинку прямо во вьюпорте: тащить — двигать, колесо — масштаб, Shift+тащить — поворот': 'Drag the chosen picture right in the viewport: drag to move, wheel to scale, Shift+drag to turn',
+    'Трансформ · пиксели кадра экрана': "Transform · pixels of the screen's frame",
     '+ Картинка…': '+ Picture…',
     '+ Папка': '+ Folder',
     'Двойной щелчок — переименовать': 'Double click to rename',

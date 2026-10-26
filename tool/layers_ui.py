@@ -407,14 +407,100 @@ class LayerRow(QFrame):
         event.acceptProposedAction()
 
 
+class TransformPanel(QFrame):
+    """Where the chosen picture lies: moved, scaled, turned, mirrored."""
+
+    def __init__(self, view) -> None:
+        super().__init__()
+        self.view = view
+        self.layer = None
+        self.setObjectName("qa_transform")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"QFrame#qa_transform {{ background:{theme.DEEP};"
+                           f" border-top:1px solid {theme.SEAM}; }}")
+        from PySide6.QtWidgets import QCheckBox, QDoubleSpinBox, QGridLayout
+        grid = QGridLayout(self)
+        grid.setContentsMargins(10, 6, 10, 8)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        head = QLabel(tr("Трансформ · пиксели кадра экрана"))
+        head.setStyleSheet(f"color:{theme.DIM}; font-size:11px;")
+        grid.addWidget(head, 0, 0, 1, 4)
+        self.fields = {}
+        for at, (key, label, low, high, step) in enumerate((
+                ("x", "X", -100000, 100000, 1), ("y", "Y", -100000, 100000, 1),
+                ("scale", tr("Масштаб, %"), 1, 100000, 1), ("rotation", tr("Поворот, °"), -3600, 3600, 0.5))):
+            name = QLabel(label)
+            name.setStyleSheet(f"color:{theme.QUIET}; font-size:11px;")
+            field = QDoubleSpinBox()
+            field.setObjectName(f"qa_transform_{key}")
+            field.setRange(low, high)
+            field.setSingleStep(step)
+            field.setDecimals(1)
+            field.valueChanged.connect(lambda value, key=key: self._typed(key, value))
+            grid.addWidget(name, 1 + at // 2, (at % 2) * 2)
+            grid.addWidget(field, 1 + at // 2, (at % 2) * 2 + 1)
+            self.fields[key] = field
+        self.flip = QCheckBox(tr("Отразить"))
+        self.flip.setObjectName("qa_transform_flip")
+        self.flip.toggled.connect(lambda on: self._typed("flip", on))
+        grid.addWidget(self.flip, 3, 0, 1, 2)
+        fit = QPushButton(tr("Вписать"))
+        fit.setObjectName("qa_transform_fit")
+        fit.setToolTip(tr("Картинка целиком по центру кадра, без поворота"))
+        fit.clicked.connect(self._fit)
+        grid.addWidget(fit, 3, 2, 1, 2)
+        self._saying = False
+        self.show_layer(None)
+
+    def show_layer(self, layer) -> None:
+        self.layer = layer if layer is not None and layer.kind == "image" else None
+        self.setVisible(self.layer is not None)
+        self.refresh()
+
+    def refresh(self) -> None:
+        if self.layer is None:
+            return
+        self._saying = True
+        try:
+            values = {"x": self.layer.x, "y": self.layer.y, "scale": self.layer.scale * 100.0,
+                      "rotation": self.layer.rotation}
+            for key, field in self.fields.items():
+                if not field.hasFocus():
+                    field.setValue(values[key])
+            self.flip.setChecked(self.layer.flip)
+        finally:
+            self._saying = False
+
+    def _typed(self, key: str, value) -> None:
+        if self._saying or self.layer is None:
+            return
+        if key == "scale":
+            self.layer.scale = max(0.01, value / 100.0)
+        elif key == "flip":
+            self.layer.flip = bool(value)
+        else:
+            setattr(self.layer, key, float(value))
+        self.view.changed_picture()
+
+    def _fit(self) -> None:
+        if self.layer is not None:
+            self.layer.fit()
+            self.refresh()
+            self.view.changed_picture()
+
+
 class StackView(QWidget):
     """A screen's stack in its drawer: a row a layer, the top one first.
 
     The window is asked through `changed` to draw again and keep the stack
-    with the settings; nothing here touches a picture.
+    with the settings, and through `moving` whether the picture under the
+    hand is to be dragged rather than the view; nothing here touches a
+    picture.
     """
 
     changed = Signal()
+    moving = Signal(bool)
 
     def __init__(self, stacks_, screen: str, thumbnail, parent=None) -> None:
         super().__init__(parent)
@@ -446,12 +532,22 @@ class StackView(QWidget):
             button.clicked.connect(act)
             row.addWidget(button)
         row.addStretch(1)
+        self.move_button = QPushButton(tr("Двигать"))
+        self.move_button.setObjectName("qa_stack_move")
+        self.move_button.setCheckable(True)
+        self.move_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.move_button.setToolTip(tr("Тащить выбранную картинку прямо во вьюпорте: тащить — двигать, "
+                                       "колесо — масштаб, Shift+тащить — поворот"))
+        self.move_button.toggled.connect(self.moving.emit)
+        row.addWidget(self.move_button)
         whole.addWidget(tools)
         from PySide6.QtWidgets import QScrollArea
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         whole.addWidget(self.scroll, 1)
+        self.transform = TransformPanel(self)
+        whole.addWidget(self.transform)
         self.rebuild()
 
     # -- what the rows say -------------------------------------------------------
@@ -488,6 +584,8 @@ class StackView(QWidget):
         column.addWidget(hint)
         column.addStretch(1)
         self.scroll.setWidget(holder)
+        if hasattr(self, "transform"):
+            self.transform.show_layer(self.chosen)
 
     # -- what changes ----------------------------------------------------------------
 

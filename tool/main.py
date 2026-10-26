@@ -54,6 +54,7 @@ import kinetic
 import layer_gpu
 import layers
 import layers_ui
+import picking
 import show as showfile
 import trix_export
 import blender_export
@@ -1042,6 +1043,10 @@ class Viewer(QMainWindow):
         self.layer_stacks = layers.Stacks()
         self.layer_pictures = None
         self.layer_blenders: dict = {}
+        self.layer_tool = False            # the hand moves the chosen picture
+        self._layer_drag = None
+        self._picker = None
+        self._cells_now = None             # the top screen's cells as they stand
         self._blender_job = None
         self._show_source = ""         # trix | draft | rows
         self.layer_of: list = []       # which level each show track is
@@ -2268,7 +2273,7 @@ class Viewer(QMainWindow):
         self.show_motors = kinetic.Placed(placed) if placed else None
         self._moved_to = -1               # nothing is where it should be yet
         if self.show_motors is None and self.solid is not None:
-            self.solid.rest_cells()
+            self._rest_cells_now()
             self._moved_to = None
         self._pick_top()
         self.touch()
@@ -3935,6 +3940,9 @@ class Viewer(QMainWindow):
         """
         if self.solid is None:
             return
+        if (self.advanced and self.layer_tool and self.drawer.isVisible()
+                and self._layer_event(event)):
+            return
         if self.inspecting():
             self._fly_event(event)
             return
@@ -4793,6 +4801,8 @@ class Viewer(QMainWindow):
         if key in layers.SCREENS:
             stack = layers_ui.StackView(self.layer_stacks, key, self._layer_thumbnail)
             stack.changed.connect(self._layers_changed)
+            stack.moving.connect(self._set_layer_tool)
+            stack.move_button.setChecked(self.layer_tool)
         self.drawer.show_screen(key, row, self.level == "show", stack=stack)
         self.rail.show_open(key)
         self._place_drawer()
@@ -4812,6 +4822,100 @@ class Viewer(QMainWindow):
         tall, wide = small.shape[:2]
         image = QImage(small.tobytes(), wide, tall, wide * 4, QImage.Format.Format_RGBA8888)
         return QPixmap.fromImage(image.copy())
+
+    def _set_cells_now(self, matrices) -> None:
+        self._cells_now = matrices
+        self.solid.set_cells(matrices)
+
+    def _rest_cells_now(self) -> None:
+        self._cells_now = None
+        self.solid.rest_cells()
+
+    def _set_layer_tool(self, on: bool) -> None:
+        self.layer_tool = bool(on)
+        self._layer_drag = None
+        logfile.write(f"layers: the hand {'moves the picture' if on else 'moves the view'}")
+
+    def _frame_under(self, event):
+        """(baked screen, (x, y) pixels of its frame) under the pointer, or None."""
+        x, y = event.get("x", 0.0), event.get("y", 0.0)
+        mode = self.mode.currentText()
+        if mode in ("Flat", "ReBake"):
+            wide, tall = self.canvas.get_logical_size()
+            showing = self._flat_showing()
+            for name, box in self._strips(showing, int(wide), int(tall), tile=self._tiling()):
+                left, top, across, down = box
+                if left <= x < left + across and top <= y < top + down:
+                    frame = self._pixels(name)
+                    return name, ((x - left) / across * frame[0], (y - top) / down * frame[1])
+            return None
+        if self.mesh is None:
+            return None
+        if self._picker is None:
+            self._picker = picking.Picker(self.mesh.raw)
+        shown = {"Screen_Bottom", "Lamel_screen",
+                 scene3d.KINETIC_SCREEN if self.motors is not None or self.show_motors is not None
+                 else scene3d.DEFAULT_TOP}
+        posed = None
+        if self._cells_now is not None and scene3d.KINETIC_SCREEN in shown:
+            rest = np.asarray(self.mesh.raw[f"{scene3d.KINETIC_SCREEN}__points"], np.float64)
+            cell = np.asarray(self.mesh.raw[f"{scene3d.KINETIC_SCREEN}__cell"], np.int64)
+            m = np.asarray(self._cells_now, np.float64)[cell]
+            posed = {scene3d.KINETIC_SCREEN: np.einsum("vij,vj->vi", m[:, :3, :3], rest) + m[:, :3, 3]}
+        wide, tall = self.canvas.get_logical_size()
+        got = self._picker.pick(self.mesh.view_projection(), (wide, tall), (x, y), shown, posed)
+        if got is None:
+            return None
+        name, (u, v) = got
+        frame = self._pixels(name)
+        return name, (u * frame[0], v * frame[1])
+
+    def _layer_event(self, event) -> bool:
+        """The chosen picture dragged, scaled, turned where it is seen. True when
+        the event was the picture's and not the view's."""
+        stack = getattr(self.drawer, "stack", None)
+        layer = stack.chosen if stack is not None else None
+        if layer is None or layer.kind != "image":
+            return False
+        name = {v: k for k, v in theme.BAKED.items()}.get(stack.screen)
+        kind = event["event_type"]
+        if kind == "wheel":
+            steps = -event.get("dy", 0) / 120.0
+            layer.scale = max(0.01, layer.scale * 1.06 ** steps)
+        elif kind == "pointer_down":
+            under = self._frame_under(event)
+            if under is None or under[0] != name:
+                return True
+            shift = "Shift" in (event.get("modifiers", ()) or ())
+            self._layer_drag = (under[1], event.get("x", 0.0), layer.x, layer.y, layer.rotation, shift)
+            return True
+        elif kind == "pointer_move" and self._layer_drag is not None:
+            start, start_x, x0, y0, turn0, shift = self._layer_drag
+            if shift:
+                layer.rotation = turn0 + (event.get("x", 0.0) - start_x) * 0.4
+            else:
+                under = self._frame_under(event)
+                if under is None or under[0] != name:
+                    return True
+                across = self._pixels(name)[0]
+                dx = under[1][0] - start[0]
+                # The frame goes round the building: a drag across its seam
+                # is the short way, not the whole width the other way.
+                if dx > across / 2:
+                    dx -= across
+                elif dx < -across / 2:
+                    dx += across
+                layer.x, layer.y = x0 + dx, y0 + under[1][1] - start[1]
+        elif kind == "pointer_up":
+            if self._layer_drag is not None:
+                self._layer_drag = None
+                self._remember()
+            return True
+        else:
+            return kind in ("pointer_move", "double_click")
+        stack.transform.refresh()
+        self.touch()
+        return True
 
     def _layers_changed(self) -> None:
         """A layer added, moved, hidden or turned: drawn again, and kept."""
@@ -6968,7 +7072,7 @@ class Viewer(QMainWindow):
         self._moved_to = None
         text = row.field.text().strip()
         if not text:
-            self.solid.rest_cells()
+            self._rest_cells_now()
             self._pick_top()
             self._clear_marks()
             self._say_sources()
@@ -6987,7 +7091,7 @@ class Viewer(QMainWindow):
                 self.cell_is = kinetic.cell_addresses(self.cell_at)
         except Exception as error:  # noqa: BLE001 -- shown beside the field
             self.motors = None
-            self.solid.rest_cells()
+            self._rest_cells_now()
             self._pick_top()
             row.note.setText(str(error)[:60])
             row.retell = None
@@ -7056,9 +7160,9 @@ class Viewer(QMainWindow):
                 return
             self._moved_to = key
             if got is None:
-                self.solid.rest_cells()
+                self._rest_cells_now()
             else:
-                self.solid.set_cells(kinetic.transforms(
+                self._set_cells_now(kinetic.transforms(
                     self.cell_at, self.cell_is, got[0], got[1]))
             return
         if self.motors is None:
@@ -7067,7 +7171,7 @@ class Viewer(QMainWindow):
         if frame == self._moved_to:
             return
         self._moved_to = frame
-        self.solid.set_cells(kinetic.transforms(
+        self._set_cells_now(kinetic.transforms(
             self.cell_at, self.cell_is, self.motors, frame))
 
     def _volume_changed(self, row=None) -> None:
