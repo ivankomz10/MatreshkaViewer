@@ -456,3 +456,98 @@ def test_a_mask_and_effects_from_the_drawer(advanced, tick, tmp_path):
     finally:
         window.layer_stacks = stacks.Stacks()
         tick(0.2)
+
+
+# -- step 9: brushes -------------------------------------------------------------------
+
+def _seen_bottom(window):
+    """A point of the canvas in Preview where the bottom screen is, facing us."""
+    raw = window.mesh.raw
+    points = np.asarray(raw["Screen_Bottom__points"], np.float64)
+    triangles = np.asarray(raw["Screen_Bottom__triangles"], np.int64)
+    middle = points[triangles].mean(1)
+    vp = window.mesh.view_projection()
+    wide, tall = window.canvas.get_logical_size()
+    clip = np.concatenate([middle, np.ones((len(middle), 1))], 1) @ vp.T
+    ndc = clip[:, :2] / clip[:, 3:4]
+    at = np.stack([(ndc[:, 0] + 1) / 2 * wide, (1 - ndc[:, 1]) / 2 * tall], 1)
+    for index in np.argsort(np.abs(ndc).sum(1)):
+        x, y = at[index]
+        got = window._rest_under({"x": x, "y": y})
+        if got is not None and got[0] == "Screen_Bottom":
+            return float(x), float(y)
+    raise AssertionError("no bottom screen in sight")
+
+
+def test_a_brush_paints_the_mask_three_ways_and_is_undone(advanced, tick, tmp_path):
+    from PIL import Image
+    import layers as stacks
+    window = advanced
+    red = np.zeros((90, 160, 4), np.uint8)
+    red[..., 0], red[..., 3] = 255, 255
+    Image.fromarray(red).save(tmp_path / "red.png")
+    window.rail.buttons["Bottom"].click()
+    tick(0.1)
+    stack = window.drawer.stack
+    across, down = window._pixels("Screen_Bottom")
+    try:
+        layer = stack.add_pictures([str(tmp_path / "red.png")])[0]
+        layer.scale = 4.0
+        stack.findChild(QWidget, "qa_stack_mask").click()
+        assert layer.target == "mask"
+        stack.brush_button.setChecked(True)
+        assert window.brush_tool and stack.brush.isVisible() and not stack.move_button.isChecked()
+        mask = window._pictures().rasters.mask(layer, (across, down))
+
+        # By the frame, on the flat strip: a line along the middle.
+        window.mode.setCurrentText("Flat")
+        tick(0.3)
+        stack.brush.modes.setCurrentIndex(stack.brush.modes.findData("flat"))
+        stack.brush.size.setValue(30)
+        wide, tall = window.canvas.get_logical_size()
+        boxes = dict(window._strips(window._flat_showing(), int(wide), int(tall)))
+        left, top, strip, high = boxes["Screen_Bottom"]
+        start, end = (left + strip * 0.2, top + high * 0.5), (left + strip * 0.4, top + high * 0.5)
+        window._canvas_event({"event_type": "pointer_down", "x": start[0], "y": start[1], "button": 1})
+        window._canvas_event({"event_type": "pointer_move", "x": end[0], "y": end[1], "buttons": (1,)})
+        window._canvas_event({"event_type": "pointer_up", "x": end[0], "y": end[1], "button": 1})
+        row = down // 2
+        painted = mask.array[row, int(across * 0.2):int(across * 0.4), 0]
+        assert (painted == 0).mean() > 0.95                       # hidden all the way along
+        assert mask.array[0, 0, 0] == 255 and mask.array[row, int(across * 0.7), 0] == 255
+        tick(0.3)
+        shown = window._screen_to_array("Screen_Bottom", across, down)
+        assert shown[row, int(across * 0.3), 0] < 200 and shown[row, int(across * 0.7), 0] > 240
+        window._canvas_event({"event_type": "key_down", "key": "z", "modifiers": ("Control",)})
+        assert (mask.array == 255).all()                         # undone
+
+        # By the model and by the camera, in Preview.
+        window.mode.setCurrentText(PREVIEW)
+        tick(0.3)
+        at = _seen_bottom(window)
+        for mode in ("model", "camera"):
+            stack.brush.modes.setCurrentIndex(stack.brush.modes.findData(mode))
+            stack.brush.size.setValue(40)
+            window._canvas_event({"event_type": "pointer_down", "x": at[0], "y": at[1], "button": 1})
+            window._canvas_event({"event_type": "pointer_up", "x": at[0], "y": at[1], "button": 1})
+            hidden = mask.array[..., 0] < 128
+            assert 0 < hidden.sum() < hidden.size * 0.2, (mode, hidden.sum())
+            stack.findChild(QWidget, "qa_brush_undo").click()
+            assert (mask.array == 255).all(), mode
+
+        # Aimed at its content, a layer is given a paint effect to paint into.
+        layer.target = "content"
+        stack.brush.modes.setCurrentIndex(stack.brush.modes.findData("model"))
+        stack.brush.colour = (0, 255, 0)
+        window._canvas_event({"event_type": "pointer_down", "x": at[0], "y": at[1], "button": 1})
+        window._canvas_event({"event_type": "pointer_up", "x": at[0], "y": at[1], "button": 1})
+        assert [one.kind for one in layer.effects] == ["paint"]
+        paint = window._pictures().rasters.paint(layer.effects[0], (across, down))
+        green = (paint.array[..., 1] == 255) & (paint.array[..., 3] > 0)
+        assert green.any() and layer.target == f"paint:{layer.effects[0].key}"
+        stack.brush_button.setChecked(False)
+        assert not window.brush_tool
+    finally:
+        window.layer_stacks = stacks.Stacks()
+        window.mode.setCurrentText(PREVIEW)
+        tick(0.2)

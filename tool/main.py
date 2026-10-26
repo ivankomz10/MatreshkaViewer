@@ -51,6 +51,7 @@ import rebake
 import renderer3d
 import scene3d
 import kinetic
+import brush
 import layer_gpu
 import layer_rasters
 import layer_video
@@ -1049,6 +1050,10 @@ class Viewer(QMainWindow):
         self._layer_drag = None
         self._picker = None
         self._surfaces: dict = {}          # the screens' meshes for the remap pass
+        self.brush_tool = False            # the hand paints the chosen layer's target
+        self._stroke = None                # (raster, brush.Stroke, last pointer) while painting
+        self._brush_undo: list = []        # (raster, what to put back), the last first
+        self._geometries: dict = {}
         self._cells_now = None             # the top screen's cells as they stand
         self._blender_job = None
         self._show_source = ""         # trix | draft | rows
@@ -3957,6 +3962,9 @@ class Viewer(QMainWindow):
         if (self.advanced and self.layer_tool and self.drawer.isVisible()
                 and self._layer_event(event)):
             return
+        if (self.advanced and self.brush_tool and self.drawer.isVisible()
+                and self._brush_event(event)):
+            return
         if self.inspecting():
             self._fly_event(event)
             return
@@ -4817,6 +4825,8 @@ class Viewer(QMainWindow):
             stack.changed.connect(self._layers_changed)
             stack.moving.connect(self._set_layer_tool)
             stack.bound.connect(self._place_bound)
+            stack.painting.connect(self._set_brush_tool)
+            stack.undo_wanted.connect(self._undo_stroke)
             stack.mask_thumbnail = self._mask_thumbnail
             stack.move_button.setChecked(self.layer_tool)
         self.drawer.show_screen(key, row, self.level == "show", stack=stack)
@@ -4882,6 +4892,158 @@ class Viewer(QMainWindow):
     def _rest_cells_now(self) -> None:
         self._cells_now = None
         self.solid.rest_cells()
+
+    # -- the brush -----------------------------------------------------------------
+
+    UNDO_DEPTH = 30
+
+    def _set_brush_tool(self, on: bool) -> None:
+        self.brush_tool = bool(on)
+        self._stroke = None
+        logfile.write(f"layers: the hand {'paints' if on else 'moves the view'}")
+
+    def _geometry(self, surface: str, frame: tuple):
+        key = (surface, tuple(frame))
+        if key not in self._geometries:
+            self._geometries[key] = brush.Geometry.of(self.mesh.raw, surface, frame)
+        return self._geometries[key]
+
+    def _brush_target(self, stack):
+        """(raster, its kind) the chosen layer's target is, made if need be:
+        a layer aimed at its content gets a paint effect to paint into."""
+        layer = stack.chosen
+        if layer is None:
+            return None
+        name = {v: k for k, v in theme.BAKED.items()}.get(stack.screen)
+        if name is None:
+            return None
+        frame = self._pixels(name)
+        rasters = self._pictures().rasters
+        if layer.target == "mask" and layer.mask:
+            return rasters.mask(layer, frame), "mask"
+        if layer.target.startswith("paint:"):
+            for effect in layer.effects:
+                if layer.target == f"paint:{effect.key}":
+                    return rasters.paint(effect, frame), "paint"
+        effect = stack.add_effect("paint")
+        logfile.write(f"layers: {layer.name} given a paint effect to paint into")
+        return rasters.paint(effect, frame), "paint"
+
+    def _dab_at(self, event, name: str, settings):
+        """(xs, ys, weights) of one dab under the pointer, on screen `name`."""
+        frame = self._pixels(name)
+        surface = self._top_surface(name)
+        flat_view = self.mode.currentText() in ("Flat", "ReBake")
+        mode = settings.mode
+        if mode == "camera" and not flat_view:
+            wide, tall = self.canvas.get_logical_size()
+            posed = self._posed() if surface == scene3d.KINETIC_SCREEN else None
+            points = posed[surface] if posed else None
+            return brush.camera_dab(self._geometry(surface, frame), self.mesh.view_projection(),
+                                    (wide, tall), (event.get("x", 0.0), event.get("y", 0.0)),
+                                    settings.radius, settings.hardness, points)
+        if mode == "model":
+            got = self._rest_under(event)
+            if got is None or got[0] != name:
+                return None
+            return brush.model_dab(self._geometry(got[1], frame), got[2], got[3],
+                                   settings.radius / 100.0, settings.hardness)
+        # On the frame: where the pointer is on it, from the strip or the building.
+        if flat_view:
+            under = self._frame_under(event)
+            if under is None or under[0] != name:
+                return None
+            at = under[1]
+        else:
+            if self._picker is None:
+                self._picker = picking.Picker(self.mesh.raw)
+            wide, tall = self.canvas.get_logical_size()
+            hit = self._picker.hit(self.mesh.view_projection(), (wide, tall),
+                                   (event.get("x", 0.0), event.get("y", 0.0)),
+                                   self._shown_surfaces(), self._posed())
+            if hit is None or hit[0] != name:
+                return None
+            _, which, triangle, b1, b2 = hit
+            uv = self._picker.surfaces[which][2][self._picker.surfaces[which][1][triangle]]
+            u, v = uv[0] * (1 - b1 - b2) + uv[1] * b1 + uv[2] * b2
+            at = (u * frame[0], (1 - v) * frame[1])
+        return brush.flat_dab(frame, at, settings.radius, settings.hardness)
+
+    def _brush_event(self, event) -> bool:
+        """A stroke painted into the chosen layer's target. True when the
+        event was the brush's."""
+        stack = getattr(self.drawer, "stack", None)
+        if stack is None or self.mesh is None:
+            return False
+        kind = event["event_type"]
+        modifiers = event.get("modifiers", ()) or ()
+        if kind == "key_down" and str(event.get("key", "")).lower() == "z" and "Control" in modifiers:
+            self._undo_stroke()
+            return True
+        name = {v: k for k, v in theme.BAKED.items()}.get(stack.screen)
+        settings = stack.brush
+        if kind == "pointer_down":
+            target = self._brush_target(stack)
+            if target is None:
+                return True
+            raster, what = target
+            stroke = brush.Stroke(raster.array, what, colour=settings.colour, flow=settings.flow,
+                                  erase=settings.erase)
+            here = (event.get("x", 0.0), event.get("y", 0.0))
+            self._stroke = (raster, stroke, here)
+            self._dab(event, name, settings)
+            return True
+        if kind == "pointer_move" and self._stroke is not None:
+            raster, stroke, last = self._stroke
+            here = (event.get("x", 0.0), event.get("y", 0.0))
+            # Dabs a few pixels of the view apart along the way, not only
+            # where the pointer happened to be told.
+            # A frame dab on the strip is cheap and the strip small against
+            # the frame, so a pixel of the view apart; the others, three.
+            flat = settings.mode == "flat" and self.mode.currentText() in ("Flat", "ReBake")
+            spacing, most = (1.0, 160) if flat else (3.0, 24)
+            steps = min(most, max(1, int(np.hypot(here[0] - last[0], here[1] - last[1]) / spacing)))
+            for step in range(1, steps + 1):
+                f = step / steps
+                self._dab({**event, "x": last[0] + (here[0] - last[0]) * f,
+                           "y": last[1] + (here[1] - last[1]) * f}, name, settings)
+            self._stroke = (raster, stroke, here)
+            return True
+        if kind == "pointer_up":
+            if self._stroke is not None:
+                raster, stroke, _ = self._stroke
+                record = stroke.undo()
+                if record is not None:
+                    self._brush_undo.insert(0, (raster, record))
+                    del self._brush_undo[self.UNDO_DEPTH:]
+                self._stroke = None
+                self._remember()
+                stack.rebuild()                  # the mask's thumbnail, as painted
+            return True
+        return kind in ("wheel", "double_click")
+
+    def _dab(self, event, name, settings) -> None:
+        raster, stroke, _ = self._stroke
+        got = self._dab_at(event, name, settings)
+        if got is None:
+            return
+        box = stroke.dab(*got)
+        if box is not None:
+            raster.touch(box)
+            self.touch()
+
+    def _undo_stroke(self) -> None:
+        if not self._brush_undo:
+            return
+        raster, (y0, y1, x0, x1, was) = self._brush_undo.pop(0)
+        raster.array[y0:y1, x0:x1] = was
+        raster.touch((y0, y1, x0, x1))
+        self._remember()
+        self.touch()
+        stack = getattr(self.drawer, "stack", None)
+        if stack is not None:
+            stack.rebuild()
+        logfile.write(f"layers: a stroke on {raster.name} undone")
 
     def _set_layer_tool(self, on: bool) -> None:
         self.layer_tool = bool(on)

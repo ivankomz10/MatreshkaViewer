@@ -557,6 +557,118 @@ class EffectPanel(QFrame):
         self.view.changed_picture()
 
 
+class BrushPanel(QFrame):
+    """How the brush paints: where it lies, how big, how hard, how much, which
+    colour, and the eraser; and the stroke before taken back."""
+
+    MODES = (("flat", "По развертке"), ("model", "По модели"), ("camera", "По камере"))
+
+    def __init__(self, view) -> None:
+        super().__init__()
+        self.view = view
+        self.setObjectName("qa_brush")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"QFrame#qa_brush {{ background:{theme.DEEP};"
+                           f" border-top:1px solid {theme.SEAM}; }}")
+        from PySide6.QtWidgets import QCheckBox, QDoubleSpinBox, QGridLayout
+        # Sizes each in its own units: frame pixels, centimetres, view pixels.
+        self.sizes = {"flat": 40.0, "model": 30.0, "camera": 30.0}
+        self.mode = "model"
+        self.hardness = 0.5
+        self.flow = 1.0
+        self.colour = (255, 255, 255)
+        self.erase = False
+        grid = QGridLayout(self)
+        grid.setContentsMargins(10, 6, 10, 8)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        self.modes = QComboBox()
+        self.modes.setObjectName("qa_brush_mode")
+        for key, text in self.MODES:
+            self.modes.addItem(tr(text), key)
+        self.modes.setToolTip(tr("Как кисть ложится: на развертку, на здание по нормали "
+                                 "или кругом в кадре вида"))
+        self.modes.setCurrentIndex(self.modes.findData(self.mode))
+        self.modes.currentIndexChanged.connect(self._mode)
+        grid.addWidget(self.modes, 0, 0, 1, 2)
+        self.erase_box = QCheckBox(tr("Ластик"))
+        self.erase_box.setObjectName("qa_brush_erase")
+        self.erase_box.setToolTip(tr("Стирать краску; на маске — возвращать белое"))
+        self.erase_box.toggled.connect(lambda on: setattr(self, "erase", bool(on)))
+        grid.addWidget(self.erase_box, 0, 2)
+        self.colour_button = QPushButton()
+        self.colour_button.setObjectName("qa_brush_colour")
+        self.colour_button.setFixedSize(28, 22)
+        self.colour_button.setToolTip(tr("Цвет кисти для эффекта «Кисть»; маска рисуется чёрным"))
+        self.colour_button.clicked.connect(self._pick_colour)
+        grid.addWidget(self.colour_button, 0, 3)
+        self.size_label = QLabel()
+        self.size_label.setStyleSheet(f"color:{theme.QUIET}; font-size:11px;")
+        self.size = QDoubleSpinBox()
+        self.size.setObjectName("qa_brush_size")
+        self.size.setRange(1, 5000)
+        self.size.setDecimals(0)
+        self.size.valueChanged.connect(self._size)
+        grid.addWidget(self.size_label, 1, 0)
+        grid.addWidget(self.size, 1, 1)
+        hard_label = QLabel(tr("Жёсткость, %"))
+        hard_label.setStyleSheet(f"color:{theme.QUIET}; font-size:11px;")
+        self.hard = QDoubleSpinBox()
+        self.hard.setObjectName("qa_brush_hardness")
+        self.hard.setRange(0, 99)
+        self.hard.setDecimals(0)
+        self.hard.setValue(self.hardness * 100)
+        self.hard.valueChanged.connect(lambda value: setattr(self, "hardness", value / 100.0))
+        grid.addWidget(hard_label, 1, 2)
+        grid.addWidget(self.hard, 1, 3)
+        flow_label = QLabel(tr("Сила, %"))
+        flow_label.setStyleSheet(f"color:{theme.QUIET}; font-size:11px;")
+        self.flow_field = QDoubleSpinBox()
+        self.flow_field.setObjectName("qa_brush_flow")
+        self.flow_field.setRange(1, 100)
+        self.flow_field.setDecimals(0)
+        self.flow_field.setValue(self.flow * 100)
+        self.flow_field.valueChanged.connect(lambda value: setattr(self, "flow", value / 100.0))
+        grid.addWidget(flow_label, 2, 0)
+        grid.addWidget(self.flow_field, 2, 1)
+        undo = QPushButton(tr("Отменить"))
+        undo.setObjectName("qa_brush_undo")
+        undo.setToolTip(tr("Убрать последний мазок (Ctrl+Z)"))
+        undo.clicked.connect(view.undo_wanted.emit)
+        grid.addWidget(undo, 2, 2, 1, 2)
+        self._say()
+        self.hide()
+
+    @property
+    def radius(self) -> float:
+        """The size in the mode's own units, as a radius."""
+        return self.sizes[self.mode] / 2.0
+
+    def _say(self) -> None:
+        self.size_label.setText({"flat": tr("Размер, px кадра"), "model": tr("Размер, см"),
+                                 "camera": tr("Размер, px вида")}[self.mode])
+        self.size.blockSignals(True)
+        self.size.setValue(self.sizes[self.mode])
+        self.size.blockSignals(False)
+        r, g, b = self.colour
+        self.colour_button.setStyleSheet(f"background:rgb({r},{g},{b}); border:1px solid {theme.EDGE};")
+
+    def _mode(self, index: int) -> None:
+        self.mode = self.modes.itemData(index) or "model"
+        self._say()
+
+    def _size(self, value: float) -> None:
+        self.sizes[self.mode] = float(value)
+
+    def _pick_colour(self) -> None:
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+        chosen = QColorDialog.getColor(QColor(*self.colour), self, tr("Цвет кисти"))
+        if chosen.isValid():
+            self.colour = (chosen.red(), chosen.green(), chosen.blue())
+            self._say()
+
+
 class TransformPanel(QFrame):
     """Where the chosen picture lies: moved, scaled, turned, mirrored."""
 
@@ -714,6 +826,8 @@ class StackView(QWidget):
 
     changed = Signal()
     moving = Signal(bool)
+    painting = Signal(bool)     # the hand paints in the viewport
+    undo_wanted = Signal()
     bound = Signal(object)      # a layer wanting a place for its decal or projector
 
     def __init__(self, stacks_, screen: str, thumbnail, parent=None) -> None:
@@ -750,15 +864,34 @@ class StackView(QWidget):
             button.clicked.connect(act)
             row.addWidget(button)
         row.addStretch(1)
+        whole.addWidget(tools)
+        # What the hand does in the viewport: the view, the picture, or paint.
+        hands = QWidget()
+        hands.setObjectName("qa_stack_hands")
+        hands.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        hands.setStyleSheet(f"QWidget#qa_stack_hands {{ background:{theme.BAR};"
+                            f" border-bottom:1px solid {theme.SEAM}; }}"
+                            f"QWidget#qa_stack_hands QPushButton {{ padding:3px 10px; font-size:11px; }}")
+        hand_row = QHBoxLayout(hands)
+        hand_row.setContentsMargins(4, 0, 4, 4)
+        hand_row.setSpacing(2)
         self.move_button = QPushButton(tr("Двигать"))
         self.move_button.setObjectName("qa_stack_move")
         self.move_button.setCheckable(True)
         self.move_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.move_button.setToolTip(tr("Тащить выбранную картинку прямо во вьюпорте: тащить — двигать, "
                                        "колесо — масштаб, Shift+тащить — поворот"))
-        self.move_button.toggled.connect(self.moving.emit)
-        row.addWidget(self.move_button)
-        whole.addWidget(tools)
+        self.move_button.toggled.connect(self._moving)
+        hand_row.addWidget(self.move_button)
+        self.brush_button = QPushButton(tr("Кисть"))
+        self.brush_button.setObjectName("qa_stack_brush")
+        self.brush_button.setCheckable(True)
+        self.brush_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.brush_button.setToolTip(tr("Рисовать во вьюпорте по цели слоя: маске или эффекту «Кисть»"))
+        self.brush_button.toggled.connect(self._painting)
+        hand_row.addWidget(self.brush_button)
+        hand_row.addStretch(1)
+        whole.addWidget(hands)
         from PySide6.QtWidgets import QScrollArea
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -766,6 +899,8 @@ class StackView(QWidget):
         whole.addWidget(self.scroll, 1)
         self.effect_panel = EffectPanel(self)
         whole.addWidget(self.effect_panel)
+        self.brush = BrushPanel(self)
+        whole.addWidget(self.brush)
         self.transform = TransformPanel(self)
         whole.addWidget(self.transform)
         self.rebuild()
@@ -853,6 +988,17 @@ class StackView(QWidget):
                "*.mov *.mp4 *.m4v *.mkv *.avi *.mxf);;Все файлы (*)"))
         if chosen:
             self.add_pictures(chosen, near=self.chosen)
+
+    def _moving(self, on: bool) -> None:
+        if on and self.brush_button.isChecked():
+            self.brush_button.setChecked(False)
+        self.moving.emit(on)
+
+    def _painting(self, on: bool) -> None:
+        if on and self.move_button.isChecked():
+            self.move_button.setChecked(False)
+        self.brush.setVisible(on)
+        self.painting.emit(on)
 
     def _mask(self) -> None:
         if self.chosen is None:

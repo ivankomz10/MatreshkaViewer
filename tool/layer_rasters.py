@@ -37,9 +37,21 @@ class Raster:
             {"bytes_per_row": self.width * 4, "rows_per_image": self.height},
             (self.width, self.height, 1))
 
-    def touch(self) -> None:
-        """The array was changed: up to the card, and to be saved."""
-        self.upload()
+    def touch(self, box=None) -> None:
+        """The array was changed -- all of it, or the (y0, y1, x0, x1) of it a
+        brush went over: up to the card, and to be saved."""
+        if box is None:
+            self.upload()
+        else:
+            y0, y1, x0, x1 = (int(v) for v in box)
+            y0, x0 = max(0, y0), max(0, x0)
+            y1, x1 = min(self.height, y1), min(self.width, x1)
+            if y1 > y0 and x1 > x0:
+                self.device.queue.write_texture(
+                    {"texture": self.texture, "origin": (x0, y0, 0)},
+                    np.ascontiguousarray(self.array[y0:y1, x0:x1]),
+                    {"bytes_per_row": (x1 - x0) * 4, "rows_per_image": y1 - y0},
+                    (x1 - x0, y1 - y0, 1))
         self.dirty = True
         self.version += 1
 
