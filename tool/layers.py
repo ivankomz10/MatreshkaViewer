@@ -51,6 +51,10 @@ class Layer:
     scale: float = 1.0
     rotation: float = 0.0
     flip: bool = False
+    # Laid on the building as the audience sees it from the file's camera,
+    # instead of on the screen's frame; x, y then count pixels of the
+    # camera's 9:16 picture, y upwards.
+    remap: bool = False
     ident: int = field(default_factory=lambda: next(_ids))
 
     def fit(self) -> None:
@@ -65,7 +69,7 @@ class Layer:
                "blend": self.blend, "open": self.open}
         if self.kind == "image":
             out.update(x=round(self.x, 3), y=round(self.y, 3), scale=round(self.scale, 5),
-                       rotation=round(self.rotation, 4), flip=self.flip)
+                       rotation=round(self.rotation, 4), flip=self.flip, remap=self.remap)
         if self.kind == "folder":
             out["children"] = [one.to_dict() for one in self.children]
         return out
@@ -81,7 +85,8 @@ class Layer:
                    open=bool(raw.get("open", True)),
                    x=float(raw.get("x", 0.0)), y=float(raw.get("y", 0.0)),
                    scale=float(raw.get("scale", 1.0)) or 1.0,
-                   rotation=float(raw.get("rotation", 0.0)), flip=bool(raw.get("flip", False)))
+                   rotation=float(raw.get("rotation", 0.0)), flip=bool(raw.get("flip", False)),
+                   remap=bool(raw.get("remap", False)))
         if made.kind == "folder":
             made.children = [cls.from_dict(one) for one in raw.get("children") or []]
         return made

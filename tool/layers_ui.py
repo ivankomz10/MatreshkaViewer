@@ -423,9 +423,15 @@ class TransformPanel(QFrame):
         grid.setContentsMargins(10, 6, 10, 8)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(4)
-        head = QLabel(tr("Трансформ · пиксели кадра экрана"))
-        head.setStyleSheet(f"color:{theme.DIM}; font-size:11px;")
-        grid.addWidget(head, 0, 0, 1, 4)
+        self.head = QLabel(tr("Трансформ · пиксели кадра экрана"))
+        self.head.setObjectName("qa_transform_head")
+        self.head.setStyleSheet(f"color:{theme.DIM}; font-size:11px;")
+        grid.addWidget(self.head, 0, 0, 1, 3)
+        self.remap = QCheckBox(tr("Ремап"))
+        self.remap.setObjectName("qa_transform_remap")
+        self.remap.setToolTip(tr("Картинка ложится на здание так, как её видит камера зрителя"))
+        self.remap.toggled.connect(self._remapped)
+        grid.addWidget(self.remap, 0, 3)
         self.fields = {}
         for at, (key, label, low, high, step) in enumerate((
                 ("x", "X", -100000, 100000, 1), ("y", "Y", -100000, 100000, 1),
@@ -469,6 +475,9 @@ class TransformPanel(QFrame):
                 if not field.hasFocus():
                     field.setValue(values[key])
             self.flip.setChecked(self.layer.flip)
+            self.remap.setChecked(self.layer.remap)
+            self.head.setText(tr("Трансформ · по камере, как видит зритель") if self.layer.remap
+                              else tr("Трансформ · пиксели кадра экрана"))
         finally:
             self._saying = False
 
@@ -481,6 +490,16 @@ class TransformPanel(QFrame):
             self.layer.flip = bool(value)
         else:
             setattr(self.layer, key, float(value))
+        self.view.changed_picture()
+
+    def _remapped(self, on: bool) -> None:
+        """Into the camera's picture or back to the frame's: the numbers mean
+        something else there, so the picture starts again fitted."""
+        if self._saying or self.layer is None or self.layer.remap == bool(on):
+            return
+        self.layer.remap = bool(on)
+        self.layer.fit()
+        self.refresh()
         self.view.changed_picture()
 
     def _fit(self) -> None:

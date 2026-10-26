@@ -90,5 +90,44 @@ class Picker:
                 t, index, u, v = got
                 corners = uv[triangles[index]]
                 mixed = corners[0] * (1 - u - v) + corners[1] * u + corners[2] * v
-                best = (t, screen, (float(mixed[0]), float(1.0 - mixed[1])))
+                best = (t, screen, (float(mixed[0]), float(1.0 - mixed[1])), origin + direction * t)
         return None if best is None else (best[1], best[2])
+
+    def world(self, view_projection, size, at, shown=None, posed=None):
+        """The point of the building under a point of the canvas, or None."""
+        origin, direction = ray(view_projection, size, at)
+        best = None
+        for names in SURFACES.values():
+            for name in names:
+                if name not in self.surfaces or (shown is not None and name not in shown):
+                    continue
+                points, triangles, _ = self.surfaces[name]
+                if posed is not None and name in posed:
+                    points = posed[name]
+                got = meet(origin, direction, points, triangles)
+                if got is not None and (best is None or got[0] < best):
+                    best = got[0]
+        return None if best is None else origin + direction * best
+
+    def on_frame(self, name, at, posed=None):
+        """The point of the building a point of a surface's frame is on --
+        (u, v) with v down -- or None where the frame shows nothing."""
+        if name not in self.surfaces:
+            return None
+        points, triangles, uv = self.surfaces[name]
+        if posed is not None and name in posed:
+            points = posed[name]
+        want = np.array([at[0], 1.0 - at[1]])
+        a, b, c = (uv[triangles[:, k]] for k in range(3))
+        e1, e2, s = b - a, c - a, want - a
+        det = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
+        ok = np.abs(det) > 1e-14
+        det = np.where(ok, det, 1.0)
+        u = (s[:, 0] * e2[:, 1] - s[:, 1] * e2[:, 0]) / det
+        v = (e1[:, 0] * s[:, 1] - e1[:, 1] * s[:, 0]) / det
+        inside = ok & (u >= -1e-9) & (v >= -1e-9) & (u + v <= 1 + 1e-9)
+        if not inside.any():
+            return None
+        index = int(np.nonzero(inside)[0][0])
+        corners = points[triangles[index]]
+        return corners[0] * (1 - u[index] - v[index]) + corners[1] * u[index] + corners[2] * v[index]

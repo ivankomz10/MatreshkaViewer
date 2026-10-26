@@ -1046,6 +1046,7 @@ class Viewer(QMainWindow):
         self.layer_tool = False            # the hand moves the chosen picture
         self._layer_drag = None
         self._picker = None
+        self._surfaces: dict = {}          # the screens' meshes for the remap pass
         self._cells_now = None             # the top screen's cells as they stand
         self._blender_job = None
         self._show_source = ""         # trix | draft | rows
@@ -4836,6 +4837,56 @@ class Viewer(QMainWindow):
         self._layer_drag = None
         logfile.write(f"layers: the hand {'moves the picture' if on else 'moves the view'}")
 
+    def _shown_surfaces(self) -> set:
+        return {"Screen_Bottom", "Lamel_screen",
+                scene3d.KINETIC_SCREEN if self.motors is not None or self.show_motors is not None
+                else scene3d.DEFAULT_TOP}
+
+    def _posed(self):
+        """The top screen's points as its cells stand, for the picker, or None."""
+        if self._cells_now is None:
+            return None
+        rest = np.asarray(self.mesh.raw[f"{scene3d.KINETIC_SCREEN}__points"], np.float64)
+        cell = np.asarray(self.mesh.raw[f"{scene3d.KINETIC_SCREEN}__cell"], np.int64)
+        m = np.asarray(self._cells_now, np.float64)[cell]
+        return {scene3d.KINETIC_SCREEN: np.einsum("vij,vj->vi", m[:, :3, :3], rest) + m[:, :3, 3]}
+
+    def _camera_under(self, event):
+        """(baked screen, (x, y) pixels of the file camera's picture, y down)
+        of the place on the building under the pointer, or None."""
+        if self.mesh is None:
+            return None
+        if self._picker is None:
+            self._picker = picking.Picker(self.mesh.raw)
+        mode = self.mode.currentText()
+        if mode in ("Flat", "ReBake"):
+            under = self._frame_under(event)
+            if under is None:
+                return None
+            name, (x, y) = under
+            across, down = self._pixels(name)
+            surface = self._top_surface(name)
+            point = self._picker.on_frame(surface, (x / across, y / down), self._posed())
+        else:
+            wide, tall = self.canvas.get_logical_size()
+            got = self._picker.pick(self.mesh.view_projection(), (wide, tall),
+                                    (event.get("x", 0.0), event.get("y", 0.0)),
+                                    self._shown_surfaces(), self._posed())
+            if got is None:
+                return None
+            name = got[0]
+            point = self._picker.world(self.mesh.view_projection(), (wide, tall),
+                                       (event.get("x", 0.0), event.get("y", 0.0)),
+                                       self._shown_surfaces(), self._posed())
+        if point is None:
+            return None
+        view_projection, _ = self.file_camera()
+        clip = view_projection @ np.array([*point, 1.0])
+        if clip[3] <= 0:
+            return None
+        across, down = layer_gpu.CAMERA_PICTURE
+        return name, ((clip[0] / clip[3] + 1) / 2 * across, (1 - clip[1] / clip[3]) / 2 * down)
+
     def _frame_under(self, event):
         """(baked screen, (x, y) pixels of its frame) under the pointer, or None."""
         x, y = event.get("x", 0.0), event.get("y", 0.0)
@@ -4853,15 +4904,8 @@ class Viewer(QMainWindow):
             return None
         if self._picker is None:
             self._picker = picking.Picker(self.mesh.raw)
-        shown = {"Screen_Bottom", "Lamel_screen",
-                 scene3d.KINETIC_SCREEN if self.motors is not None or self.show_motors is not None
-                 else scene3d.DEFAULT_TOP}
-        posed = None
-        if self._cells_now is not None and scene3d.KINETIC_SCREEN in shown:
-            rest = np.asarray(self.mesh.raw[f"{scene3d.KINETIC_SCREEN}__points"], np.float64)
-            cell = np.asarray(self.mesh.raw[f"{scene3d.KINETIC_SCREEN}__cell"], np.int64)
-            m = np.asarray(self._cells_now, np.float64)[cell]
-            posed = {scene3d.KINETIC_SCREEN: np.einsum("vij,vj->vi", m[:, :3, :3], rest) + m[:, :3, 3]}
+        shown = self._shown_surfaces()
+        posed = self._posed() if scene3d.KINETIC_SCREEN in shown else None
         wide, tall = self.canvas.get_logical_size()
         got = self._picker.pick(self.mesh.view_projection(), (wide, tall), (x, y), shown, posed)
         if got is None:
@@ -4883,7 +4927,7 @@ class Viewer(QMainWindow):
             steps = -event.get("dy", 0) / 120.0
             layer.scale = max(0.01, layer.scale * 1.06 ** steps)
         elif kind == "pointer_down":
-            under = self._frame_under(event)
+            under = self._camera_under(event) if layer.remap else self._frame_under(event)
             if under is None or under[0] != name:
                 return True
             shift = "Shift" in (event.get("modifiers", ()) or ())
@@ -4893,6 +4937,13 @@ class Viewer(QMainWindow):
             start, start_x, x0, y0, turn0, shift = self._layer_drag
             if shift:
                 layer.rotation = turn0 + (event.get("x", 0.0) - start_x) * 0.4
+            elif layer.remap:
+                # The camera's picture has no seam, and up in it is plus.
+                under = self._camera_under(event)
+                if under is None:
+                    return True
+                layer.x = x0 + under[1][0] - start[0]
+                layer.y = y0 - (under[1][1] - start[1])
             else:
                 under = self._frame_under(event)
                 if under is None or under[0] != name:
@@ -4934,7 +4985,33 @@ class Viewer(QMainWindow):
         if blender is None:
             blender = self.layer_blenders[key] = layer_gpu.LayerBlender(
                 self.device, composer.width, composer.height)
-        blender.apply(encoder, composer.texture, shown, self._pictures())
+        blender.apply(encoder, composer.texture, shown, self._pictures(), self._remap_for(name))
+
+    def _top_surface(self, name: str) -> str:
+        """The mesh a screen's frame is on: the top screen's cells when they move."""
+        if name == scene3d.DEFAULT_TOP and self._cells_now is not None:
+            return scene3d.KINETIC_SCREEN
+        return name
+
+    def file_camera(self):
+        """(view_projection, eye) of the file's camera, for its 9:16 picture."""
+        mesh = self.mesh
+        matrix = np.array(mesh.raw["camera_matrix"], np.float64)
+        projection = scene3d.projection(mesh.lens, mesh.sensor, mesh.fit, layer_gpu.CAMERA_PICTURE,
+                                        mesh.near, mesh.far)
+        return projection @ scene3d.look_through(matrix), matrix[:3, 3]
+
+    def _remap_for(self, name: str):
+        """What the remap pass needs for a screen, or None without a building."""
+        if self.mesh is None or f"{name}__uv" not in self.mesh.raw.files:
+            return None
+        surface_name = self._top_surface(name)
+        surface = self._surfaces.get(surface_name)
+        if surface is None:
+            surface = self._surfaces[surface_name] = layer_gpu.Surface(
+                self.device, self.mesh.raw, surface_name, surface_name == scene3d.KINETIC_SCREEN)
+        surface.pose(self._cells_now if surface.kinetic else None)
+        return surface, self.file_camera()
 
     def _close_drawer(self) -> None:
         if self.drawer.isVisible():
