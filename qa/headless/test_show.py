@@ -28,8 +28,10 @@ def every_show():
 @needs_shows
 def test_every_show_reads(every_show):
     assert len(every_show) == len(FILES)
+    # No length asked for: most shows are 22 minutes, not all of them (the
+    # TeacherDay one of 03.10 is 27).
     for one, path in zip(every_show, FILES):
-        assert one.length == 79200, f"{path.name}: {one.length} frames"
+        assert one.length > 0, f"{path.name}: {one.length} frames"
         assert one.clips, f"{path.name} came out empty"
 
 
