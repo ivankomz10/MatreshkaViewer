@@ -176,6 +176,7 @@ class Drawer(QFrame):
     """One screen's drawer: its source and its stack, edged in its colour."""
 
     closed = Signal()
+    clip_chosen = Signal(int)       # in the show: whose layers, by the clip's ident
 
     def __init__(self, parent) -> None:
         super().__init__(parent)
@@ -220,7 +221,8 @@ class Drawer(QFrame):
         self.whole.addWidget(self.body, 1)
         self.hide()
 
-    def show_screen(self, key: str, row, in_show: bool = False, stack=None) -> None:
+    def show_screen(self, key: str, row, in_show: bool = False, stack=None,
+                    clips=None, chosen=None) -> None:
         """Fill the drawer for one screen and colour it. In the show the
         screen is fed by its track's clips, and the card says so. `stack`, a
         StackView, is the screen's layers; without one the drawer says why
@@ -245,6 +247,8 @@ class Drawer(QFrame):
             self.card.let_go()
         self.card = SourceCard(row, colour, in_show=in_show)
         self.body_layout.addWidget(self.card)
+        if in_show and clips is not None:
+            self.body_layout.addWidget(self._under_playhead(clips, chosen, colour))
         self.stack = stack
         if stack is not None:
             self.body_layout.addWidget(stack, 1)
@@ -258,6 +262,36 @@ class Drawer(QFrame):
             f" margin:8px; padding:8px; }}")
         self.body_layout.addWidget(self.stack_note)
         self.body_layout.addStretch(1)
+
+    def _under_playhead(self, clips, chosen, colour: str):
+        """The track's clips the playhead is on, a button each, lowest level
+        first: the chosen one's layers are below."""
+        holder = QWidget()
+        holder.setObjectName("qa_drawer_clips")
+        line = QVBoxLayout(holder)
+        line.setContentsMargins(6, 4, 6, 4)
+        line.setSpacing(2)
+        if not clips:
+            note = QLabel(tr("Под плейхедом на этой дорожке ролика нет: слои — у роликов."))
+            note.setObjectName("qa_drawer_no_clip")
+            note.setWordWrap(True)
+            note.setStyleSheet(f"color:{theme.FAINT}; font-size:11px;")
+            line.addWidget(note)
+            return holder
+        for clip in clips:
+            button = QPushButton(f"L{clip.level} · {clip.name}"
+                                 + (f"  ·  {len(clip.layers)}" if clip.layers else ""))
+            button.setObjectName(f"qa_drawer_clip_{clip.ident}")
+            button.setProperty("fixed_words", True)       # a file's name
+            button.setCheckable(True)
+            button.setChecked(clip.ident == chosen)
+            button.setToolTip(tr("Слои этого ролика"))
+            button.setStyleSheet(
+                f"QPushButton {{ text-align:left; padding:3px 8px; font-size:11px; }}"
+                f"QPushButton:checked {{ border:1px solid {colour}; background:{theme.RAISED}; }}")
+            button.clicked.connect(lambda _=False, ident=clip.ident: self.clip_chosen.emit(ident))
+            line.addWidget(button)
+        return holder
 
     @staticmethod
     def _empty_words(key: str) -> str:

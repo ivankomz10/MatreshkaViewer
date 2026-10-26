@@ -763,8 +763,14 @@ class LayerBlender:
         own = encoder is None
         if own:
             encoder = self.device.create_command_encoder()
-        self._pass = 0
-        self._touches = 0
+        # A uniform a pass, numbered through the encoder: in a show one
+        # blender lays every clip of its screen into the same encoder, and
+        # buffers numbered again from nought would be written over before any
+        # of it ran.
+        if own or encoder is not getattr(self, "_encoder", None):
+            self._pass = 0
+            self._touches = 0
+        self._encoder = None if own else encoder
         first = self._pair(0)[1]
         encoder.copy_texture_to_texture({"texture": composed_texture}, {"texture": first},
                                         (self.width, self.height, 1))

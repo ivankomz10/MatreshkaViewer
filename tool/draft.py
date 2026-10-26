@@ -152,6 +152,22 @@ class History:
         self._last = (label, key, now)
         return True
 
+    def took(self, label: str, snapshot: dict, key=None) -> bool:
+        """A change made already, and `snapshot` the show as it was before
+        it: for what says so only afterwards, as a layer does. False when it
+        is one with the change before it."""
+        now = time.monotonic()
+        if (key is not None and self._last is not None
+                and self._last[:2] == (label, key)
+                and now - self._last[2] < TOGETHER and self.back):
+            self._last = (label, key, now)
+            return False
+        self.back.append((label, snapshot))
+        del self.back[:-self.depth]
+        self.ahead.clear()
+        self._last = (label, key, now)
+        return True
+
     def forget_last(self) -> None:
         """The change that was about to happen did not: a click, not a drag."""
         if self.back:

@@ -70,7 +70,7 @@ def _laid(device, movie, layer, seconds):
     pictures = layer_gpu.Pictures(device)
     pictures.movies = layer_video.Movies(device)
     try:
-        pictures.movies.exact(seconds, stacks.playing())
+        pictures.movies.exact([(one, seconds) for one in stacks.playing()])
         layer_gpu.LayerBlender(device, width, height).apply(
             None, composer.texture, stacks.shown("Bottom"), pictures)
         return composer.to_array()
@@ -116,7 +116,7 @@ def test_a_movie_layer_lies_remapped_too(device, movie):
     pictures = layer_gpu.Pictures(device)
     pictures.movies = layer_video.Movies(device)
     try:
-        pictures.movies.exact(1.6, stacks.playing())
+        pictures.movies.exact([(one, 1.6) for one in stacks.playing()])
         surface = layer_gpu.Surface(device, raw, "Screen_Bottom")
         layer_gpu.LayerBlender(device, *size).apply(
             None, composer.texture, stacks.shown("Bottom"), pictures, (surface, (vp, matrix[:3, 3])))

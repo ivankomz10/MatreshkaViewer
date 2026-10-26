@@ -316,16 +316,23 @@ class Stacks:
     def playing(self) -> list:
         """The video layers on show, on every screen: what is read."""
         out = []
+        for screen in self.screens:
+            out += playing_of(self.shown(screen))
+        return out
 
-        def walk(shown):
+
+def playing_of(shown) -> list:
+    """The video layers in what `Stacks.shown` gave."""
+    out = []
+
+    def walk(shown):
             for one, inner in shown:
                 if inner is not None:
                     walk(inner)
                 elif one.kind == "video":
                     out.append(one)
-        for screen in self.screens:
-            walk(self.shown(screen))
-        return out
+    walk(shown)
+    return out
 
 
 # -- the sums, for holding the graphics card to -------------------------------------

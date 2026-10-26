@@ -564,3 +564,60 @@ def test_a_brush_paints_the_mask_three_ways_and_is_undone(advanced, tick, tmp_pa
         window.layer_stacks = stacks.Stacks()
         window.mode.setCurrentText(PREVIEW)
         tick(0.2)
+
+
+# -- step 10: layers on show clips -----------------------------------------------------
+
+def test_in_a_show_the_drawer_is_the_clip_under_the_playhead(advanced, clips, tick, tmp_path):
+    from PIL import Image
+    import layers as stacks
+    from test_quiet import put_back
+    from test_show_mode import settled_at
+    window = advanced
+    red = np.zeros((90, 160, 4), np.uint8)
+    red[..., 0], red[..., 3] = 255, 255
+    Image.fromarray(red).save(tmp_path / "red.png")
+    put_back(window, clips, tick)
+    window._set_level("show")
+    settled_at(window, tick, 30)
+    across, down = window._pixels("Screen_Bottom")
+    plain = window._screen_to_array("Screen_Bottom", across, down)
+    try:
+        _open_screen(window, "Bottom")
+        clip = next(one for one in window.show_open.clips if one.row == "Bottom")
+        button = window.drawer.findChild(QWidget, f"qa_drawer_clip_{clip.ident}")
+        assert button is not None and button.isChecked()
+        stack = window.drawer.stack
+        assert stack is not None and stack.stacks.stack("Bottom") is clip.layers
+        layer = stack.add_pictures([str(tmp_path / "red.png")])[0]
+        layer.scale = 4.0
+        stack.changed_picture()
+        assert clip.layers == [layer]
+        # Kept as a change of the show: in its history and its draft.
+        assert window.history.back and window.history.back[-1][0] == "слои ролика"
+        assert window.draft is not None
+        window.touch()
+        tick(0.4)
+        got = window._screen_to_array("Screen_Bottom", across, down)
+        middle = got[down // 2, across // 2]
+        assert middle[0] > 240 and middle[1] < 15 and np.abs(got - plain).mean() > 1.0
+        # The screen's own stack is the quick look's, not laid in a show.
+        assert not window.layer_stacks.stack("Bottom")
+        # Past the clip there is no clip under the playhead, and the drawer says so.
+        window._move(1.5)
+        tick(0.4)
+        assert window.drawer.findChild(QWidget, "qa_drawer_no_clip") is not None
+        assert window.drawer.stack is None
+        settled_at(window, tick, 30)
+        tick(0.2)
+        assert window.drawer.findChild(QWidget, f"qa_drawer_clip_{clip.ident}") is not None
+        # The layer lies on its clip, so a fade of the clip takes it too.
+        assert window.drawer.stack.stacks.stack("Bottom")[0] is layer
+    finally:
+        window._close_drawer()
+        window.history.clear()
+        window._say_undo()
+        window._set_level("view")
+        put_back(window, clips, tick)
+        window.layer_stacks = stacks.Stacks()
+        tick(0.2)

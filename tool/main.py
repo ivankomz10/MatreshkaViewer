@@ -1051,6 +1051,10 @@ class Viewer(QMainWindow):
         self._picker = None
         self._surfaces: dict = {}          # the screens' meshes for the remap pass
         self.brush_tool = False            # the hand paints the chosen layer's target
+        self._drawer_clip: dict = {}       # in the show: a screen's chosen clip, by ident
+        self._clip_composers: dict = {}    # a show clip with layers, made on its own
+        self._drawer_clips = None          # (key, idents) the drawer was made for
+        self._layers_before = None         # the show before the next layer change
         self._stroke = None                # (raster, brush.Stroke, last pointer) while painting
         self._brush_undo: list = []        # (raster, what to put back), the last first
         self._geometries: dict = {}
@@ -1232,6 +1236,7 @@ class Viewer(QMainWindow):
         self.rail.setVisible(False)
         beside.addWidget(self.rail)
         self.drawer = layers_ui.Drawer(upper)
+        self.drawer.clip_chosen.connect(self._choose_clip)
         self.drawer_host = upper
         self.rail.chosen.connect(self._open_drawer)
         self.drawer.closed.connect(self._close_drawer)
@@ -1623,6 +1628,9 @@ class Viewer(QMainWindow):
         self._say_undo()
         self.show_view.say(f"{how}: {label}")
         self._draft_timer.start(800)
+        # The clips are new ones now: a drawer on one of them is made again.
+        if self.advanced and self.drawer.isVisible() and getattr(self.drawer, "key", "") in layers.SCREENS:
+            self._open_drawer(self.drawer.key)
 
     def _renamed(self) -> None:
         show = self.show_open
@@ -2398,10 +2406,38 @@ class Viewer(QMainWindow):
                     continue
                 level = clip.opacity_at(frame)
                 if level > 0.0:
-                    layers.append((self.screens[index], level))
+                    layers.append((self._with_layers(encoder, name, composer, clip, index,
+                                                     premultiplied), level))
             composer.compose(layers, premultiplied=premultiplied,
                              encoder=encoder)
             self._lay_layers(encoder, name, composer)
+
+    def _with_layers(self, encoder, name: str, composer, clip, index: int, premultiplied: bool):
+        """What a show clip puts on its screen: its picture, or -- in the
+        advanced mode, with layers -- its picture with its layers on it, made
+        on its own before the screen's levels are added up."""
+        if not self.advanced or not clip.layers:
+            return self.screens[index]
+        shown = layers.Stacks.of_clip(clip).shown(clip.row)
+        if not shown:
+            return self.screens[index]
+        key = (clip.ident, composer.width, composer.height)
+        own = self._clip_composers.get(key)
+        if own is None:
+            own = self._clip_composers[key] = screen_gpu.Compositor(
+                self.device, composer.width, composer.height)
+        own.compose([(self.screens[index], 1.0)], premultiplied=premultiplied, encoder=encoder)
+        self._blender_for(name, composer).apply(encoder, own.texture, shown, self._pictures(),
+                                                self._remap_for(name))
+        return own.as_screen()
+
+    def _blender_for(self, name: str, composer):
+        key = (name, composer.width, composer.height)
+        blender = self.layer_blenders.get(key)
+        if blender is None:
+            blender = self.layer_blenders[key] = layer_gpu.LayerBlender(
+                self.device, composer.width, composer.height)
+        return blender
 
     def _compose_quick_look(self) -> None:
         """In the advanced mode the quick look's screens are made the way a
@@ -2433,8 +2469,9 @@ class Viewer(QMainWindow):
 
     def _exact_layer_movies(self, seconds: float) -> None:
         """A render's video layers, each on the very frame of `seconds`."""
-        if self.advanced and self.layer_stacks.playing():
-            self._pictures().movies.exact(seconds, self.layer_stacks.playing())
+        timed = self._timed_layer_movies(seconds) if self.advanced else []
+        if timed:
+            self._pictures().movies.exact(timed)
 
     def _keys_card(self) -> None:
         """The keys and the mouse, over the picture's top left, when asked for."""
@@ -4820,8 +4857,23 @@ class Viewer(QMainWindow):
         row = None if self.level == "show" else next(
             (one for one in self.rows if one.title == key), None)
         stack = None
-        if key in layers.SCREENS:
-            stack = layers_ui.StackView(self.layer_stacks, key, self._layer_thumbnail)
+        clips, chosen = None, None
+        stacks = self.layer_stacks
+        if self.level == "show" and key in layers.SCREENS:
+            # The inspector under the playhead: the layers of a clip.
+            clips = self._clips_under(key)
+            idents = [one.ident for one in clips]
+            chosen = self._drawer_clip.get(key)
+            if chosen not in idents:
+                chosen = idents[0] if idents else None
+            self._drawer_clip[key] = chosen
+            self._drawer_clips = (key, tuple(idents))
+            clip = next((one for one in clips if one.ident == chosen), None)
+            stacks = layers.Stacks.of_clip(clip) if clip is not None else None
+            if self.show_open is not None:
+                self._layers_before = drafts.show_to_dict(self.show_open)
+        if key in layers.SCREENS and stacks is not None:
+            stack = layers_ui.StackView(stacks, key, self._layer_thumbnail)
             stack.changed.connect(self._layers_changed)
             stack.moving.connect(self._set_layer_tool)
             stack.bound.connect(self._place_bound)
@@ -4833,7 +4885,8 @@ class Viewer(QMainWindow):
                 stack.brush.take(before.brush)
             stack.move_button.setChecked(self.layer_tool)
             stack.brush_button.setChecked(self.brush_tool)
-        self.drawer.show_screen(key, row, self.level == "show", stack=stack)
+        self.drawer.show_screen(key, row, self.level == "show", stack=stack,
+                                clips=clips, chosen=chosen)
         self.rail.show_open(key)
         self._place_drawer()
         self.drawer.show()
@@ -4854,10 +4907,27 @@ class Viewer(QMainWindow):
         True while one waits for its frame: draw again."""
         if self.layer_pictures is None and not self.advanced:
             return False
-        playing = self.layer_stacks.playing() if self.advanced else []
-        if not playing and self.layer_pictures is None:
+        timed = self._timed_layer_movies(seconds) if self.advanced else []
+        if not timed and self.layer_pictures is None:
             return False
-        return self._pictures().movies.feed(seconds, playing)
+        return self._pictures().movies.feed(timed)
+
+    def _timed_layer_movies(self, seconds: float) -> list:
+        """(layer, its seconds) of every video layer on show now: the screens'
+        own in the quick look, the clips' in a show, by the clip's time."""
+        if self.level != "show":
+            return [(one, seconds) for one in self.layer_stacks.playing()]
+        show = self.show_open
+        if show is None:
+            return []
+        frame = seconds * showfile.FPS
+        out = []
+        for clip in show.clips:
+            if clip.layers and clip.kind == "video" and clip.covers(frame):
+                local = (frame - clip.first) / showfile.FPS
+                shown = layers.Stacks.of_clip(clip).shown(clip.row)
+                out += [(one, local) for one in layers.playing_of(shown)]
+        return out
 
     def _mask_thumbnail(self, layer):
         """A layer's mask, small, for its row: as painted, or white."""
@@ -5264,13 +5334,55 @@ class Viewer(QMainWindow):
         return True
 
     def _layers_changed(self) -> None:
-        """A layer added, moved, hidden or turned: drawn again, and kept."""
+        """A layer added, moved, hidden or turned: drawn again, and kept --
+        with the settings, or a show clip's with the show's draft and its
+        history."""
         self.touch()
         self._remember()
+        show = self.show_open
+        if self.level != "show" or show is None or self._layers_before is None:
+            return
+        key = getattr(self.drawer, "key", "")
+        self.history.took(tr("слои ролика"), self._layers_before,
+                          key=("layers", self._drawer_clip.get(key)))
+        self._layers_before = drafts.show_to_dict(show)
+        self._ensure_draft()
+        self.draft.changes += 1
+        self._say_undo()
+        self._draft_timer.start(800)
+
+    def _clips_under(self, key: str) -> list:
+        """The pictures of a screen's track under the playhead, lowest level first."""
+        show = self.show_open
+        if show is None:
+            return []
+        frame = self.clock.seconds * showfile.FPS
+        return sorted((one for one in show.clips
+                       if one.row == key and one.kind == "video" and not one.missing
+                       and one.covers(frame)), key=lambda one: (one.level, one.ident))
+
+    def _follow_playhead(self) -> None:
+        """In the show the drawer is what is under the playhead: made again
+        when the clips there are other ones, never in the middle of a stroke."""
+        if (self.level != "show" or not self.advanced or not self.drawer.isVisible()
+                or self._stroke is not None or self._layer_drag is not None):
+            return
+        key = getattr(self.drawer, "key", "")
+        if key not in layers.SCREENS:
+            return
+        idents = tuple(one.ident for one in self._clips_under(key))
+        if self._drawer_clips != (key, idents):
+            self._open_drawer(key)
+
+    def _choose_clip(self, ident: int) -> None:
+        key = getattr(self.drawer, "key", "")
+        self._drawer_clip[key] = ident
+        self._open_drawer(key)
 
     def _lay_layers(self, encoder, name: str, composer) -> None:
         """The screen's stack over its composed picture, in the advanced mode."""
-        if not self.advanced:
+        # In a show the layers are the clips' own (`_with_layers`), not the screen's.
+        if not self.advanced or self.level == "show":
             return
         shown = self.layer_stacks.shown(theme.BAKED.get(name, ""))
         if not shown:
@@ -6964,6 +7076,7 @@ class Viewer(QMainWindow):
                     now = self.clock.raw * showfile.FPS
             self._show_was = now
             self.show_view.set_frame(seconds * showfile.FPS)
+            self._follow_playhead()
         self._move_screens(seconds)
         if self.player is not None and self.player.playing and not self.clock.playing:
             self.player.pause()            # the timeline reached its end

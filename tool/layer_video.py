@@ -156,19 +156,22 @@ class Movies:
             movie = self._held[key] = LayerMovie(self.device, layer.path)
         return movie
 
-    def feed(self, seconds: float, layers) -> bool:
-        """Every one of `layers` brought to the clock; the others let go of.
-        True while one is still waiting for its frame."""
-        alive = {(one.ident, one.path) for one in layers}
+    def feed(self, timed) -> bool:
+        """Every layer of `timed` -- (layer, seconds of its own clock) -- brought
+        to its time; the others let go of. True while one still waits for its
+        frame. In the quick look every layer goes by the window's clock, in a
+        show by its clip's: from where the clip comes on."""
+        timed = list(timed)
+        alive = {(one.ident, one.path) for one, _ in timed}
         for key in [key for key in self._held if key not in alive]:
             self._held.pop(key).close()
         waiting = False
-        for layer in layers:
+        for layer, seconds in timed:
             waiting |= self.get(layer).feed(seconds, layer)
         return waiting
 
-    def exact(self, seconds: float, layers) -> None:
-        for layer in layers:
+    def exact(self, timed) -> None:
+        for layer, seconds in timed:
             self.get(layer).exact(seconds, layer)
 
     def close(self) -> None:
