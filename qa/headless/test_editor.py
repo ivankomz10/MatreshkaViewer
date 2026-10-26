@@ -516,7 +516,7 @@ def test_the_show_goes_out_as_its_next_version_and_its_file_stays(editor, tick,
 # -- the top screen out to Blender ----------------------------------------------
 
 @needs_rusday
-def test_a_top_clip_offers_its_frames_and_its_picture_to_blender(editor, tick):
+def test_a_top_clip_offers_its_frames_to_blender(editor, tick):
     window = editor
     window.open_show_file(str(RUSDAY))
     tick(0.3)
@@ -530,8 +530,7 @@ def test_a_top_clip_offers_its_frames_and_its_picture_to_blender(editor, tick):
     button.click()
     request, blender, note = asked[-1]
     assert request.first == clip.first and request.length == clip.last - clip.tail - clip.first
-    assert request.source == clip.path and request.source_offset == 0
-    assert request.mode == "viewer" and request.target.endswith(".blend")
+    assert request.source == "" and request.target.endswith(".blend")
     assert note and window._blender_job is None          # let go of: nothing started
 
 
@@ -541,9 +540,8 @@ def test_the_blender_dialog_hands_back_what_was_chosen(window, tmp_path):
     request = blender_export.Request(target=str(tmp_path / "a.blend"), first=1100, length=600,
                                      source="D:/x.mov", source_offset=12, name="шоу")
     dialog = blender_dialog.BlenderDialog(window, request, "C:/blender.exe", "соты на моторах шоу")
-    dialog.findChild(QWidget, "qa_blender_mode_decal").setChecked(True)
     dialog.findChild(QWidget, "qa_blender_length").setValue(300)
     got = dialog.request()
-    assert (got.first, got.length, got.mode, got.source, got.source_offset) == (1100, 300, "decal", "D:/x.mov", 12)
+    assert (got.first, got.length, got.source, got.source_offset) == (1100, 300, "D:/x.mov", 12)
     assert dialog.blender.text() == "C:/blender.exe"
     dialog.deleteLater()

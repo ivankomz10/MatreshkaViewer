@@ -1718,12 +1718,12 @@ class Inspector(QWidget):
         self.to_render.setEnabled(False)
         top.addWidget(self.to_render)
         # The chosen clip's frames out to Blender: the top screen moving as
-        # the motors move it, a projection on it, ready to render the
-        # screen's own frame and put it back here.
+        # the motors move it, to put 3D models inside and render them onto
+        # its cells -- the screen's own frame, to put back here.
         self.to_blender = _small_button(
             tr("В Blender…"), "qa_show_clip_blender",
-            tr("Сцена Blender на кадры этого клипа: Top с кинетикой, проекция "
-               "картинки на соты и рендер развертки экрана, который встаёт "
+            tr("Сцена Blender на кадры этого клипа: Top на моторах, чтобы вписать "
+               "в него 3D-модели, и рендер развертки экрана, который встаёт "
                "обратно на дорожку Top"))
         self.to_blender.clicked.connect(self._to_blender)
         self.to_blender.setEnabled(False)

@@ -1,5 +1,5 @@
-"""The top screen's motion, out to Blender: a scene that renders the screen's
-own frame, every frame, with the cells where the motors put them.
+"""The top screen's motion, out to Blender: a scene to put 3D models in, inside
+the moving honeycomb, and to render them onto it.
 
 The remap the content team has used so far is still. The picture is rendered
 from the viewer's camera (`Zaryadye_ProjectionCamera_9x16_v1`, 9:16), the top
@@ -17,25 +17,23 @@ script run inside Blender builds the scene around it.
 
 What Blender gets, in centimetres as the studio's own files are:
 
-  Top 3D          the cells on the cache, the building around them, the
-                  viewer's camera, the camera the viewer was looking through
-                  when this was exported, and an empty for the decal
-  Top развертка   the same cells unrolled to the screen's frame and filmed
-                  from above, 2560 x 1150, every frame: what goes back on the
-                  timeline at the frame it came from
+  Top 3D          where the models go -- like the cube in the jar of the
+                  test scene. The cells on the cache, drawn as a wire cage so
+                  the volume they sweep is in plain view and left out of the
+                  render; the building, the same; the viewer's camera, which
+                  renders the models at 2160 x 3840 on a clear ground into
+                  render/<name>_view_####.png
+  Top flat        the same cells unrolled to the screen's frame and filmed
+                  from above, 2560 x 1150. Each cell takes its piece of that
+                  frame's render from where it stands that frame, so from the
+                  audience the models hold together and the moving cells cut
+                  them into hexes. Rendered after Top 3D, into
+                  render/<name>_top_####.png -- what goes back on the Top track
+                  at the frame it came from.
 
-and one projection in geometry nodes, three ways, chosen by a number on the
-modifier and kept switchable in the file:
-
-  0 по зрителю    from the viewer's camera, as the remap always was, but on
-                  the cells as they stand that frame: from where the audience
-                  sits the picture holds together and the moving cells cut it
-                  into hexes
-  1 декаль        laid on the cells round the building, in metres of their
-                  own surface, so it is not stretched by the shape: the cells
-                  carry it as they move
-  2 с камеры вида from the camera the viewer was looking through, for a
-                  projector anywhere else
+A picture rendered elsewhere from the same camera can stand in for Top 3D's
+render: then that is what the unrolled screen reads. The decal and the
+projection from another camera are the viewer's own business, on its layers.
 
 The script that runs inside Blender is `blender_top.py`; everything it is told
 goes in one JSON beside the cache.
@@ -47,7 +45,7 @@ import os
 import re
 import struct
 import subprocess
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -56,16 +54,12 @@ import kinetic
 import scene3d
 from lang import tr
 
-MODES = ("viewer", "decal", "view")
 FPS = 60
 FRAME = (2560, 1150)               # the top screen's own frame
 CONTENT = (2160, 3840)             # what the viewer's camera renders, 9:16
 CM = 100.0                         # the viewer is in metres, the studio in cm
 SCRIPT = Path(__file__).resolve().with_name("blender_top.py")
 BLENDERS = Path(r"C:\Program Files\Blender Foundation")
-# The name the second camera has in the .blend: a name in a file, not a word
-# of the window, so it is the same in either language.
-VIEW_CAMERA = "Камера вида"
 
 
 class BlenderExportError(Exception):
@@ -74,16 +68,16 @@ class BlenderExportError(Exception):
 
 @dataclass
 class Request:
-    """What to make: a stretch of the show, a picture, a way of laying it."""
+    """What to make: a stretch of the show, and what the screen shows on it."""
 
     target: str                    # the .blend to write
     first: int                     # show frame of the first frame
     length: int                    # how many frames
-    mode: str = "viewer"
-    source: str = ""               # picture, sequence or movie; "" for a test grid
+    # A picture, sequence or movie already rendered from the viewer's camera;
+    # "" for the render of the scene's own Top 3D.
+    source: str = ""
     source_offset: int = 0         # which frame of it the first frame shows
     name: str = ""
-    view: dict = field(default_factory=dict)    # the camera being looked through
 
 
 # -- Blender itself ------------------------------------------------------------
@@ -197,19 +191,6 @@ def file_camera(mesh) -> dict:
             "tan_half": sensor / 2.0 / lens, "resolution": list(CONTENT)}
 
 
-def view_camera(orbit, fallback: dict) -> dict:
-    """The camera the viewer is looking through, for the third projection:
-    the Inspection one when there is one, else the file's."""
-    if orbit is None:
-        return dict(fallback, name=VIEW_CAMERA)
-    right, up, forward = orbit.axes()
-    tan_half = float(np.tan(orbit.fov_y / 2.0))
-    return {"name": VIEW_CAMERA, "location": (np.asarray(orbit.eye()) * CM).tolist(),
-            "axes": [list(map(float, right)), list(map(float, up)), list(map(float, -forward))],
-            "lens": 12.0 / tan_half, "sensor": 24.0, "tan_half": tan_half,
-            "resolution": list(CONTENT)}
-
-
 def project(points_m: np.ndarray, camera: dict, aspect: float) -> np.ndarray:
     """Where points land in a picture projected from a camera, 0..1 up from
     the bottom left -- the same sum the geometry nodes do, for checking them."""
@@ -241,15 +222,13 @@ def default_target(folder: str | Path, show_name: str, first: int, length: int) 
     return Path(folder) / f"{stem}_top_{first:06d}-{first + length - 1:06d}.blend"
 
 
-def export(request: Request, mesh, motors_at, blender: str, orbit=None,
+def export(request: Request, mesh, motors_at, blender: str,
            progress=None, run=True) -> dict:
     """Write the cache and the scene's description, and have Blender build it.
 
     Returns what was written: the .blend, the cache, the description, where the
     render will go. `run` False stops before Blender, for the tests.
     """
-    if request.mode not in MODES:
-        raise BlenderExportError(f"unknown projection {request.mode}")
     if request.length < 1:
         raise BlenderExportError("nothing to export: the stretch is empty")
     target = Path(request.target)
@@ -274,22 +253,11 @@ def export(request: Request, mesh, motors_at, blender: str, orbit=None,
                         cell=poser.cell.astype(np.int32), names=np.array(list(surroundings(mesh))),
                         **others)
 
-    viewer = file_camera(mesh)
-    rest = poser.points
-    centre = rest.mean(axis=0)
-    toward = np.array(viewer["location"]) / CM - centre
-    azimuth = float(np.arctan2(toward[1], toward[0]))
-    reach = float(np.linalg.norm(rest[:, :2], axis=1).mean())
-    height = float(rest[:, 2].max() - rest[:, 2].min())
     description = {
         "request": asdict(request), "fps": FPS, "frame": list(FRAME),
         "cache": cache.name, "geometry": geometry.name, "target": target.name,
-        "render": f"//render/{stem}_top_",
-        "mode": MODES.index(request.mode),
-        "cameras": {"viewer": viewer, "view": view_camera(orbit, viewer)},
-        # The decal starts facing the audience, as tall as the screen.
-        "decal": {"location": [float(np.cos(azimuth) * reach * CM), float(np.sin(azimuth) * reach * CM),
-                               float(centre[2] * CM)], "height": height * CM},
+        "render": f"//render/{stem}_top_", "content": f"//render/{stem}_view_",
+        "camera": file_camera(mesh),
     }
     described.write_text(json.dumps(description, ensure_ascii=False, indent=1), encoding="utf-8")
     made = {"blend": target, "cache": cache, "geometry": geometry, "description": described,

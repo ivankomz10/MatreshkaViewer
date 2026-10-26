@@ -5490,7 +5490,7 @@ class Viewer(QMainWindow):
 
     def _to_blender(self, clip) -> None:
         """A clip's frames as a Blender scene: the top screen on the motors,
-        a picture projected onto it, the screen's frame ready to render."""
+        for 3D models to be put inside it and rendered onto its cells."""
         show = self.show_open
         if show is None or clip is None or self.mesh is None:
             return
@@ -5500,21 +5500,12 @@ class Viewer(QMainWindow):
         first = int(clip.first)
         ends = clip.tx + 1 if clip.kind == "cue" else clip.last - clip.tail
         length = max(1, int(ends) - first)
-        # The picture: the chosen clip's own when it is the top screen's,
-        # else whatever the top screen plays where the stretch begins.
-        source, offset = "", 0
-        tops = [clip] if (clip.row == "Top" and clip.kind == "video") else \
-            [one for one in show.on("Top") if one.kind == "video" and one.covers(first)]
-        if tops and tops[0].path:
-            source, offset = tops[0].path, max(0, first - tops[0].tx)
         motors = self.show_motors
         note = (tr("соты на моторах шоу") if motors is not None
                 else tr("моторов нет: соты стоят"))
-        orbit = self.mesh.free if self.inspecting() else None
         request = blender_export.Request(
             target=str(blender_export.default_target(self.out_dir, show.name, first, length)),
-            first=first, length=length, mode="viewer", source=source, source_offset=offset,
-            name=show.name)
+            first=first, length=length, name=show.name)
         dialog = self.ask_blender(request, blender_export.find_blender(self.blender_path), note)
         if dialog is None:
             return
@@ -5527,14 +5518,14 @@ class Viewer(QMainWindow):
             return
         motors_at = (lambda frame, placed=motors: placed.at(frame)) if motors is not None \
             else (lambda frame: None)
-        job = blender_dialog.BlenderJob(request, self.mesh, motors_at, blender, orbit, self)
+        job = blender_dialog.BlenderJob(request, self.mesh, motors_at, blender, self)
         job.progress.connect(lambda done, total: self.show_view.say(
             tr("Blender: кадры {0} из {1}", done, total)))
         job.done.connect(self._blender_done)
         job.failed.connect(self._blender_failed)
         job.finished.connect(lambda: setattr(self, "_blender_job", None))
         self._blender_job = job
-        logfile.write(f"blender: {request.mode} {request.first}+{request.length} -> {request.target}")
+        logfile.write(f"blender: {request.first}+{request.length} -> {request.target}")
         self.show_view.say(tr("Blender собирает сцену…"))
         job.start()
 
@@ -5550,9 +5541,10 @@ class Viewer(QMainWindow):
         self.show_view.say(tr("сцена Blender готова: {0}", Path(made["blend"]).name))
         QMessageBox.information(
             self, tr("Top в Blender"),
-            tr("Сцена собрана:\n{0}\n\nВ ней две сцены. «Top 3D» — посмотреть с камеры зрителя. "
-               "«Top развертка» — отрендерить анимацию: кадры 2560×1150 лягут в {1}. "
-               "Готовую развертку поставьте на дорожку Top с кадра {2}.",
+            tr("Сцена собрана:\n{0}\n\n1. В сцене «Top 3D» поставьте модели внутрь сетки сот "
+               "(коллекция «Models») и отрендерите анимацию с камеры зрителя.\n2. Переключитесь "
+               "на сцену «Top flat» и отрендерите анимацию: кадры 2560×1150 лягут в {1}.\n"
+               "3. Поставьте развертку на дорожку Top с кадра {2}.",
                str(made["blend"]), str(made["render"]), self._blender_first(made)))
 
     def _blender_first(self, made) -> int:

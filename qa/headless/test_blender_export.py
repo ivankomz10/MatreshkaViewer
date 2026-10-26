@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import glob
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -80,16 +81,18 @@ def test_the_projection_is_the_viewers_own_camera(mesh):
 
 @needs_motors
 def test_the_export_writes_the_cache_and_what_blender_is_told(mesh, placed, tmp_path):
-    request = bx.Request(target=str(tmp_path / "piece.blend"), first=1500, length=10, mode="decal")
+    request = bx.Request(target=str(tmp_path / "piece.blend"), first=1500, length=10)
     made = bx.export(request, mesh, placed.at, BLENDER, run=False)
     total, count, data = bx.read_pc2(made["cache"])
     assert (total, count) == (10, len(mesh.raw["screen__points"]))
     poser = bx.Poser(mesh, placed.at)
     assert np.abs(data[3] - poser.at(1503) * bx.CM).max() < 1e-3
     told = json.loads(made["description"].read_text(encoding="utf-8"))
-    assert told["mode"] == 1 and told["frame"] == [2560, 1150] and told["fps"] == 60
-    assert told["cameras"]["viewer"]["name"] == "Zaryadye_ProjectionCamera_9x16_v1"
-    assert abs(told["cameras"]["viewer"]["tan_half"] - 20.25 / 2 / 26.45) < 1e-6
+    assert told["frame"] == [2560, 1150] and told["fps"] == 60
+    assert told["camera"]["name"] == "Zaryadye_ProjectionCamera_9x16_v1"
+    assert abs(told["camera"]["tan_half"] - 20.25 / 2 / 26.45) < 1e-6
+    # With no picture given, the unrolled screen reads Top 3D's own render.
+    assert told["request"]["source"] == "" and told["content"].endswith("_view_")
     assert not made["blend"].exists()
 
 
@@ -100,14 +103,21 @@ def test_the_target_is_named_by_the_show_and_its_frames(tmp_path):
 
 @needs_motors
 @needs_blender
-def test_blender_builds_a_scene_that_plays_the_cache_and_projects_as_the_viewer(mesh, placed, tmp_path):
-    request = bx.Request(target=str(tmp_path / "piece.blend"), first=1500, length=12, mode="viewer")
+def test_blender_builds_a_scene_that_plays_the_cache_and_projects_as_the_viewer(mesh, placed, tmp_path,
+                                                                                monkeypatch):
+    # Blender's own settings kept out of it: folders of its own, made first,
+    # or Blender quietly falls back on the real ones and their add-ons.
+    for name in ("BLENDER_USER_CONFIG", "BLENDER_USER_SCRIPTS", "BLENDER_USER_DATAFILES"):
+        folder = tmp_path / "blender_user" / name
+        folder.mkdir(parents=True)
+        monkeypatch.setenv(name, str(folder))
+    request = bx.Request(target=str(tmp_path / "piece.blend"), first=1500, length=12)
     made = bx.export(request, mesh, placed.at, BLENDER)
     assert made["blend"].exists()
     probe = tmp_path / "probe.npz"
     run = subprocess.run([BLENDER, "-b", str(made["blend"]), "--factory-startup", "--python-exit-code", "1",
                           "-P", str(HERE / "blender_probe.py"), "--", str(probe), "1,6,12"],
-                         capture_output=True, text=True, timeout=600)
+                         capture_output=True, text=True, timeout=600, env=dict(os.environ))
     assert run.returncode == 0, run.stdout[-2000:] + run.stderr[-2000:]
     got = np.load(probe)
     _, _, cache = bx.read_pc2(made["cache"])
@@ -121,3 +131,5 @@ def test_blender_builds_a_scene_that_plays_the_cache_and_projects_as_the_viewer(
     assert flat[:, 0].min() >= -1e-3 and flat[:, 0].max() <= 2560 + 1e-3
     assert flat[:, 1].min() >= -1e-3 and flat[:, 1].max() <= 1150 + 1e-3
     assert list(got["render_size"]) == [2560, 1150] and list(got["frames"]) == [1, 12]
+    # Top 3D renders the models from the viewer's camera, the cage left out.
+    assert list(got["look_size"]) == [2160, 3840] and bool(got["look_hidden"][0])

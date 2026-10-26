@@ -7,20 +7,20 @@ rest with its UVs and the rest of the building (`.npz`). See blender_export.py
 for why; this is the how. Works in Blender 4.2 and later -- the projection
 needs the matrix sockets of the geometry nodes, which came in 4.2.
 
-Two scenes. "Top 3D" is for looking: the cells on their cache, the building,
-the viewer's camera as the scene camera at 2160 x 3840, the camera the viewer
-was looking through, an empty for the decal. "Top развертка" is for
-rendering: the same cells, the same projection, unrolled to the screen's own
-frame and filmed from above at 2560 x 1150 -- every frame of it is the frame
-the top screen plays.
+Two scenes, rendered one after the other. "Top 3D" is where the models go:
+the cells on their cache as a wire cage, so the volume they sweep is in view
+and out of the render, the building likewise, and the viewer's camera, which
+renders the models at 2160 x 3840 on a clear ground. "Top flat" is the
+same cells unrolled to the screen's own frame and filmed from above at
+2560 x 1150; each cell takes its piece of that frame's Top 3D render from
+where the cell stands that frame -- every frame of it is the frame the top
+screen plays.
 
-The projection is one geometry-nodes group on both, its Mode a number on the
-modifier: 0 from the viewer's camera, 1 decal, 2 from the camera of the view.
-It writes two attributes the material reads: `proj`, where in the picture a
-point is, and `seen`, whether it faces that way at all.
+The projection is a geometry-nodes group on the unrolled cells. It writes two
+attributes the material reads: `proj`, where in the camera's picture a point
+is, and `seen`, whether it faces the camera at all.
 """
 import json
-import math
 import sys
 from pathlib import Path
 
@@ -150,108 +150,39 @@ def camera_projection(g, gi, cam, tan, aspect, y):
     return uv.outputs[0], math_node(g, "MULTIPLY", facing, ahead, (0, y - 350))
 
 
-def decal_projection(g, gi, aspect, y):
-    """Laid round the building in metres of the surface, centred on the empty."""
-    pos = node(g, "GeometryNodeInputPosition", (-1200, y)).outputs[0]
-    p = node(g, "ShaderNodeSeparateXYZ", (-1000, y))
-    link(g, pos, p.inputs[0])
-    info = node(g, "GeometryNodeObjectInfo", (-1200, y - 200), transform_space="ORIGINAL")
-    link(g, gi.outputs["Декаль"], info.inputs["Object"])
-    e = node(g, "ShaderNodeSeparateXYZ", (-1000, y - 200))
-    link(g, info.outputs["Location"], e.inputs[0])
-    s = node(g, "ShaderNodeSeparateXYZ", (-1000, y - 350))
-    link(g, info.outputs["Scale"], s.inputs[0])
-    # How far round from the decal, taken at the middle of each triangle and
-    # only then out to its corners: a cell standing on the far side, across
-    # the line where the angle jumps from +180 to -180, would otherwise have
-    # its corners a whole turn apart and smear the picture across itself.
-    middle = node(g, "GeometryNodeFieldOnDomain", (-1000, y + 500), domain="FACE", data_type="FLOAT_VECTOR")
-    link(g, pos, middle.inputs[0])
-    m = node(g, "ShaderNodeSeparateXYZ", (-800, y + 500))
-    link(g, middle.outputs[0], m.inputs[0])
-    at_middle = math_node(g, "ARCTAN2", m.outputs[1], m.outputs[0], (-600, y + 500))
-
-    def wrap(value, at):
-        made = node(g, "ShaderNodeMath", at, operation="WRAP")
-        link(g, value, made.inputs[0])
-        made.inputs[1].default_value = math.pi
-        made.inputs[2].default_value = -math.pi
-        return made.outputs[0]
-
-    to_middle = wrap(math_node(g, "SUBTRACT", at_middle, math_node(g, "ARCTAN2", e.outputs[1], e.outputs[0], (-800, y - 200)), (-500, y + 400)), (-400, y + 400))
-    beside = wrap(math_node(g, "SUBTRACT", math_node(g, "ARCTAN2", p.outputs[1], p.outputs[0], (-800, y)), at_middle, (-500, y)), (-400, y - 50))
-    turn_total = math_node(g, "ADD", to_middle, beside, (-300, y))
-    flat = node(g, "ShaderNodeCombineXYZ", (-800, y + 200))
-    link(g, p.outputs[0], flat.inputs[0])
-    link(g, p.outputs[1], flat.inputs[1])
-    reach = node(g, "ShaderNodeVectorMath", (-600, y + 200), operation="LENGTH")
-    link(g, flat.outputs[0], reach.inputs[0])
-    arc = math_node(g, "MULTIPLY", turn_total, reach.outputs["Value"], (-200, y))
-    tall = math_node(g, "MULTIPLY", gi.outputs["Высота декали"], s.outputs[0], (-600, y - 350))
-    wide = math_node(g, "MULTIPLY", tall, gi.outputs[aspect], (-400, y - 350))
-    u = math_node(g, "ADD", math_node(g, "DIVIDE", arc, wide, (0, y)), 0.5, (200, y))
-    v = math_node(g, "ADD", math_node(g, "DIVIDE", math_node(g, "SUBTRACT", p.outputs[2], e.outputs[2], (-200, y - 150)), tall, (0, y - 150)), 0.5, (200, y - 150))
-    uv = node(g, "ShaderNodeCombineXYZ", (400, y))
-    link(g, u, uv.inputs[0])
-    link(g, v, uv.inputs[1])
-    out = node(g, "ShaderNodeVectorMath", (-600, y + 350), operation="NORMALIZE")
-    link(g, flat.outputs[0], out.inputs[0])
-    dot = node(g, "ShaderNodeVectorMath", (-400, y + 350), operation="DOT_PRODUCT")
-    link(g, node(g, "GeometryNodeInputNormal", (-600, y + 500)).outputs[0], dot.inputs[0])
-    link(g, out.outputs[0], dot.inputs[1])
-    return uv.outputs[0], math_node(g, "GREATER_THAN", dot.outputs["Value"], 0.0, (-200, y + 350))
-
-
 def projection_group():
-    g, gi, go = group_frame("Matreshka · проекция")
+    g, gi, go = group_frame("Matreshka · projection")
     socket(g, "Geometry", "NodeSocketGeometry")
     socket(g, "Geometry", "NodeSocketGeometry", "OUTPUT")
-    socket(g, "Режим", "NodeSocketInt", default=0, low=0, high=2).description = \
-        "0 по зрителю (камера файла), 1 декаль на сотах, 2 с камеры вида"
-    socket(g, "Камера зрителя", "NodeSocketObject")
-    socket(g, "Тангенс зрителя", "NodeSocketFloat", default=0.38)
-    socket(g, "Камера вида", "NodeSocketObject")
-    socket(g, "Тангенс вида", "NodeSocketFloat", default=0.38)
-    socket(g, "Декаль", "NodeSocketObject")
-    socket(g, "Высота декали", "NodeSocketFloat", default=800.0)
-    socket(g, "Пропорции картинки", "NodeSocketFloat", default=0.5625)
-    viewer_uv, viewer_seen = camera_projection(g, gi, "Камера зрителя", "Тангенс зрителя", "Пропорции картинки", 1200)
-    decal_uv, decal_seen = decal_projection(g, gi, "Пропорции картинки", 0)
-    view_uv, view_seen = camera_projection(g, gi, "Камера вида", "Тангенс вида", "Пропорции картинки", -1200)
-    pick_uv = node(g, "GeometryNodeIndexSwitch", (700, 200), data_type="VECTOR")
-    pick_seen = node(g, "GeometryNodeIndexSwitch", (700, -200), data_type="FLOAT")
-    for one in (pick_uv, pick_seen):
-        while len(one.index_switch_items) < 3:
-            one.index_switch_items.new()
-        link(g, gi.outputs["Режим"], one.inputs[0])
-    for slot, (uv, seen) in enumerate(((viewer_uv, viewer_seen), (decal_uv, decal_seen), (view_uv, view_seen))):
-        link(g, uv, pick_uv.inputs[slot + 1])
-        link(g, seen, pick_seen.inputs[slot + 1])
+    socket(g, "Camera", "NodeSocketObject")
+    socket(g, "Tan half", "NodeSocketFloat", default=0.38)
+    socket(g, "Aspect", "NodeSocketFloat", default=0.5625)
+    uv, seen = camera_projection(g, gi, "Camera", "Tan half", "Aspect", 0)
     keep_uv = node(g, "GeometryNodeStoreNamedAttribute", (950, 100), data_type="FLOAT2", domain="CORNER")
     keep_uv.inputs["Name"].default_value = "proj"
     link(g, gi.outputs["Geometry"], keep_uv.inputs["Geometry"])
-    link(g, pick_uv.outputs[0], keep_uv.inputs["Value"])
+    link(g, uv, keep_uv.inputs["Value"])
     keep_seen = node(g, "GeometryNodeStoreNamedAttribute", (1150, 100), data_type="FLOAT", domain="POINT")
     keep_seen.inputs["Name"].default_value = "seen"
     link(g, keep_uv.outputs["Geometry"], keep_seen.inputs["Geometry"])
-    link(g, pick_seen.outputs[0], keep_seen.inputs["Value"])
+    link(g, seen, keep_seen.inputs["Value"])
     link(g, keep_seen.outputs["Geometry"], go.inputs[0])
     return g
 
 
 def flat_group():
-    g, gi, go = group_frame("Matreshka · развертка")
+    g, gi, go = group_frame("Matreshka · flat")
     socket(g, "Geometry", "NodeSocketGeometry")
     socket(g, "Geometry", "NodeSocketGeometry", "OUTPUT")
-    socket(g, "Ширина", "NodeSocketFloat", default=float(W))
-    socket(g, "Высота", "NodeSocketFloat", default=float(H))
+    socket(g, "Width", "NodeSocketFloat", default=float(W))
+    socket(g, "Height", "NodeSocketFloat", default=float(H))
     uv = node(g, "GeometryNodeInputNamedAttribute", (-1000, 0), data_type="FLOAT_VECTOR")
     uv.inputs["Name"].default_value = "uv"
     xyz = node(g, "ShaderNodeSeparateXYZ", (-800, 0))
     link(g, uv.outputs["Attribute"], xyz.inputs[0])
     at = node(g, "ShaderNodeCombineXYZ", (-400, 0))
-    link(g, math_node(g, "MULTIPLY", xyz.outputs[0], gi.outputs["Ширина"], (-600, 100)), at.inputs[0])
-    link(g, math_node(g, "MULTIPLY", xyz.outputs[1], gi.outputs["Высота"], (-600, -100)), at.inputs[1])
+    link(g, math_node(g, "MULTIPLY", xyz.outputs[0], gi.outputs["Width"], (-600, 100)), at.inputs[0])
+    link(g, math_node(g, "MULTIPLY", xyz.outputs[1], gi.outputs["Height"], (-600, -100)), at.inputs[1])
     put = node(g, "GeometryNodeSetPosition", (0, 0))
     link(g, gi.outputs["Geometry"], put.inputs["Geometry"])
     link(g, at.outputs[0], put.inputs["Position"])
@@ -262,11 +193,16 @@ def flat_group():
 # -- the picture -----------------------------------------------------------------------
 
 def picture():
+    """What the unrolled screen reads: Top 3D's own render, frame by frame,
+    unless a picture rendered elsewhere from the same camera was given."""
     source = R.get("source") or ""
     if not source:
-        image = bpy.data.images.new("Проверка 9x16", 1080, 1920)
-        image.generated_type = "COLOR_GRID"
-        return image, 1080 / 1920
+        wide, tall = D["camera"]["resolution"]
+        image = bpy.data.images.new("Top 3D render", wide, tall, alpha=True)
+        image.source = "SEQUENCE"
+        image.filepath = D["content"] + "0001.png"
+        image["matreshka_offset"] = 0
+        return image, wide / tall
     path = Path(source)
     image = bpy.data.images.load(str(path), check_existing=True)
     image.name = path.name
@@ -299,7 +235,7 @@ def passthrough(image, scene):
 
 
 def screen_material(image):
-    mat = bpy.data.materials.new("Top · проекция")
+    mat = bpy.data.materials.new("Top · projection")
     mat.use_nodes = True
     t = mat.node_tree
     t.nodes.clear()
@@ -391,39 +327,39 @@ def setup_scene(scene, size):
     engine = first_of(scene.render, "engine", ["BLENDER_EEVEE_NEXT", "BLENDER_EEVEE"])
     if engine:
         scene.render.engine = engine
-    world = bpy.data.worlds.new(f"{scene.name} · фон")
+    world = bpy.data.worlds.new(f"{scene.name} · world")
     world.use_nodes = False
     world.color = (0, 0, 0)
     scene.world = world
 
 
-def cells_object(name, image_mat, proj, viewer_cam, view_cam, decal, aspect, flat=None):
+def cells_object(name):
+    """The cells, on the cache of their motion."""
     ob = mesh_object(name, geo["points"], geo["triangles"], geo["uv"])
     cells = ob.data.attributes.new("cell", "INT", "POINT")
     cells.data.foreach_set("value", geo["cell"].astype(np.int32))
-    cache = ob.modifiers.new("Кинетика", "MESH_CACHE")
+    cache = ob.modifiers.new("Kinetic", "MESH_CACHE")
     cache.cache_format = "PC2"
     cache.filepath = "//" + D["cache"]
     cache.time_mode = "FRAME"
     cache.play_mode = "SCENE"
     # Frame 1 of the scene is the first frame in the cache.
     cache.frame_start = 1.0
-    mod = ob.modifiers.new("Проекция", "NODES")
+    return ob
+
+
+def unrolled_cells(mat, proj, flat, camera, aspect):
+    """The cells, projected on from the camera, then laid out flat."""
+    ob = cells_object("Top_flat")
+    mod = ob.modifiers.new("Projection", "NODES")
     mod.node_group = proj
-    set_input(mod, ident_of(proj, "Режим"), int(D["mode"]))
-    set_input(mod, ident_of(proj, "Камера зрителя"), viewer_cam)
-    set_input(mod, ident_of(proj, "Камера вида"), view_cam)
-    set_input(mod, ident_of(proj, "Декаль"), decal)
-    set_input(mod, ident_of(proj, "Высота декали"), float(D["decal"]["height"]))
-    set_input(mod, ident_of(proj, "Пропорции картинки"), float(aspect))
-    set_input(mod, ident_of(proj, "Тангенс зрителя"), float(D["cameras"]["viewer"]["tan_half"]))
-    set_input(mod, ident_of(proj, "Тангенс вида"), float(D["cameras"]["view"]["tan_half"]))
-    drive_tan(ob, mod, ident_of(proj, "Тангенс зрителя"), viewer_cam)
-    drive_tan(ob, mod, ident_of(proj, "Тангенс вида"), view_cam)
-    if flat is not None:
-        unroll = ob.modifiers.new("Развертка", "NODES")
-        unroll.node_group = flat
-    ob.data.materials.append(image_mat)
+    set_input(mod, ident_of(proj, "Camera"), camera)
+    set_input(mod, ident_of(proj, "Aspect"), float(aspect))
+    set_input(mod, ident_of(proj, "Tan half"), float(D["camera"]["tan_half"]))
+    drive_tan(ob, mod, ident_of(proj, "Tan half"), camera)
+    unroll = ob.modifiers.new("Flat", "NODES")
+    unroll.node_group = flat
+    ob.data.materials.append(mat)
     return ob
 
 
@@ -431,11 +367,27 @@ def main():
     image, aspect = picture()
     look = bpy.context.scene
     look.name = "Top 3D"
-    setup_scene(look, D["cameras"]["viewer"]["resolution"])
-    out = bpy.data.scenes.new("Top развертка")
+    setup_scene(look, D["camera"]["resolution"])
+    out = bpy.data.scenes.new("Top flat")
     setup_scene(out, (W, H))
-    for scene in (look, out):
-        passthrough(image, scene)
+
+    # Top 3D renders the models as they look: lit, on a clear ground, through
+    # the ordinary view of the colour configuration; Cycles, as the test scene.
+    put(look.render, "engine", ["CYCLES"])
+    if hasattr(look, "cycles"):
+        look.cycles.samples = 128
+        look.cycles.use_denoising = True
+    put(look.view_settings, "view_transform", ["Standard", "Un-tone-mapped"])
+    put(look.view_settings, "look", ["None"])
+    look.render.film_transparent = True
+    look.render.image_settings.file_format = "PNG"
+    look.render.image_settings.color_mode = "RGBA"
+    look.render.image_settings.color_depth = "8"
+    look.render.filepath = D["content"]
+    look.world.color = (0.05, 0.05, 0.05)
+
+    # The unrolled screen passes the render's numbers through untouched.
+    passthrough(image, out)
     out.render.image_settings.file_format = "PNG"
     out.render.image_settings.color_mode = "RGB"
     out.render.image_settings.color_depth = "8"
@@ -445,28 +397,26 @@ def main():
         out.eevee.taa_render_samples = 16
     out.render.filter_size = 1.0
 
-    rigs = bpy.data.collections.new("Камеры и декаль")
+    rigs = bpy.data.collections.new("Viewer camera")
     look.collection.children.link(rigs)
-    out.collection.children.link(rigs)        # so the unrolled screen sees them move
-    viewer_cam = camera_object(D["cameras"]["viewer"]["name"], D["cameras"]["viewer"])
-    view_cam = camera_object(D["cameras"]["view"]["name"], D["cameras"]["view"])
-    decal = bpy.data.objects.new("Декаль", None)
-    decal.empty_display_type = "PLAIN_AXES"
-    decal.empty_display_size = 100.0
-    decal.location = D["decal"]["location"]
-    for one in (viewer_cam, view_cam, decal):
-        rigs.objects.link(one)
-    look.camera = viewer_cam
+    out.collection.children.link(rigs)        # so the unrolled screen projects from it
+    camera = camera_object(D["camera"]["name"], D["camera"])
+    rigs.objects.link(camera)
+    look.camera = camera
 
-    proj, flat = projection_group(), flat_group()
-    mat = screen_material(image)
-    kinetic = bpy.data.collections.new("Top кинетика")
-    look.collection.children.link(kinetic)
-    kinetic.objects.link(cells_object("Top_kinetic", mat, proj, viewer_cam, view_cam, decal, aspect))
+    models = bpy.data.collections.new("Models")
+    look.collection.children.link(models)
 
-    building = bpy.data.collections.new("Здание")
+    cage = bpy.data.collections.new("Top kinetic")
+    look.collection.children.link(cage)
+    cells = cells_object("Top_kinetic")
+    cells.display_type = "WIRE"
+    cells.hide_render = True
+    cage.objects.link(cells)
+
+    building = bpy.data.collections.new("Building")
     look.collection.children.link(building)
-    grey = bpy.data.materials.new("Здание · серый")
+    grey = bpy.data.materials.new("Building · grey")
     grey.diffuse_color = (0.2, 0.2, 0.2, 1)
     for name in [str(one) for one in geo["names"]]:
         piece = mesh_object(name, geo[f"{name}__points"], geo[f"{name}__triangles"])
@@ -474,29 +424,29 @@ def main():
         piece.hide_render = True
         building.objects.link(piece)
 
-    unrolled = bpy.data.collections.new("Развертка")
+    unrolled = bpy.data.collections.new("Flat")
     out.collection.children.link(unrolled)
-    unrolled.objects.link(cells_object("Top_flat", mat, proj, viewer_cam, view_cam, decal, aspect, flat))
-    above = bpy.data.cameras.new("Камера развертки")
+    unrolled.objects.link(unrolled_cells(screen_material(image), projection_group(), flat_group(), camera, aspect))
+    above = bpy.data.cameras.new("Flat camera")
     above.type = "ORTHO"
     above.ortho_scale = float(W)
     above.clip_start, above.clip_end = 1.0, 5000.0
-    above_ob = bpy.data.objects.new("Камера развертки", above)
+    above_ob = bpy.data.objects.new("Flat camera", above)
     above_ob.location = (W / 2.0, H / 2.0, 1000.0)
     unrolled.objects.link(above_ob)
     out.camera = above_ob
 
-    look["matreshka_export"] = json.dumps({k: R[k] for k in ("first", "length", "mode", "source")}, ensure_ascii=False)
+    look["matreshka_export"] = json.dumps({k: R[k] for k in ("first", "length", "source")}, ensure_ascii=False)
     out["matreshka_export"] = look["matreshka_export"]
 
-    # Did the cache take? The first frame's vertices against the rest pose is
-    # not the question -- the motors may be at rest -- but there must be as
-    # many of them as the cache says, or Blender quietly shows the rest pose.
+    # Did the cache take? There must be as many vertices as the cache says,
+    # or Blender quietly shows the rest pose.
     look.frame_set(1)
     deps = bpy.context.evaluated_depsgraph_get()
     evaluated = bpy.data.objects["Top_kinetic"].evaluated_get(deps).to_mesh()
-    print(f"matreshka: {len(evaluated.vertices)} vertices, {N} frames, mode {D['mode']}, "
-          f"engine {out.render.engine}, view {out.view_settings.view_transform}, image {image.name}")
+    print(f"matreshka: {len(evaluated.vertices)} vertices, {N} frames, "
+          f"engines {look.render.engine}/{out.render.engine}, view {out.view_settings.view_transform}, "
+          f"image {image.name}")
     bpy.data.objects["Top_kinetic"].evaluated_get(deps).to_mesh_clear()
 
     bpy.ops.wm.save_as_mainfile(filepath=str(HERE / D["target"]), relative_remap=True)

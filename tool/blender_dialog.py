@@ -1,44 +1,36 @@
 """Asking what goes to Blender, and making it without holding the window.
 
-The window offers a clip's frames; this asks for the rest -- which picture,
-which projection, where the .blend goes, which Blender -- and then writes the
-cache and runs Blender in a thread of its own (see blender_export).
+The window offers a clip's frames; this asks for the rest -- where the .blend
+goes, which Blender, and, if the models were rendered elsewhere, that render
+-- and then writes the cache and runs Blender in a thread of its own (see
+blender_export).
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
-from PySide6.QtWidgets import (QButtonGroup, QDialog, QDialogButtonBox, QFileDialog,
-                               QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QRadioButton, QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QGridLayout,
+                               QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox,
+                               QVBoxLayout, QWidget)
 
 import blender_export as bx
 from lang import tr
 
-def mode_text() -> dict:
-    """What each projection is called and does, in the window's language."""
-    return {
-        "viewer": (tr("По зрителю"), tr("С камеры файла, на сотах как они стоят в этот кадр: "
-                                         "от зрителя картинка цела, движение режет её на гексы")),
-        "decal": (tr("Декаль на сотах"), tr("По поверхности здания, без искажений: соты несут "
-                                             "картинку на себе; место и размер — пустышка «Декаль»")),
-        "view": (tr("С камеры вида"), tr("С камеры, через которую сейчас смотрит вьюер: "
-                                          "как проектор с любой точки")),
-    }
-
 
 class BlenderDialog(QDialog):
-    """The clip's frames and the four things only a person can say."""
+    """The clip's frames and the things only a person can say."""
 
     def __init__(self, parent, request: bx.Request, blender: str, frames_note: str) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("Top в Blender"))
         self.setObjectName("qa_blender_dialog")
         whole = QVBoxLayout(self)
-        intro = QLabel(tr("Сцена Blender на эти кадры шоу: Top с кинетикой, картинка на сотах и "
-                          "рендер развертки 2560×1150. Отрендеренная развертка ставится на "
-                          "дорожку Top с того же кадра."))
+        intro = QLabel(tr("Сцена Blender на эти кадры шоу, чтобы вписать 3D-модели в объём "
+                          "кинетики. «Top 3D»: соты на моторах сеткой, камера зрителя — сюда "
+                          "ставятся модели и рендерятся. «Top flat»: тот же рендер, "
+                          "разложенный по сотам, как они стоят в каждом кадре, — кадры "
+                          "2560×1150 ставятся на дорожку Top с того же кадра."))
         intro.setWordWrap(True)
         whole.addWidget(intro)
         grid = QGridLayout()
@@ -64,50 +56,33 @@ class BlenderDialog(QDialog):
         line.addStretch(1)
         grid.addWidget(span, 0, 1, 1, 2)
 
-        grid.addWidget(QLabel(tr("Картинка")), 1, 0)
+        grid.addWidget(QLabel(tr("Рендер с камеры")), 1, 0)
         self.source = QLineEdit(request.source)
         self.source.setObjectName("qa_blender_source")
-        self.source.setPlaceholderText(tr("пусто — проверочная сетка 9:16"))
+        self.source.setPlaceholderText(tr("пусто — рендер сцены «Top 3D» этого файла"))
+        self.source.setToolTip(tr("Только если модели уже отрендерены в другом месте с камеры "
+                                  "зрителя 9:16: секвенция, видео или картинка"))
         grid.addWidget(self.source, 1, 1)
         pick = QPushButton(tr("Выбрать…"))
         pick.clicked.connect(self._pick_source)
         grid.addWidget(pick, 1, 2)
 
-        grid.addWidget(QLabel(tr("Проекция")), 2, 0)
-        modes = QWidget()
-        stack = QVBoxLayout(modes)
-        stack.setContentsMargins(0, 0, 0, 0)
-        self.modes = QButtonGroup(self)
-        for index, mode in enumerate(bx.MODES):
-            label, hint = mode_text()[mode]
-            one = QRadioButton(label)
-            one.setObjectName(f"qa_blender_mode_{mode}")
-            one.setToolTip(hint)
-            one.setChecked(mode == request.mode)
-            self.modes.addButton(one, index)
-            stack.addWidget(one)
-            note = QLabel(hint)
-            note.setWordWrap(True)
-            note.setStyleSheet("color: gray; font-size: 11px; margin-left: 20px;")
-            stack.addWidget(note)
-        grid.addWidget(modes, 2, 1, 1, 2)
-
-        grid.addWidget(QLabel(tr("Файл .blend")), 3, 0)
+        grid.addWidget(QLabel(tr("Файл .blend")), 2, 0)
         self.target = QLineEdit(request.target)
         self.target.setObjectName("qa_blender_target")
-        grid.addWidget(self.target, 3, 1)
+        grid.addWidget(self.target, 2, 1)
         where = QPushButton(tr("Куда…"))
         where.clicked.connect(self._pick_target)
-        grid.addWidget(where, 3, 2)
+        grid.addWidget(where, 2, 2)
 
-        grid.addWidget(QLabel(tr("Blender")), 4, 0)
+        grid.addWidget(QLabel(tr("Blender")), 3, 0)
         self.blender = QLineEdit(blender)
         self.blender.setObjectName("qa_blender_exe")
         self.blender.setPlaceholderText(tr("blender.exe не найден"))
-        grid.addWidget(self.blender, 4, 1)
+        grid.addWidget(self.blender, 3, 1)
         exe = QPushButton(tr("Выбрать…"))
         exe.clicked.connect(self._pick_blender)
-        grid.addWidget(exe, 4, 2)
+        grid.addWidget(exe, 3, 2)
 
         buttons = QDialogButtonBox()
         go = buttons.addButton(tr("Собрать сцену"), QDialogButtonBox.ButtonRole.AcceptRole)
@@ -117,13 +92,12 @@ class BlenderDialog(QDialog):
         buttons.rejected.connect(self.reject)
         whole.addWidget(buttons)
         self.name = request.name
-        self.view = request.view
         self.offset = request.source_offset
         self.resize(640, self.sizeHint().height())
 
     def _pick_source(self) -> None:
         chosen, _ = QFileDialog.getOpenFileName(
-            self, tr("Картинка для Top"), str(Path(self.source.text()).parent) if self.source.text() else "",
+            self, tr("Рендер с камеры зрителя"), str(Path(self.source.text()).parent) if self.source.text() else "",
             tr("Картинки и видео (*.png *.jpg *.jpeg *.exr *.tif *.tiff *.mov *.mp4 *.avi *.mkv);;Все файлы (*)"))
         if chosen:
             self.source.setText(chosen)
@@ -142,9 +116,8 @@ class BlenderDialog(QDialog):
 
     def request(self) -> bx.Request:
         return bx.Request(target=self.target.text().strip(), first=self.first.value(),
-                          length=self.length.value(), mode=bx.MODES[self.modes.checkedId()],
-                          source=self.source.text().strip(), source_offset=self.offset,
-                          name=self.name, view=self.view)
+                          length=self.length.value(), source=self.source.text().strip(),
+                          source_offset=self.offset, name=self.name)
 
 
 class BlenderJob(QThread):
@@ -154,14 +127,14 @@ class BlenderJob(QThread):
     done = Signal(object)          # what was made
     failed = Signal(str)
 
-    def __init__(self, request, mesh, motors_at, blender, orbit, parent=None) -> None:
+    def __init__(self, request, mesh, motors_at, blender, parent=None) -> None:
         super().__init__(parent)
-        self.args = (request, mesh, motors_at, blender, orbit)
+        self.args = (request, mesh, motors_at, blender)
 
     def run(self) -> None:  # noqa: D102 -- QThread entry point
-        request, mesh, motors_at, blender, orbit = self.args
+        request, mesh, motors_at, blender = self.args
         try:
-            made = bx.export(request, mesh, motors_at, blender, orbit=orbit,
+            made = bx.export(request, mesh, motors_at, blender,
                              progress=lambda done, total: self.progress.emit(done, total))
         except Exception as error:  # noqa: BLE001 -- said in the window
             self.failed.emit(str(error))
